@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ---
 
+## 1.1.1 — 2026-04-06
+
+### Bug Fixes
+
+- Fixed TTS generation not executing in Content Studio (`/cs` → Generate TTS was stuck)
+- Fixed API key rotation to use all available keys
+
+---
+
 ## 1.1.0 — 2026-04-06
 
 ### Overview
