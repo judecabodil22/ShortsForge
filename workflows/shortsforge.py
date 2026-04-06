@@ -1106,12 +1106,19 @@ def _cs_generate_tts_only():
     with open(latest_script) as f:
         original_script = f.read()
     
-    # Clean script for TTS - remove production notes
     script = _cs_clean_script_for_tts(original_script)
     word_count = len(script.split())
     tg_send(f"📄 Found script: {os.path.basename(latest_script)}")
     tg_send(f"🧹 Cleaned script for TTS: {word_count} words")
     tg_send("🎤 Generating TTS audio...")
+    
+    try:
+        audio_file, voice = _cs_generate_tts(script, "Documentary")
+    except Exception as e:
+        tg_send(f"❌ TTS generation failed: {e}")
+        return
+    
+    tg_send(f"✅ TTS generated!\n🎤 Voice: {voice}\n📁 Saved: {os.path.basename(audio_file)}")
 
 
 def _cs_load_context():
