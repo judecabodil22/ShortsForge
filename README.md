@@ -279,9 +279,24 @@ Send `/cs` to your Telegram bot.
 ### Features
 
 1. **Import Pipeline Data** — Copy transcripts from main pipeline
-2. **Generate Script** — Create scripts from multiple transcripts with AI context
+2. **Generate Script** — Create scripts from transcripts with AI context
 3. **Generate TTS** — Create TTS audio from generated scripts
 4. **Clear All** — Reset content studio files
+
+### Series Generation
+
+Content Studio generates scripts sequentially for series continuity:
+
+| Run | Transcript Used | Context | Result |
+|-----|----------------|---------|--------|
+| 1 | Chapter 1 | Empty | Script 1 |
+| 2 | Chapter 2 | + Chapter 1 data | Script 2 |
+| 3 | Chapter 3 | + Chapters 1-2 data | Script 3 |
+
+- Each run uses the newest unprocessed transcript
+- Previous scripts are referenced for series continuity
+- Context accumulates (characters, locations, relationships)
+- Wait 10 minutes between runs to avoid rate limiting
 
 ### Context Memory
 
@@ -289,8 +304,12 @@ Content Studio maintains context across runs:
 - Character names extracted from transcripts
 - Key terms and locations
 - Relationships between characters
+- Previous script summaries for series continuity
 
-Use `/cs_context` to view/edit stored context.
+Use `/cs_context` to view stored context.
+Use `/cs_context clear` to reset context.
+
+**Context is shared** with the main pipeline - running pipeline updates context, which Content Studio then uses.
 
 ---
 

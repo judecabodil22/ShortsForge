@@ -50,6 +50,7 @@ CS_TRANSCRIPTS_DIR = os.path.join(CONTENT_STUDIO_DIR, "transcripts")
 CS_SHORTS_DIR      = os.path.join(CONTENT_STUDIO_DIR, "shorts")
 CS_SCRIPTS_DIR     = os.path.join(CONTENT_STUDIO_DIR, "scripts")
 CS_TTS_DIR         = os.path.join(CONTENT_STUDIO_DIR, "tts")
+CS_CONTEXT_FILE    = os.path.join(CONTENT_STUDIO_DIR, "context.json")
 
 STREAMING = False  # set True when called from listener
 PIPELINE_RUNNING = False
@@ -565,8 +566,51 @@ def _cs_clear_data():
 
 
 def _cs_find_all_transcripts():
-    """Find all transcripts in Content Studio."""
-    return sorted(glob.glob(os.path.join(CS_TRANSCRIPTS_DIR, "*.json")), key=os.path.getmtime)
+    """Find all transcripts in Content Studio (including Next folder)."""
+    patterns = [
+        os.path.join(CS_TRANSCRIPTS_DIR, "*.json"),
+        os.path.join(CS_TRANSCRIPTS_DIR, "Next", "*.json")
+    ]
+    all_transcripts = []
+    for pattern in patterns:
+        all_transcripts.extend(glob.glob(pattern))
+    
+    # Sort by chapter number in filename (Chapter 1, 2, 3...)
+    def get_chapter_num(path):
+        import re
+        match = re.search(r'Chapter\s*(\d+)', os.path.basename(path), re.IGNORECASE)
+        return int(match.group(1)) if match else 999
+    
+    return sorted(all_transcripts, key=get_chapter_num)
+
+
+def _cs_find_newest_transcript():
+    """Find the newest transcript not yet processed."""
+    all_transcripts = _cs_find_all_transcripts()
+    ctx = _cs_load_context()
+    processed = ctx.get("processed_transcripts", [])
+    
+    for transcript in all_transcripts:
+        name = os.path.basename(transcript)
+        if name not in processed:
+            return transcript
+    return None
+
+
+def _cs_read_transcript(transcript_path):
+    """Read a single transcript and return text."""
+    try:
+        with open(transcript_path) as f:
+            data = json.load(f)
+            text = ""
+            for seg in data.get("segments", []):
+                t = re.sub(r"<[^>]*>", "", seg.get("text", ""))
+                if t.strip():
+                    text += t + " "
+            return text
+    except Exception as e:
+        log(f"Error reading {transcript_path}: {e}")
+        return None
 
 
 def _cs_read_all_transcripts():
@@ -600,10 +644,23 @@ def _cs_analyze_transcript(transcript_text):
     if not keys:
         raise RuntimeError("No API keys available")
     
-    # Get game title for context
     game_title = env("GAME_TITLE", "")
+    ctx = _cs_load_context()
+    
+    stored_chars = ", ".join(ctx.get("characters", [])) if ctx.get("characters") else "None yet"
+    stored_locs = ", ".join(ctx.get("locations", [])) if ctx.get("locations") else "None yet"
+    stored_rels = "; ".join(ctx.get("relationships", [])) if ctx.get("relationships") else "None yet"
+    previous_scripts = ctx.get("previous_scripts", [])
+    prev_script_info = ""
+    if previous_scripts:
+        prev_script_info = "\n\nPREVIOUS SCRIPTS (for continuity):\n" + "\n---\n".join(previous_scripts[-3:])
     
     prompt = f"""Analyze these transcripts from the game "{game_title}" and identify the MOST SIGNIFICANT story elements.
+
+VERIFIED CONTEXT FROM PREVIOUS TRANSCRIPTS:
+- Known Characters: {stored_chars}
+- Known Locations: {stored_locs}
+- Known Relationships: {stored_rels}{prev_script_info}
 
 IMPORTANT PRIORITIES (in order):
 1. Character deaths, major plot twists, emotional moments
@@ -621,8 +678,8 @@ From these, determine:
 2. SUBJECT: Who or what is the main focus? (be specific: "Safi" not "characters")
 3. ANGLE: What specific aspect would captivate viewers? (prioritize major moments)
 4. VOICE_STYLE: Match to content type
-5. REAL_CHARACTERS: List ONLY the character names that actually appear in the transcript (no made up names)
-6. KEY_PLOT_POINTS: List 3-5 specific plot points, events, or story beats that are actually mentioned in the transcript. Be specific: "Safi was murdered", "Max investigating Safi's death", etc.
+5. REAL_CHARACTERS: List ONLY the character names that actually appear in the transcript (use verified list above as reference)
+6. KEY_PLOT_POINTS: List 3-5 specific plot points, events, or story beats that are actually mentioned in the transcript. Be specific
 
 Respond in this exact format:
 CONTENT_TYPE: [type]
@@ -690,10 +747,18 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
     if not keys:
         raise RuntimeError("No API keys available")
     
-    # Get game title for context
     game_title = env("GAME_TITLE", "the game")
+    ctx = _cs_load_context()
     
-    # Build prompt based on content type
+    stored_chars = ", ".join(ctx.get("characters", [])) if ctx.get("characters") else "None yet"
+    stored_locs = ", ".join(ctx.get("locations", [])) if ctx.get("locations") else "None yet"
+    stored_rels = "; ".join(ctx.get("relationships", [])) if ctx.get("relationships") else "None yet"
+    previous_scripts = ctx.get("previous_scripts", [])
+    prev_script_info = ""
+    if previous_scripts:
+        prev_script_info = f"\n\nSERIES CONTINUITY - PREVIOUS SCRIPTS:\n" + "\n---\n".join(previous_scripts[-3:])
+        prev_script_info += "\n\nThis is a continuation. Build on previous content naturally without repeating what's already been said."
+    
     type_prompts = {
         "Theory": "Create a 'what if' theory video. Speculate about plot possibilities, character motivations, and future story directions. Make it intriguing and engaging.",
         "Analysis": "Create a character analysis video. Deep dive into character motivations, psychology, relationships, and character arcs. Be informative and educational.",
@@ -704,15 +769,17 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
     
     type_prompt = type_prompts.get(content_type, type_prompts["Analysis"])
     
-    # Only use real characters, no made up names
-    allowed_chars = ", ".join(real_characters) if real_characters else "ONLY use characters from the transcript - do NOT invent any new character names"
-    
-    # Key plot points for accuracy
+    allowed_chars = ", ".join(real_characters) if real_characters else f"Use these verified characters only: {stored_chars}"
     plot_points_str = "; ".join(key_plot_points) if key_plot_points else "Only use events explicitly mentioned in the transcript"
     
     prompt = f"""Create a 1500-word video script about {subject} from {game_title}.
 
 {type_prompt}
+
+VERIFIED CONTEXT (use these to avoid hallucinations):
+- Characters: {stored_chars}
+- Locations: {stored_locs}
+- Relationships: {stored_rels}{prev_script_info}
 
 Focus on this angle: {angle}
 
@@ -947,22 +1014,38 @@ def _get_voice_id(voice_name):
 
 
 def _cs_generate_script_only():
-    """Generate script only (no TTS)."""
+    """Generate script only (no TTS). Uses newest unprocessed transcript."""
     for d in (CS_SCRIPTS_DIR, CS_TTS_DIR):
         os.makedirs(d, exist_ok=True)
     
-    transcripts = _cs_find_all_transcripts()
-    if not transcripts:
-        tg_send("❌ No transcripts in Content Studio. Import pipeline data first.")
+    # Find newest unprocessed transcript
+    transcript = _cs_find_newest_transcript()
+    if not transcript:
+        tg_send("✅ No new transcripts. All have scripts generated.")
+        ctx = _cs_load_context()
+        tg_send(f"Scripts generated: {len(ctx.get('previous_scripts', []))}")
         return
     
-    tg_send("📖 Reading all transcripts...")
-    transcript_text = _cs_read_all_transcripts()
+    transcript_name = os.path.basename(transcript)
+    tg_send(f"📖 Reading transcript: {transcript_name}")
+    
+    transcript_text = _cs_read_transcript(transcript)
     if not transcript_text:
-        tg_send("❌ Could not read transcripts.")
+        tg_send(f"❌ Could not read {transcript_name}")
         return
     
-    tg_send(f"📖 Read {len(transcript_text)} characters from {len(transcripts)} transcript(s)")
+    tg_send(f"📖 Read {len(transcript_text)} characters")
+    
+    # Extract and update context from transcript
+    game_title = env("GAME_TITLE", "Life is Strange")
+    tg_send("🔍 Extracting context from transcript...")
+    extracted = _cs_extract_context_from_transcript(transcript_text, game_title)
+    ctx = _cs_load_context()
+    if extracted:
+        ctx = _cs_update_context(extracted, transcript_name)
+        tg_send(f"📚 Context updated: {len(ctx['characters'])} characters, {len(ctx['locations'])} locations")
+    else:
+        tg_send("⚠️ Could not extract context, using existing")
     
     tg_send("🔍 Analyzing content (this may take a moment)...")
     content_type, subject, angle, voice_style, real_characters, key_plot_points = _cs_analyze_transcript(transcript_text)
@@ -978,6 +1061,10 @@ def _cs_generate_script_only():
     script_file = os.path.join(CS_SCRIPTS_DIR, f"content_{content_type.lower()}_{int(time.time())}.txt")
     with open(script_file, "w") as f:
         f.write(script)
+    
+    # Create script summary for context
+    script_summary = f"Script {len(ctx.get('previous_scripts', [])) + 1}: {subject} - {content_type} - {angle[:50]}..."
+    _cs_update_context({}, transcript_name, script_summary)
     
     tg_send(f"✅ Script generated!\n📝 Saved: {os.path.basename(script_file)}")
 
@@ -1025,14 +1112,156 @@ def _cs_generate_tts_only():
     tg_send(f"📄 Found script: {os.path.basename(latest_script)}")
     tg_send(f"🧹 Cleaned script for TTS: {word_count} words")
     tg_send("🎤 Generating TTS audio...")
+
+
+def _cs_load_context():
+    """Load context from file."""
+    if os.path.exists(CS_CONTEXT_FILE):
+        try:
+            with open(CS_CONTEXT_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            log(f"Error loading context: {e}")
+    return {
+        "characters": [],
+        "locations": [],
+        "key_terms": [],
+        "relationships": [],
+        "processed_transcripts": [],
+        "previous_scripts": []
+    }
+
+
+def _cs_save_context(ctx):
+    """Save context to file."""
+    try:
+        with open(CS_CONTEXT_FILE, "w") as f:
+            json.dump(ctx, f, indent=2)
+    except IOError as e:
+        log(f"Error saving context: {e}")
+
+
+def _cs_extract_context_from_transcript(transcript_text, game_title):
+    """Extract characters, locations, key terms from transcript using AI."""
+    keys = get_gemini_keys()
+    if not keys and os.path.exists(KEYS_FILE):
+        with open(KEYS_FILE) as f:
+            keys = [l.strip() for l in f if l.strip()]
+    if not keys:
+        return None
+    
+    prompt = f"""Analyze this transcript from "{game_title}" and extract:
+
+1. CHARACTERS: List character names that appear (e.g., Max, Safi, Moses)
+2. LOCATIONS: List places mentioned (e.g., dorm room, school, town)
+3. KEY_TERMS: Important story elements, themes, or concepts
+4. RELATIONSHIPS: Relationships between characters (format: "Character A and Character B are [relationship]")
+
+Respond in this exact format:
+CHARACTERS: [comma-separated list or "none"]
+LOCATIONS: [comma-separated list or "none"]
+KEY_TERMS: [comma-separated list or "none"]
+RELATIONSHIPS: [semicolon-separated list or "none"]
+
+Transcript excerpt:
+{transcript_text[:5000]}"""
+    
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 512}
+    }).encode()
+    
+    key = keys[0]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+    
+    _rate_limit()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     
     try:
-        audio_file, voice = _cs_generate_tts(script, "Documentary")
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            r = json.loads(resp.read())
+            text = r["candidates"][0]["content"]["parts"][0]["text"]
+            
+            characters = []
+            locations = []
+            key_terms = []
+            relationships = []
+            
+            for line in text.split("\n"):
+                if line.startswith("CHARACTERS:"):
+                    chars = line.split(":", 1)[1].strip()
+                    characters = [c.strip() for c in chars.split(",") if c.strip() and c.strip().lower() != "none"]
+                elif line.startswith("LOCATIONS:"):
+                    locs = line.split(":", 1)[1].strip()
+                    locations = [l.strip() for l in locs.split(",") if l.strip() and l.strip().lower() != "none"]
+                elif line.startswith("KEY_TERMS:"):
+                    terms = line.split(":", 1)[1].strip()
+                    key_terms = [t.strip() for t in terms.split(",") if t.strip() and t.strip().lower() != "none"]
+                elif line.startswith("RELATIONSHIPS:"):
+                    rels = line.split(":", 1)[1].strip()
+                    relationships = [r.strip() for r in rels.split(";") if r.strip() and r.strip().lower() != "none"]
+            
+            return {
+                "characters": characters,
+                "locations": locations,
+                "key_terms": key_terms,
+                "relationships": relationships
+            }
     except Exception as e:
-        tg_send(f"❌ TTS generation failed: {e}")
-        return
+        log(f"Context extraction error: {e}")
+        return None
+
+
+def _cs_update_context(extracted, transcript_name, script_summary=None):
+    """Update context with new extracted data."""
+    ctx = _cs_load_context()
     
-    tg_send(f"✅ TTS generated!\n🎤 Voice: {voice}\n📁 Saved: {os.path.basename(audio_file)}")
+    # Merge characters (avoid duplicates)
+    for char in extracted.get("characters", []):
+        if char not in ctx["characters"]:
+            ctx["characters"].append(char)
+    
+    # Merge locations
+    for loc in extracted.get("locations", []):
+        if loc not in ctx["locations"]:
+            ctx["locations"].append(loc)
+    
+    # Merge key terms
+    for term in extracted.get("key_terms", []):
+        if term not in ctx["key_terms"]:
+            ctx["key_terms"].append(term)
+    
+    # Merge relationships
+    for rel in extracted.get("relationships", []):
+        if rel not in ctx["relationships"]:
+            ctx["relationships"].append(rel)
+    
+    # Add processed transcript
+    if transcript_name not in ctx["processed_transcripts"]:
+        ctx["processed_transcripts"].append(transcript_name)
+    
+    # Add script summary if provided
+    if script_summary:
+        ctx["previous_scripts"].append(script_summary)
+        # Keep last 10 scripts
+        ctx["previous_scripts"] = ctx["previous_scripts"][-10:]
+    
+    _cs_save_context(ctx)
+    return ctx
+
+
+def _cs_clear_context():
+    """Clear context file."""
+    ctx = {
+        "characters": [],
+        "locations": [],
+        "key_terms": [],
+        "relationships": [],
+        "processed_transcripts": [],
+        "previous_scripts": []
+    }
+    _cs_save_context(ctx)
+    return ctx
 
 
 def _do_update_menu():
@@ -1982,6 +2211,26 @@ def run_pipeline(skip=None, phases=None):
     if 2 not in skip:
         json_file = phase_transcribe(video)
         if check_stop(): return
+        
+        # Extract context from transcript for Content Studio
+        try:
+            with open(json_file) as f:
+                data = json.load(f)
+            transcript_text = ""
+            for seg in data.get("segments", []):
+                text = re.sub(r"<[^>]*>", "", seg.get("text", ""))
+                if text.strip():
+                    transcript_text += text + " "
+            
+            if transcript_text:
+                game_title = env("GAME_TITLE", "Life is Strange")
+                extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
+                if extracted:
+                    transcript_name = os.path.basename(json_file)
+                    _cs_update_context(extracted, transcript_name)
+                    log(f"Context extracted: {len(extracted.get('characters', []))} characters")
+        except Exception as e:
+            log(f"Context extraction skipped: {e}")
     else:
         json_file = sorted(glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.json")),
                 key=os.path.getmtime, reverse=True)[0] \
@@ -2196,10 +2445,34 @@ Example: /set_voice Vindemiatrix""")
                 tg_send("No game set.\nUsage: /set_game The Last of Us Part II")
         elif args.lower() == "clear":
             update_env_var("GAME_TITLE", "")
-            tg_send("Game title cleared.")
+            _cs_clear_context()
+            tg_send("Game title cleared. Context cleared.")
         else:
             update_env_var("GAME_TITLE", args)
             tg_send(f"Game set to: {args}")
+
+    elif cmd in ("/cs_context", "/context"):
+        ctx = _cs_load_context()
+        chars = ctx.get("characters", [])
+        locs = ctx.get("locations", [])
+        terms = ctx.get("key_terms", [])
+        rels = ctx.get("relationships", [])
+        transcripts = ctx.get("processed_transcripts", [])
+        scripts = ctx.get("previous_scripts", [])
+        
+        msg = "📚 Content Studio Context:\n\n"
+        msg += f"Characters ({len(chars)}): {', '.join(chars) if chars else 'none'}\n"
+        msg += f"Locations ({len(locs)}): {', '.join(locs) if locs else 'none'}\n"
+        msg += f"Key Terms ({len(terms)}): {', '.join(terms[:10]) if terms else 'none'}\n"
+        msg += f"Relationships ({len(rels)}): {', '.join(rels) if rels else 'none'}\n"
+        msg += f"\nProcessed Transcripts: {len(transcripts)}\n"
+        msg += f"Previous Scripts: {len(scripts)}"
+        
+        tg_send(msg)
+        
+        if args and args.lower() == "clear":
+            _cs_clear_context()
+            tg_send("Context cleared.")
 
     elif cmd in ("/config", "/settings"):
         voice = env("TTS_VOICE", "Vindemiatrix")
@@ -2297,6 +2570,8 @@ Commands:
 /set_srt_words 10 - Set SRT max words per line (default: 10)
 /set_game Title   - Set game title for scripts
 /set_game clear   - Clear game title
+/cs_context       - Show Content Studio context
+/cs_context clear - Clear context
 
 /config     - Settings and file counts
 /status     - Listener and pipeline status

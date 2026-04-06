@@ -4,6 +4,49 @@ All notable changes to this project are documented here.
 
 ---
 
+## 1.1.0 — 2026-04-06
+
+### Overview
+
+ShortsForge v1.1.0 adds persistent context for series continuity and improved script generation accuracy.
+
+---
+
+### New Features
+
+#### Context Persistence
+- **Shared Context**: Pipeline and Content Studio now share the same context file
+- **Pipeline Integration**: After transcription, pipeline extracts characters/locations/relationships and saves to context
+- **Context Clearing**: Context is cleared when `/set_game clear` is executed
+
+#### Content Studio Series Generation
+- **Sequential Processing**: Each script generation uses the newest unprocessed transcript
+- **Series Continuity**: Previous script summaries included in prompts for natural follow-up
+- **First Run**: Uses Chapter 1 transcript, extracts context, generates Script 1
+- **Second Run**: Uses Chapter 2 transcript with Script 1 context, generates Script 2
+- **Third Run**: Uses Chapter 3 transcript with Scripts 1-2 context, generates Script 3
+- **No Rate Limit Blocking**: Wait 10 minutes between runs to avoid API rate limiting
+
+#### Context-Aware Prompts
+- AI prompts now include verified characters from previous transcripts
+- Includes locations and relationships to prevent hallucination
+- Includes previous script summaries for series continuity
+- AI can no longer invent characters like "Nathan Prescott" or "Chloe Price"
+
+#### Telegram Commands
+- `/cs_context` - Show current context (characters, locations, relationships)
+- `/cs_context clear` - Clear stored context
+
+---
+
+### Bug Fixes
+
+- Fixed Content Studio not scanning `Next/` subfolder for transcripts
+- Fixed transcripts not being sorted by chapter number
+- Added more API keys to keychain (now supports 6 keys)
+
+---
+
 ## 1.0.0 — 2026-04-05 (First Release)
 
 ### Overview
