@@ -13,10 +13,17 @@ from update_manager import (
 )
 from keychain_manager import (
     get_gemini_keys,
+    get_groq_keys,
     get_service_password,
     set_gemini_keys,
     set_service_password,
 )
+import requests
+
+# Groq configuration
+GROQ_KEY_INDEX = 0  # Track which key to use next
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 DEFAULT_WORKSPACE = os.path.expanduser("~/ShortsForge")
 
@@ -32,7 +39,6 @@ def _find_workspace():
 WORKSPACE    = _find_workspace()
 WORKFLOW_DIR = os.path.join(WORKSPACE, "workflows")
 ENV_FILE     = os.path.join(WORKSPACE, ".env")
-KEYS_FILE    = os.path.join(WORKSPACE, "gemini_keys.txt")
 LOG_FILE     = os.path.join(WORKSPACE, "pipeline.log")
 STATUS_FILE  = "/tmp/pipeline_status"
 LAST_CALL    = "/tmp/gemini_last_call.txt"
@@ -638,9 +644,6 @@ def _cs_read_all_transcripts():
 def _cs_analyze_transcript(transcript_text):
     """Analyze transcript and determine best content type, subject, and angle."""
     keys = get_gemini_keys()
-    if not keys and os.path.exists(KEYS_FILE):
-        with open(KEYS_FILE) as f:
-            keys = [l.strip() for l in f if l.strip()]
     if not keys:
         raise RuntimeError("No API keys available")
     
@@ -739,11 +742,8 @@ Transcripts:
 
 
 def _cs_generate_script(transcript_text, content_type, subject, angle, real_characters, key_plot_points):
-    """Generate content script (~1500 words)."""
+    """Generate a script using Groq with Gemini fallback."""
     keys = get_gemini_keys()
-    if not keys and os.path.exists(KEYS_FILE):
-        with open(KEYS_FILE) as f:
-            keys = [l.strip() for l in f if l.strip()]
     if not keys:
         raise RuntimeError("No API keys available")
     
@@ -887,9 +887,6 @@ def _cs_generate_tts(script, voice_style):
         }).encode()
         
         keys = get_gemini_keys()
-        if not keys and os.path.exists(KEYS_FILE):
-            with open(KEYS_FILE) as f:
-                keys = [l.strip() for l in f if l.strip()]
         
         api_keys = keys if keys else [env("GEMINI_API_KEY")]
         time.sleep(2)  # Rate limit
@@ -1122,14 +1119,8 @@ def _cs_generate_tts_only():
 
 
 def _cs_load_context():
-    """Load context from file."""
-    if os.path.exists(CS_CONTEXT_FILE):
-        try:
-            with open(CS_CONTEXT_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            log(f"Error loading context: {e}")
-    return {
+    """Load context from Obsidian markdown files only."""
+    ctx = {
         "characters": [],
         "locations": [],
         "key_terms": [],
@@ -1137,23 +1128,112 @@ def _cs_load_context():
         "processed_transcripts": [],
         "previous_scripts": []
     }
+    
+    obsidian_dir = os.path.join(CONTENT_STUDIO_DIR, "context")
+    
+    # Load characters from markdown
+    chars_file = os.path.join(obsidian_dir, "characters.md")
+    if os.path.exists(chars_file):
+        with open(chars_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or 'Total:' in line:
+                    continue
+                char = re.sub(r'^\[\[', '', re.sub(r'\]\]$', '', line.lstrip('- ').lstrip('* ')))
+                if char and char not in ctx["characters"] and char[0].isalpha() and char[0].isupper():
+                    ctx["characters"].append(char)
+    
+    # Load locations from markdown
+    locs_file = os.path.join(obsidian_dir, "locations.md")
+    if os.path.exists(locs_file):
+        with open(locs_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or 'Total:' in line:
+                    continue
+                loc = re.sub(r'^\[\[', '', re.sub(r'\]\]$', '', line.lstrip('- ').lstrip('* ')))
+                if loc and loc not in ctx["locations"] and loc[0].isalpha():
+                    ctx["locations"].append(loc)
+    
+    # Load key_terms from markdown (skip table format)
+    terms_file = os.path.join(obsidian_dir, "key_terms.md")
+    if os.path.exists(terms_file) and os.path.getsize(terms_file) > 0:
+        with open(terms_file) as f:
+            content = f.read()
+            if "|" not in content:  # Skip table format
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if not line or line.startswith('#') or 'Total:' in line:
+                        continue
+                    term = re.sub(r'^\[\[', '', re.sub(r'\]\]$', '', line.lstrip('- ').lstrip('* ')))
+                    if term and term not in ctx["key_terms"] and term[0].isalpha():
+                        ctx["key_terms"].append(term)
+    
+    # Load relationships from markdown table
+    rels_file = os.path.join(obsidian_dir, "relationships.md")
+    if os.path.exists(rels_file) and os.path.getsize(rels_file) > 0:
+        with open(rels_file) as f:
+            content = f.read()
+            if "|" in content and "---" in content:
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if not line.startswith('|') or line.startswith('|---') or 'Character' in line or 'Total' in line:
+                        continue
+                    parts = [p.strip() for p in line.split('|')[1:-1]]
+                    if len(parts) >= 2 and parts[0]:
+                        # Handle both wiki-links [[Name]] and plain names
+                        char1 = parts[0].replace('[[', '').replace(']]', '')
+                        char2 = parts[1].replace('[[', '').replace(']]', '') if len(parts) > 1 else ""
+                        rel_text = parts[2] if len(parts) > 2 else ""
+                        if char1 and char1[0].isalpha():
+                            ctx["relationships"].append(f"{char1} and {char2} are {rel_text}")
+    
+    return ctx
 
 
 def _cs_save_context(ctx):
-    """Save context to file."""
-    try:
-        with open(CS_CONTEXT_FILE, "w") as f:
-            json.dump(ctx, f, indent=2)
-    except IOError as e:
-        log(f"Error saving context: {e}")
+    """Save context to Obsidian markdown files only."""
+    obsidian_dir = os.path.join(CONTENT_STUDIO_DIR, "context")
+    os.makedirs(obsidian_dir, exist_ok=True)
+    
+    # Save characters as wiki-links
+    with open(os.path.join(obsidian_dir, "characters.md"), "w") as f:
+        f.write("# Characters\n\n")
+        for char in ctx.get("characters", []):
+            f.write(f"- [[{char}]]\n")
+    
+    # Save locations as wiki-links
+    with open(os.path.join(obsidian_dir, "locations.md"), "w") as f:
+        f.write("# Locations\n\n")
+        for loc in ctx.get("locations", []):
+            f.write(f"- [[{loc}]]\n")
+    
+    # Save key_terms as wiki-links
+    with open(os.path.join(obsidian_dir, "key_terms.md"), "w") as f:
+        f.write("# Key Terms\n\n")
+        for term in ctx.get("key_terms", []):
+            f.write(f"- [[{term}]]\n")
+    
+    # Save relationships as table
+    with open(os.path.join(obsidian_dir, "relationships.md"), "w") as f:
+        f.write("# Relationships\n\n")
+        f.write("| Character | Connected To | Relationship |\n")
+        f.write("|-----------|--------------|---------------|\n")
+        for rel in ctx.get("relationships", []):
+            parts = rel.split(" are ")
+            if len(parts) >= 2:
+                left = parts[0].strip()
+                right = parts[1].strip()[:35]
+                if " and " in left:
+                    chars = left.split(" and ", 1)
+                    char1 = chars[0].strip()
+                    char2 = chars[1].strip() if len(chars) > 1 else ""
+                    f.write(f"| [[{char1}]] | [[{char2}]] | {right} |\n")
 
 
 def _cs_extract_context_from_transcript(transcript_text, game_title):
     """Extract characters, locations, key terms from transcript using AI."""
     keys = get_gemini_keys()
-    if not keys and os.path.exists(KEYS_FILE):
-        with open(KEYS_FILE) as f:
-            keys = [l.strip() for l in f if l.strip()]
     if not keys:
         return None
     
@@ -1623,13 +1703,58 @@ def _rate_limit():
     with open(LAST_CALL, "w") as f:
         f.write(str(time.time()))
 
-def _gemini_script(text, script_num, keys_file):
+def _groq_generate(prompt, max_tokens=500):
+    """Generate text using Groq API with key rotation."""
+    global GROQ_KEY_INDEX
+    
+    groq_keys = get_groq_keys()
+    
+    if not groq_keys:
+        raise RuntimeError("No Groq API keys configured")
+    
+    start_key = GROQ_KEY_INDEX
+    for i in range(len(groq_keys)):
+        key_index = (start_key + i) % len(groq_keys)
+        api_key = groq_keys[key_index]
+        
+        log(f"   Trying Groq key ...{api_key[-6:]}")
+        
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.7
+        }
+        
+        try:
+            response = requests.post(url, json=data, headers=headers, timeout=60)
+            if response.status_code == 200:
+                GROQ_KEY_INDEX = key_index
+                result = response.json()
+                log(f"   Using Groq key ...{api_key[-6:]}")
+                return result["choices"][0]["message"]["content"]
+            elif response.status_code == 429:
+                log(f"   Groq key ...{api_key[-6:]} rate limited, trying next...")
+                continue
+            else:
+                log(f"   Groq key ...{api_key[-6:]} error {response.status_code}")
+                continue
+        except Exception as e:
+            log(f"   Groq key ...{api_key[-6:]} failed: {e}")
+            continue
+    
+    raise RuntimeError("All Groq API keys failed")
+
+def _gemini_script(text, script_num):
+    """Generate script using Gemini API with key rotation."""
     keys = get_gemini_keys()
-    if not keys and os.path.exists(keys_file):
-        with open(keys_file) as f:
-            keys = [l.strip() for l in f if l.strip()]
     if not keys:
-        raise RuntimeError("No API keys in keychain or gemini_keys.txt")
+        raise RuntimeError("No API keys in keychain")
 
     variant_key, perspective = _get_next_round_robin()
     game_title = env("GAME_TITLE", "")
@@ -1683,11 +1808,12 @@ def phase_scripts(json_file, duration, num_hours):
         set_status("Phase 3 FAILED")
         raise RuntimeError("Transcript file not found")
 
-    if not os.path.exists(KEYS_FILE):
-        log_error("Phase 3 Failed: gemini_keys.txt not found")
+    keys = get_gemini_keys()
+    if not keys:
+        log_error("Phase 3 Failed: No API keys in keychain")
         notify("Phase 3 Failed: No API keys configured")
         set_status("Phase 3 FAILED")
-        raise RuntimeError("gemini_keys.txt not found")
+        raise RuntimeError("No API keys available")
 
     _init_round_robin(num_hours)
     
@@ -1714,7 +1840,7 @@ def phase_scripts(json_file, duration, num_hours):
                 log(f"   Warning: No transcript for hour {i}, skipping")
                 continue
 
-            script = _gemini_script(text[:3000], i, KEYS_FILE)
+            script = _gemini_script(text[:3000], i)
             if script is None:
                 log(f"   Warning: All keys failed for hour {i}, using raw transcript")
                 script = text[:3000]
@@ -1889,11 +2015,9 @@ def phase_clips(video, json_file, duration, num_hours):
 
 # ─── Phase 5: TTS ─────────────────────────────────────────────────────────────
 def _load_api_keys():
-    keys_file = os.path.join(os.path.dirname(WORKSPACE), "gemini_keys.txt")
-    if os.path.exists(keys_file):
-        with open(keys_file) as f:
-            return [line.strip() for line in f if line.strip()]
-    return []
+    """Load API keys from keychain (fallback to empty list)."""
+    from workflows.keychain_manager import get_gemini_keys
+    return get_gemini_keys()
 
 def _tts_api(text, out_pcm, voice, style, retries=3, delay=60):
     if style:
@@ -2992,9 +3116,8 @@ def onboard():
     print(f"  {ok()} Workspace: {workspace}")
     print(f"  {ok()} Script:    {dst}")
 
-    # Update paths to use new workspace
-    env_file  = os.path.join(workspace, ".env")
-    keys_file = os.path.join(workspace, "gemini_keys.txt")
+     # Update paths to use new workspace
+    env_file = os.path.join(workspace, ".env")
 
     print()
 
@@ -3126,9 +3249,13 @@ def onboard():
         # Keys
         print(f"\n{B}Gemini keys for script generation{X}")
         keys = []
-        if os.path.exists(keys_file):
-            with open(keys_file) as f:
-                keys = [l.strip() for l in f if l.strip()]
+        # Try to load from keychain first
+        try:
+            from workflows.keychain_manager import get_gemini_keys
+            keys = get_gemini_keys()
+        except ImportError:
+            pass  # Fall back to empty list
+        
         if config["GEMINI_API_KEY"] not in keys:
             keys.insert(0, config["GEMINI_API_KEY"])
         print(f"  Current: {len(keys)}")
@@ -3147,9 +3274,7 @@ def onboard():
         print(f"\n{B}Writing configuration...{X}")
         if os.path.exists(env_file):
             shutil.copy2(env_file, env_file + ".bak")
-        if os.path.exists(keys_file):
-            shutil.copy2(keys_file, keys_file + ".bak")
-
+        
         with open(env_file, "w") as f:
             f.write(f'WORKSPACE={workspace}\n')
             for k in ("GEMINI_API_KEY", "PLAYLIST_URL", "TTS_VOICE"):
@@ -3161,12 +3286,7 @@ def onboard():
                 f.write(f'TTS_STYLE="{config["TTS_STYLE"]}"\n')
         os.chmod(env_file, 0o600)
         print(f"  {ok()} {env_file}")
-
-        with open(keys_file, "w") as f:
-            f.write("\n".join(keys) + "\n")
-        os.chmod(keys_file, 0o600)
-        print(f"  {ok()} {keys_file} ({len(keys)} key(s))")
-
+        
         print(f"\n{B}Storing keys in system keychain...{X}")
         try:
             set_gemini_keys(keys)
@@ -3182,9 +3302,8 @@ def onboard():
             print(f"    Keys saved to files only")
 
     # Reload env
-    global ENV, ENV_FILE, KEYS_FILE, WORKSPACE, WORKFLOW_DIR
+    global ENV, ENV_FILE, WORKSPACE, WORKFLOW_DIR
     ENV_FILE = env_file
-    KEYS_FILE = keys_file
     WORKSPACE = workspace
     WORKFLOW_DIR = wf_dir
     ENV = load_env()

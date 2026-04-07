@@ -155,7 +155,7 @@ systemctl --user status lambda-cut-listener.service
 2. Create a new API key
 3. Add to `.env`: `GEMINI_API_KEY=your_key`
 
-For multiple keys (rate limiting), add to `gemini_keys.txt` (one per line).
+For multiple keys (rate limiting), add them through the onboard process or store them directly in your system keychain using the keychain manager.
 
 ### Telegram Bot
 

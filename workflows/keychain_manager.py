@@ -67,6 +67,20 @@ def get_gemini_keys():
     return keys
 
 
+def get_groq_keys():
+    """Retrieve all Groq API keys."""
+    keys = []
+    i = 1
+    while True:
+        username = f"groq-key-{i}"
+        key = get_service_password(username)
+        if key is None:
+            break
+        keys.append(key)
+        i += 1
+    return keys
+
+
 def has_keychain_access():
     """Check if keychain is accessible."""
     try:
