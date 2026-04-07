@@ -54,7 +54,10 @@ def set_gemini_keys(keys_list):
 
 
 def get_gemini_keys():
-    """Retrieve all Gemini API keys."""
+    """Retrieve all Gemini API keys.
+    
+    Tries keychain first, then falls back to .env file for systemd/headless environments.
+    """
     keys = []
     i = 1
     while True:
@@ -64,6 +67,22 @@ def get_gemini_keys():
             break
         keys.append(key)
         i += 1
+    
+    # Fallback: if keychain is empty, try reading from .env
+    if not keys:
+        try:
+            env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+            if os.path.exists(env_path):
+                with open(env_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("GEMINI_API_KEY="):
+                            key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            if key:
+                                keys.append(key)
+        except Exception:
+            pass
+    
     return keys
 
 
