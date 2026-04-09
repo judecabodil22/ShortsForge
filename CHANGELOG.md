@@ -4,6 +4,59 @@ All notable changes to this project are documented here.
 
 ---
 
+## 1.3.0 — 2026-04-09
+### Added
+- **MemPalace Integration**: Persistent memory system for storing conversation history and learned data
+- **Script Validation System**: Post-generation factuality and engagement scoring
+  - Character hallucination detection using fuzzy matching (RapidFuzz)
+  - Location error detection using spaCy NER
+  - Engagement scoring (hook strength, readability, sentiment)
+- **Self-Improvement Framework**: Foundation for continuous learning from validation failures
+- **Content Studio Context Tracking**: Obsidian-style markdown context files for characters, locations, relationships, and key terms
+- **Script Validation Script**: Standalone validation module for analyzing script quality
+- **Enhanced Metrics Logging**: generation_metrics.jsonl tracks detailed validation scores
+
+### Changed
+- Optimized script length for Shorts format (150-300 words target)
+- Improved prompt engineering for better script structure
+- Enhanced error handling in keychain manager
+- Improved context extraction from transcripts
+
+### Fixed
+- Resolved spaCy location misclassification (proper nouns like "Tyler" flagged as locations)
+- Fixed MemPalace import issues by adding workspace to sys.path
+- Fixed script length issues (reduced from 1500 to target 150-300 words)
+- Resolved import errors in script validation module
+
+---
+
+## 1.2.0 — 2026-04-07
+### Added
+- Secure API key management using system keychain (keyring) for all Gemini and Groq keys
+- Removed plaintext `gemini_keys.txt` file storage
+- Added `get_groq_keys()` function for consistency with `get_gemini_keys()`
+- Enhanced keychain manager with bidirectional sync capabilities
+- Improved context extraction accuracy with better prompt engineering
+- Fixed Context Studio menu flow and data persistence
+- Added validation to prevent hallucinated characters in script generation
+
+### Changed
+- Migrated all API key storage from files to system keychain
+- Updated CONFIGURATION.md documentation to reflect keychain-only approach
+- Enhanced error handling and logging throughout the pipeline
+- Optimized rate limiting for Gemini API calls
+- Improved transcript parsing for more accurate context extraction
+
+### Fixed
+- Resolved Gemini API 429 errors through proper key rotation
+- Fixed Context Studio context clearing functionality
+- Corrected indentation issues in onboard process
+- Fixed relationship parsing in context loading
+- Resolved import errors in keychain manager
+- Ensured all API functions work with keychain-only keys
+
+---
+
 ## 1.1.1 — 2026-04-06
 
 ### Bug Fixes

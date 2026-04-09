@@ -4,6 +4,12 @@ ShortsForge — YouTube Shorts Pipeline
 Combines: shortsforge.sh, telegram_listener.sh, generate_script.sh, onboard.sh
 """
 import argparse, base64, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
+
+_workflow_dir = os.path.dirname(os.path.abspath(__file__))
+_workspace = os.path.dirname(_workflow_dir)
+if _workspace not in sys.path:
+    sys.path.insert(0, _workspace)
+
 from update_manager import (
     get_local_version,
     get_release_notes,
@@ -18,11 +24,57 @@ from keychain_manager import (
     set_gemini_keys,
     set_service_password,
 )
+try:
+    from game_data.mempalace import get_mempalace_manager
+    MEMPALACE_AVAILABLE = True
+except ImportError as e:
+    MEMPALACE_AVAILABLE = False
+    print(f"[DEBUG] MemPalace import failed: {e}")
+    def get_mempalace_manager():
+        """Fallback when MemPalace is not available."""
+        return None
+from script_validation import (
+    validate_script_factuality,
+    score_engagement,
+    select_best_script,
+    score_context_relevance,
+    summarize_context,
+    log_generation_metrics,
+)
 import requests
+from jinja2 import Environment, FileSystemLoader, BaseLoader
 
 # Groq configuration
 GROQ_KEY_INDEX = 0  # Track which key to use next
 GROQ_MODEL = "llama-3.3-70b-versatile"
+
+# Dynamic model selection per content type
+GROQ_MODELS_BY_TYPE = {
+    "mystery_recap": "llama-3.3-70b-versatile",
+    "breakdown": "llama-3.3-70b-versatile",
+    "timeline": "llama-3.3-70b-versatile",
+    "lesson": "llama-3.3-70b-versatile",
+    "narrative": "llama-3.3-70b-versatile",
+    "news_report": "llama-3.3-70b-versatile",
+    "documentary": "llama-3.3-70b-versatile",
+    "true_crime": "llama-3.3-70b-versatile",
+    "character_pov": "llama-3.3-70b-versatile",
+    "true_story": "llama-3.3-70b-versatile",
+}
+
+# Adaptive temperature per content type
+TEMPERATURE_BY_TYPE = {
+    "mystery_recap": 0.8,
+    "breakdown": 0.6,
+    "timeline": 0.7,
+    "lesson": 0.7,
+    "narrative": 0.8,
+    "news_report": 0.5,
+    "documentary": 0.5,
+    "true_crime": 0.8,
+    "character_pov": 0.9,
+    "true_story": 0.7,
+}
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 DEFAULT_WORKSPACE = os.path.expanduser("~/ShortsForge")
@@ -40,6 +92,7 @@ WORKSPACE    = _find_workspace()
 WORKFLOW_DIR = os.path.join(WORKSPACE, "workflows")
 ENV_FILE     = os.path.join(WORKSPACE, ".env")
 LOG_FILE     = os.path.join(WORKSPACE, "pipeline.log")
+METRICS_FILE = os.path.join(WORKSPACE, "generation_metrics.jsonl")
 STATUS_FILE  = "/tmp/pipeline_status"
 LAST_CALL    = "/tmp/gemini_last_call.txt"
 
@@ -49,6 +102,25 @@ SCRIPTS_DIR      = os.path.join(WORKSPACE, "scripts")
 TTS_DIR          = os.path.join(WORKSPACE, "tts")
 SHORTS_DIR       = os.path.join(WORKSPACE, "shorts")
 OUTPUT_DIR       = os.path.join(WORKSPACE, "output")
+
+# Prompt templates directory
+PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "prompts")
+if not os.path.exists(PROMPTS_DIR):
+    PROMPTS_DIR = os.path.join(WORKSPACE, "prompts")
+
+# Jinja2 template environment
+_prompt_env = None
+
+def _get_prompt_env():
+    """Lazy-load Jinja2 template environment."""
+    global _prompt_env
+    if _prompt_env is None and os.path.exists(PROMPTS_DIR):
+        _prompt_env = Environment(
+            loader=FileSystemLoader(PROMPTS_DIR),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+    return _prompt_env
 
 # Content Studio directories
 CONTENT_STUDIO_DIR = os.path.join(WORKSPACE, "content_studio")
@@ -742,13 +814,14 @@ Transcripts:
 
 
 def _cs_generate_script(transcript_text, content_type, subject, angle, real_characters, key_plot_points):
-    """Generate a script using Groq with Gemini fallback."""
+    """Generate a script using Groq primary with Gemini fallback, validation, and context optimization."""
     keys = get_gemini_keys()
     if not keys:
         raise RuntimeError("No API keys available")
     
     game_title = env("GAME_TITLE", "the game")
     ctx = _cs_load_context()
+    ctx = summarize_context(ctx, max_per_category=10)
     
     stored_chars = ", ".join(ctx.get("characters", [])) if ctx.get("characters") else "None yet"
     stored_locs = ", ".join(ctx.get("locations", [])) if ctx.get("locations") else "None yet"
@@ -772,11 +845,7 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
     allowed_chars = ", ".join(real_characters) if real_characters else f"Use these verified characters only: {stored_chars}"
     plot_points_str = "; ".join(key_plot_points) if key_plot_points else "Only use events explicitly mentioned in the transcript"
     
-    prompt = f"""Create a 1500-word video script about {subject} from {game_title}.
-
-{type_prompt}
-
-VERIFIED CONTEXT (use these to avoid hallucinations):
+    context_info = f"""VERIFIED CONTEXT (use these to avoid hallucinations):
 - Characters: {stored_chars}
 - Locations: {stored_locs}
 - Relationships: {stored_rels}{prev_script_info}
@@ -792,59 +861,121 @@ CRITICAL RESTRICTIONS:
 - DO NOT include any plot details, character abilities, or story elements that are NOT mentioned in the transcript above
 - DO NOT invent relationships between characters - if the transcript doesn't explicitly state a connection between characters, do NOT imply or state that they have a relationship
 - DO NOT make up roles for characters (e.g., don't say "Chief Bank is leading the inquiry" unless explicitly stated in transcript)
-- Only describe characters and events that are explicitly mentioned in the transcript - do not infer or assume details not directly stated
+- Only describe characters and events that are explicitly mentioned in the transcript - do not infer or assume details not directly stated"""
+
+    prompt = f"""You are an expert YouTube scriptwriter specializing in gaming content analysis.
+
+Create a 1500-2000-word video script (5-10 minutes) about {subject} from {game_title}.
+
+{type_prompt}
+
+{context_info}
 
 The script should:
 - Have a hook at the start to grab attention
-- Be conversational and engaging for a 10-minute video
+- Be conversational and engaging for a 5-10 minute video
 - Include natural paragraph flow (NOT bullet points or fragments)
 - Have a clear structure with intro, body, and conclusion
 - End with a call to action asking viewers to like and subscribe
 - Be written in a style suitable for a YouTube video narration
 - Stay FACTUALLY accurate to the transcript - do not make up events or details
 
+Before writing, think through:
+1. What is the core hook that will grab viewers in 3 seconds?
+2. What is the most compelling angle from this transcript?
+3. How does the story build from hook to climax to resolution?
+4. What emotional response should the viewer have at the end?
+
+Before outputting, verify:
+- Does the script use ONLY verified characters and locations?
+- Is the script 1500-2000 words?
+- Does it flow naturally when read aloud?
+- Are there any forbidden elements (invented characters, made-up events)?
+
 Write the complete script now."""
 
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.8, "maxOutputTokens": 3072}
-    }).encode()
+    # Phase 4: Use Groq primary with adaptive temperature
+    groq_model = _get_groq_model("narrative")  # Content Studio uses narrative style
+    temperature = 0.8  # Content Studio uses slightly higher temperature for creative content
     
-    # Try each key with retry logic
-    for i in range(len(keys)):
-        key = keys[i % len(keys)]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
-        
-        for attempt in range(3):
-            try:
-                _rate_limit()
-                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    r = json.loads(resp.read())
-                    return r["candidates"][0]["content"]["parts"][0]["text"]
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    wait = (2 ** attempt) * 15
-                    log(f"Key ...{key[-6:]} rate limited (429), waiting {wait}s...")
-                    time.sleep(wait)
-                elif e.code == 503:
-                    wait = (2 ** attempt) * 10
-                    log(f"Key ...{key[-6:]} service unavailable (503), retry {attempt+1}/3 in {wait}s...")
-                    time.sleep(wait)
-                elif e.code == 400:
-                    log(f"Key ...{key[-6:]} bad request (400): {e.read().decode()[:200]}")
-                    break  # Don't retry on 400
-                else:
-                    log(f"HTTP error {e.code} with key ...{key[-6:]}: {e}")
+    candidates = []
+    
+    # Attempt 1: Groq (primary)
+    try:
+        groq_script = _groq_generate(prompt, max_tokens=3072, model=groq_model, temperature=temperature)
+        if groq_script:
+            candidates.append((groq_script, {"source": "groq", "model": groq_model, "temperature": temperature}))
+            log(f"   Content Studio: Groq script generated ({len(groq_script.split())} words)")
+    except Exception as e:
+        log(f"   Content Studio: Groq generation failed: {e}, falling back to Gemini")
+
+    # Attempt 2: Gemini (fallback)
+    if not candidates:
+        try:
+            body = json.dumps({
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": temperature, "maxOutputTokens": 500}
+            }).encode()
+            
+            for i in range(len(keys)):
+                key = keys[i % len(keys)]
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+                
+                for attempt in range(3):
+                    try:
+                        _rate_limit()
+                        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+                        with urllib.request.urlopen(req, timeout=60) as resp:
+                            r = json.loads(resp.read())
+                            gemini_script = r["candidates"][0]["content"]["parts"][0]["text"]
+                            candidates.append((gemini_script, {"source": "gemini", "model": "gemini-2.5-flash-lite", "temperature": temperature}))
+                            log(f"   Content Studio: Gemini script generated ({len(gemini_script.split())} words)")
+                            break
+                    except urllib.error.HTTPError as e:
+                        if e.code == 429:
+                            wait = (2 ** attempt) * 15
+                            log(f"Key ...{key[-6:]} rate limited (429), waiting {wait}s...")
+                            time.sleep(wait)
+                        elif e.code == 503:
+                            wait = (2 ** attempt) * 10
+                            log(f"Key ...{key[-6:]} service unavailable (503), retry {attempt+1}/3 in {wait}s...")
+                            time.sleep(wait)
+                        elif e.code == 400:
+                            log(f"Key ...{key[-6:]} bad request (400): {e.read().decode()[:200]}")
+                            break
+                        else:
+                            log(f"HTTP error {e.code} with key ...{key[-6:]}: {e}")
+                            break
+                    except Exception as e:
+                        log(f"Script generation error with key ...{key[-6:]}: {e}")
+                        time.sleep(5)
+                        break
+                
+                if candidates:
                     break
-            except Exception as e:
-                log(f"Script generation error with key ...{key[-6:]}: {e}")
-                time.sleep(5)
-                break
-        
-        log(f"Key ...{key[-6:]} failed, trying next...")
+                log(f"Key ...{key[-6:]} failed, trying next...")
+        except Exception as e:
+            log(f"   Content Studio: Gemini generation failed: {e}")
+
+    if not candidates:
+        raise RuntimeError("Script generation failed: All API keys exhausted")
+
+    # Phase 2: Validate and select best script
+    best_script, best_metadata, scores = select_best_script(candidates, ctx)
+    if scores and len(scores) > 1:
+        log(f"   Content Studio: Selected best script from {len(scores)} candidates (score: {scores[0]['combined']})")
     
-    raise RuntimeError("Script generation failed: All API keys exhausted")
+    # Phase 5: Log quality metrics
+    fact_check = validate_script_factuality(best_script, ctx)
+    engagement = score_engagement(best_script)
+    log(f"   Content Studio quality: factuality={fact_check['score']}, engagement={engagement['overall']}, words={len(best_script.split())}")
+    if fact_check["issues"]:
+        for issue in fact_check["issues"]:
+            log(f"   Content Studio WARNING: {issue}")
+    
+    log_generation_metrics(best_script, best_metadata, fact_check, engagement, METRICS_FILE)
+    
+    return best_script
 
 
 def _cs_generate_tts(script, voice_style):
@@ -1034,13 +1165,26 @@ def _cs_generate_script_only():
     tg_send(f"📖 Read {len(transcript_text)} characters")
     
     # Extract and update context from transcript
-    game_title = env("GAME_TITLE", "Life is Strange")
+    game_title = env("GAME_TITLE", "Unknown Game")
     tg_send("🔍 Extracting context from transcript...")
     extracted = _cs_extract_context_from_transcript(transcript_text, game_title)
     ctx = _cs_load_context()
     if extracted:
         ctx = _cs_update_context(extracted, transcript_name)
         tg_send(f"📚 Context updated: {len(ctx['characters'])} characters, {len(ctx['locations'])} locations")
+        
+        # NEW: Also mine to MemPalace for persistent memory
+        if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+            try:
+                mp_manager = get_mempalace_manager()
+                if mp_manager and transcript:
+                    result = mp_manager.mine_transcript(transcript, game_title)
+                    if result.get("status") == "success":
+                        tg_send(f"🧠 MemPalace: Mined transcript for {game_title}")
+                    else:
+                        tg_send(f"🧠 MemPalace: Mining skipped")
+            except Exception as mp_err:
+                tg_send(f"🧠 MemPalace: Mining failed - {mp_err}")
     else:
         tg_send("⚠️ Could not extract context, using existing")
     
@@ -1049,6 +1193,20 @@ def _cs_generate_script_only():
     tg_send(f"📝 Detected: {content_type}\n👤 Subject: {subject}\n🎤 Voice: {voice_style}\n📋 Characters: {', '.join(real_characters[:5]) if real_characters else 'None'}\n🔑 Plot: {key_plot_points[0] if key_plot_points else 'None'}")
 
     tg_send("✍️ Generating script (~1500 words)...")
+    
+    # NEW: Inject MemPalace memory into context
+    if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+        game_title = env("GAME_TITLE", "")
+        if game_title and game_title != "Unknown Game":
+            try:
+                mp_manager = get_mempalace_manager()
+                if mp_manager:
+                    game_memory = mp_manager.get_game_memory(game_title)
+                    if game_memory and game_memory.get("success"):
+                        tg_send(f"🧠 MemPalace: Retrieved memory for {game_title}")
+            except Exception as mp_err:
+                tg_send(f"🧠 MemPalace: Memory retrieval failed - {mp_err}")
+    
     try:
         script = _cs_generate_script(transcript_text, content_type, subject, angle, real_characters, key_plot_points)
     except Exception as e:
@@ -1058,6 +1216,23 @@ def _cs_generate_script_only():
     script_file = os.path.join(CS_SCRIPTS_DIR, f"content_{content_type.lower()}_{int(time.time())}.txt")
     with open(script_file, "w") as f:
         f.write(script)
+    
+    # NEW: Log quality to MemPalace
+    if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+        try:
+            mp_manager = get_mempalace_manager()
+            if mp_manager:
+                metric = {
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'source': 'content_studio',
+                    'content_type': content_type,
+                    'subject': subject,
+                    'word_count': len(script.split()),
+                }
+                mp_manager.add_quality_metric(game_title, metric)
+                tg_send(f"🧠 MemPalace: Logged quality metric")
+        except Exception as mp_err:
+            pass  # Don't fail on quality logging
     
     # Create script summary for context
     script_summary = f"Script {len(ctx.get('previous_scripts', [])) + 1}: {subject} - {content_type} - {angle[:50]}..."
@@ -1239,7 +1414,7 @@ def _cs_extract_context_from_transcript(transcript_text, game_title):
     
     prompt = f"""Analyze this transcript from "{game_title}" and extract:
 
-1. CHARACTERS: List character names that appear (e.g., Max, Safi, Moses)
+1. CHARACTERS: List character names that appear in the transcript
 2. LOCATIONS: List places mentioned (e.g., dorm room, school, town)
 3. KEY_TERMS: Important story elements, themes, or concepts
 4. RELATIONSHIPS: Relationships between characters (format: "Character A and Character B are [relationship]")
@@ -1645,16 +1820,65 @@ TTS_STYLE_OPTIONS = [
     "Speak like sharing an incredible story with a friend. Conversational, engaging, hook them early.",
 ]
 
-def _build_script_prompt(variant_key, perspective, game_title):
+def _build_script_prompt(variant_key, perspective, game_title, transcript, context=None):
+    """Build script prompt using Jinja2 templates (Phase 1) with fallback to legacy."""
     variant = SCRIPT_VARIANTS[variant_key]
-    game_line = f"This is from the game {game_title}.\n\n" if game_title else ""
+    env = _get_prompt_env()
 
-    return f"""You are a YouTube Shorts scriptwriter. {game_line}Style: {variant['style']}
+    if env is not None:
+        try:
+            template = env.get_template("base.j2")
+            context_info = ""
+            if context:
+                chars = context.get("characters", [])
+                locs = context.get("locations", [])
+                terms = context.get("key_terms", [])
+                rels = context.get("relationships", [])
+                if chars:
+                    context_info += f"Characters: {', '.join(chars)}\n"
+                if locs:
+                    context_info += f"Locations: {', '.join(locs)}\n"
+                if terms:
+                    context_info += f"Key Terms: {', '.join(terms)}\n"
+                if rels:
+                    context_info += f"Relationships: {'; '.join(rels)}\n"
+
+            prompt = template.render(
+                game_title=game_title,
+                style=variant["style"],
+                perspective=perspective,
+                instruction=variant["instruction"],
+                context_info=context_info,
+                transcript=transcript,
+            )
+            return prompt
+        except Exception as e:
+            log(f"   Jinja2 template error: {e}, using legacy prompt")
+
+    # Fallback to legacy f-string prompt
+    game_line = f"This is from the game {game_title}.\n\n" if game_title else ""
+    context_info = ""
+    if context:
+        chars = context.get("characters", [])
+        locs = context.get("locations", [])
+        terms = context.get("key_terms", [])
+        rels = context.get("relationships", [])
+        if chars:
+            context_info += f"Characters: {', '.join(chars)}\n"
+        if locs:
+            context_info += f"Locations: {', '.join(locs)}\n"
+        if terms:
+            context_info += f"Key Terms: {', '.join(terms)}\n"
+        if rels:
+            context_info += f"Relationships: {'; '.join(rels)}\n"
+
+    return f"""You are an expert YouTube Shorts scriptwriter specializing in gaming content. {game_line}{context_info}
+Style: {variant['style']}
 Perspective: {perspective}
 
 {variant['instruction']}
 
-CRITICAL REQUIREMENT: You MUST write AT LEAST 200 words. This is the minimum acceptable length. Do not stop until you have written at least 200 words. Your output should be a complete, flowing narrative.
+CRITICAL: Write exactly 150-300 words (60-90 seconds max). This is the ONLY acceptable length. Do not exceed 300 words.
 
 HARD RULES (never break these):
 - NO dialogue — never write what anyone "said", "told", "asked", or "replied"
@@ -1663,15 +1887,17 @@ HARD RULES (never break these):
 - NO parentheticals, stage directions, or annotations
 - NO markdown formatting — plain text only
 - NO phrases like "in conclusion", "to summarize", "the point is"
-- NO abbreviations or symbols — spell everything out ("number one" not "#1", "dollars" not "$")
+- NO abbreviations or symbols — spell everything out
 - Write ONLY facts and description as if narrating events directly
+- ONLY use information from the transcript — do NOT invent characters, events, or details
+- Use SHORT, punchy sentences (average 10-15 words)
 
 WRITING STYLE:
-- Write in complete paragraphs, not fragments
-- Every sentence should flow naturally into the next
-- Avoid short one-sentence paragraphs
+- Start with a HOOK in the first sentence (grab attention in 3 seconds)
+- Use short, punchy sentences - NOT long, complex run-on sentences
+- Every sentence should be self-contained
 - The script should sound like natural human speech when read aloud
-- Vary sentence length for natural rhythm
+- End with impact — a revelation, question, or emotional beat
 
 OUTPUT FORMAT (strict):
 Line 1: TITLE: [6-10 word title, no punctuation, no clickbait caps]
@@ -1684,10 +1910,18 @@ TITLE RULES:
 - No exclamation marks or question marks
 - Hint at the topic without spoiling the ending
 
-REQUIREMENT: Script body MUST be at least 200 words. Write a complete, flowing narrative, not fragments.
-
 Transcript:
-{{transcript}}"""
+{transcript}"""
+
+
+def _get_temperature(variant_key):
+    """Get adaptive temperature for content type (Phase 4)."""
+    return TEMPERATURE_BY_TYPE.get(variant_key, 0.7)
+
+
+def _get_groq_model(variant_key):
+    """Get Groq model for content type (Phase 4)."""
+    return GROQ_MODELS_BY_TYPE.get(variant_key, GROQ_MODEL)
 
 def _rate_limit():
     now = time.time()
@@ -1703,8 +1937,8 @@ def _rate_limit():
     with open(LAST_CALL, "w") as f:
         f.write(str(time.time()))
 
-def _groq_generate(prompt, max_tokens=500):
-    """Generate text using Groq API with key rotation."""
+def _groq_generate(prompt, max_tokens=500, model=None, temperature=0.7):
+    """Generate text using Groq API with key rotation and adaptive model/temperature."""
     global GROQ_KEY_INDEX
     
     groq_keys = get_groq_keys()
@@ -1712,12 +1946,13 @@ def _groq_generate(prompt, max_tokens=500):
     if not groq_keys:
         raise RuntimeError("No Groq API keys configured")
     
+    groq_model = model or GROQ_MODEL
     start_key = GROQ_KEY_INDEX
     for i in range(len(groq_keys)):
         key_index = (start_key + i) % len(groq_keys)
         api_key = groq_keys[key_index]
         
-        log(f"   Trying Groq key ...{api_key[-6:]}")
+        log(f"   Trying Groq key ...{api_key[-6:]} (model: {groq_model}, temp: {temperature})")
         
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -1725,10 +1960,10 @@ def _groq_generate(prompt, max_tokens=500):
             "Content-Type": "application/json"
         }
         data = {
-            "model": GROQ_MODEL,
+            "model": groq_model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": 0.7
+            "temperature": temperature
         }
         
         try:
@@ -1750,19 +1985,21 @@ def _groq_generate(prompt, max_tokens=500):
     
     raise RuntimeError("All Groq API keys failed")
 
-def _gemini_script(text, script_num):
-    """Generate script using Gemini API with key rotation."""
+def _gemini_script(text, script_num, context=None):
+    """Generate script using Gemini API with key rotation, context, and validation (Phase 1-2)."""
     keys = get_gemini_keys()
     if not keys:
         raise RuntimeError("No API keys in keychain")
 
     variant_key, perspective = _get_next_round_robin()
     game_title = env("GAME_TITLE", "")
-    prompt = _build_script_prompt(variant_key, perspective, game_title).format(transcript=text[:3000])
+    temperature = _get_temperature(variant_key)
+    prompt = _build_script_prompt(variant_key, perspective, game_title, text[:3000], context)
     log(f"   Variant: {SCRIPT_VARIANTS[variant_key]['style']}, Perspective: {perspective[:50]}...")
+    log(f"   Temperature: {temperature}, Context items: {len(context.get('characters', [])) if context else 0} chars")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 3072}
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": 3072}
     }).encode()
 
     start = (script_num - 1) % len(keys)
@@ -1817,8 +2054,13 @@ def phase_scripts(json_file, duration, num_hours):
 
     _init_round_robin(num_hours)
     
+    # Load and optimize context for script generation (Phase 3)
+    ctx = _cs_load_context()
+    ctx = summarize_context(ctx, max_per_category=10)
+    log(f"   Context loaded: {len(ctx.get('characters', []))} chars, {len(ctx.get('locations', []))} locs, {len(ctx.get('key_terms', []))} terms")
+    
     set_status("Phase 3: Generating scripts...")
-    log("Phase 3: Generating scripts (one per hour)...")
+    log("Phase 3: Generating scripts (one per hour, Groq primary, Gemini fallback)...")
     notify(f"Phase 3 Started: Generating {num_hours} scripts...")
     delay = int(env("SCRIPT_DELAY", "300"))
 
@@ -1840,18 +2082,108 @@ def phase_scripts(json_file, duration, num_hours):
                 log(f"   Warning: No transcript for hour {i}, skipping")
                 continue
 
-            script = _gemini_script(text[:3000], i)
-            if script is None:
-                log(f"   Warning: All keys failed for hour {i}, using raw transcript")
-                script = text[:3000]
+            transcript_text = text[:3000]
+            variant_key, perspective = _get_next_round_robin()
+            groq_model = _get_groq_model(variant_key)
+            temperature = _get_temperature(variant_key)
+
+            # Phase 3: Optimize context relevance for this specific transcript
+            relevant_ctx = score_context_relevance(ctx, transcript_text, max_items=8)
+            
+            # NEW: Inject MemPalace memory into context
+            if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+                game_title = env("GAME_TITLE", "")
+                if game_title and game_title != "Unknown Game":
+                    try:
+                        mp_manager = get_mempalace_manager()
+                        if mp_manager:
+                            game_memory = mp_manager.get_game_memory(game_title)
+                            if game_memory and game_memory.get("success"):
+                                log(f"MemPalace: Retrieved memory for {game_title}")
+                    except Exception as mp_err:
+                        log(f"MemPalace: Memory injection failed - {mp_err}")
+
+            # Phase 4: Dynamic model selection + adaptive temperature
+            # Phase 2: Multi-attempt generation with validation
+            best_script = None
+            best_metadata = None
+            candidates = []
+
+            # Attempt 1: Groq (primary) with adaptive temperature
+            try:
+                prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx)
+                groq_script = _groq_generate(prompt, max_tokens=500, model=groq_model, temperature=temperature)
+                if groq_script:
+                    candidates.append((groq_script, {"source": "groq", "model": groq_model, "temperature": temperature}))
+                    log(f"   Groq script generated ({len(groq_script.split())} words)")
+            except Exception as e:
+                log(f"   Groq generation failed: {e}, falling back to Gemini")
+
+            # Attempt 2: Gemini (fallback) with validation
+            if not candidates:
+                gemini_script = _gemini_script(transcript_text, i, relevant_ctx)
+                if gemini_script:
+                    candidates.append((gemini_script, {"source": "gemini", "model": "gemini-2.5-flash-lite", "temperature": temperature}))
+                    log(f"   Gemini script generated ({len(gemini_script.split())} words)")
+
+            # Phase 2: Validate and select best script
+            if candidates:
+                best_script, best_metadata, scores = select_best_script(candidates, ctx)
+                if scores and len(scores) > 1:
+                    log(f"   Selected best script from {len(scores)} candidates (score: {scores[0]['combined']})")
+                    for idx, s in enumerate(scores):
+                        log(f"   Candidate {idx+1}: factuality={s['factuality']['score']}, engagement={s['engagement']['overall']}, combined={s['combined']}")
+            else:
+                log(f"   Warning: All generation failed for hour {i}, using raw transcript")
+                best_script = transcript_text
+                best_metadata = {"source": "raw_transcript"}
+
+            # Log quality metrics (Phase 5)
+            if best_script and best_metadata.get("source") != "raw_transcript":
+                fact_check = validate_script_factuality(best_script, ctx)
+                engagement = score_engagement(best_script)
+                log(f"   Script {i} quality: factuality={fact_check['score']}, engagement={engagement['overall']}, words={len(best_script.split())}")
+                if fact_check["issues"]:
+                    for issue in fact_check["issues"]:
+                        log(f"   WARNING: {issue}")
+
+                # Write structured metrics to JSONL file
+                log_generation_metrics(best_script, best_metadata, fact_check, engagement, METRICS_FILE)
+                
+                # NEW: Also log to MemPalace for quality tracking
+                if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+                    try:
+                        mp_manager = get_mempalace_manager()
+                        if mp_manager:
+                            game_title = env("GAME_TITLE", "")
+                            metric = {
+                                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                'hour': i,
+                                'source': best_metadata.get('source'),
+                                'model': best_metadata.get('model'),
+                                'word_count': len(best_script.split()),
+                                'factuality': fact_check.get('score', 0),
+                                'engagement': engagement.get('overall', 0),
+                                'variant': variant_key,
+                                'perspective': perspective
+                            }
+                            mp_manager.add_quality_metric(game_title, metric)
+                            log(f"MemPalace: Logged quality metric for script {i}")
+                    except Exception as mp_err:
+                        log(f"MemPalace: Quality logging failed - {mp_err}")
 
             with open(out, "w") as f:
-                f.write(script)
-            wc = len(script.split())
-            log(f"   Script {i}: {wc} words")
+                f.write(best_script)
+            wc = len(best_script.split())
+            log(f"   Script {i}: {wc} words (source: {best_metadata.get('source', 'unknown')})")
             scripts_generated += 1
             set_status(f"Phase 3: Script {i}/{num_hours} generated")
             notify(f"Script {i}/{num_hours} generated ({wc} words)")
+
+            # Update context with script summary (Phase 3)
+            if best_script and wc > 50:
+                summary = f"Script {i}: {best_script[:100]}..."
+                _cs_update_context({"characters": [], "locations": [], "key_terms": [], "relationships": []}, f"script_{padded}", summary)
         except Exception as e:
             log_error(f"   Error generating script {i}: {e}")
             continue
@@ -2016,7 +2348,10 @@ def phase_clips(video, json_file, duration, num_hours):
 # ─── Phase 5: TTS ─────────────────────────────────────────────────────────────
 def _load_api_keys():
     """Load API keys from keychain (fallback to empty list)."""
-    from workflows.keychain_manager import get_gemini_keys
+    try:
+        from keychain_manager import get_gemini_keys
+    except ImportError:
+        from workflows.keychain_manager import get_gemini_keys
     return get_gemini_keys()
 
 def _tts_api(text, out_pcm, voice, style, retries=3, delay=60):
@@ -2354,12 +2689,26 @@ def run_pipeline(skip=None, phases=None):
                     transcript_text += text + " "
             
             if transcript_text:
-                game_title = env("GAME_TITLE", "Life is Strange")
+                game_title = env("GAME_TITLE", "Unknown Game")
                 extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
                 if extracted:
                     transcript_name = os.path.basename(json_file)
                     _cs_update_context(extracted, transcript_name)
                     log(f"Context extracted: {len(extracted.get('characters', []))} characters")
+                
+                # NEW: Also mine to MemPalace for persistent memory
+                log(f"[DEBUG] MEMPALACE_AVAILABLE={MEMPALACE_AVAILABLE}, MEMORY_ENABLED={env('MEMORY_ENABLED', 'true')}")
+                if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+                    try:
+                        mp_manager = get_mempalace_manager()
+                        if mp_manager and json_file:
+                            result = mp_manager.mine_transcript(json_file, game_title)
+                            if result.get("status") == "success":
+                                log(f"MemPalace: Mined transcript for {game_title}")
+                            else:
+                                log(f"MemPalace: Mining skipped - {result.get('error', 'Unknown error')}")
+                    except Exception as mp_err:
+                        log(f"MemPalace: Mining failed - {mp_err}")
         except Exception as e:
             log(f"Context extraction skipped: {e}")
     else:
