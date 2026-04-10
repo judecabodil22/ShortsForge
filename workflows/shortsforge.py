@@ -2071,7 +2071,7 @@ def _cs_generate_tts_only():
 
 
 def _cs_load_context():
-    """Load context from centralized Context directory."""
+    """Load context from centralized Context directory (markdown files)."""
     ctx = {
         "characters": [],
         "locations": [],
@@ -2086,26 +2086,205 @@ def _cs_load_context():
     ctx_dir = os.path.join(CONTEXT_DIR, game)
     os.makedirs(ctx_dir, exist_ok=True)
     
-    ctx_file = os.path.join(ctx_dir, "context.json")
-    if os.path.exists(ctx_file):
-        try:
-            with open(ctx_file, 'r') as f:
-                saved_ctx = json.load(f)
-                ctx.update(saved_ctx)
-        except Exception:
-            pass
+    # Load characters from markdown
+    chars_file = os.path.join(ctx_dir, "characters.md")
+    if os.path.exists(chars_file):
+        with open(chars_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines, headers, and non-list items
+                if not line or line.startswith('#') or not line.startswith('- '):
+                    continue
+                char = line.lstrip('- ').strip()
+                if char and char not in ctx["characters"]:
+                    ctx["characters"].append(char)
+    
+    # Load locations from markdown
+    locs_file = os.path.join(ctx_dir, "locations.md")
+    if os.path.exists(locs_file):
+        with open(locs_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or not line.startswith('- '):
+                    continue
+                loc = line.lstrip('- ').strip()
+                if loc and loc not in ctx["locations"]:
+                    ctx["locations"].append(loc)
+    
+    # Load key_terms from markdown
+    terms_file = os.path.join(ctx_dir, "key_terms.md")
+    if os.path.exists(terms_file):
+        with open(terms_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or not line.startswith('- '):
+                    continue
+                term = line.lstrip('- ').strip()
+                if term and term not in ctx["key_terms"]:
+                    ctx["key_terms"].append(term)
+    
+    # Load relationships from markdown
+    rels_file = os.path.join(ctx_dir, "relationships.md")
+    if os.path.exists(rels_file):
+        with open(rels_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or not line.startswith('- '):
+                    continue
+                rel = line.lstrip('- ').strip()
+                if rel and rel not in ctx["relationships"]:
+                    ctx["relationships"].append(rel)
     
     return ctx
 
 def _cs_save_context(ctx):
-    """Save context to centralized Context directory."""
+    """Save context to centralized Context directory (markdown files)."""
     game = env("GAME_TITLE", "default").lower().replace(" ", "_")
     ctx_dir = os.path.join(CONTEXT_DIR, game)
     os.makedirs(ctx_dir, exist_ok=True)
     
-    ctx_file = os.path.join(ctx_dir, "context.json")
-    with open(ctx_file, 'w') as f:
-        json.dump(ctx, f, indent=2)
+    # Save characters as markdown
+    chars_file = os.path.join(ctx_dir, "characters.md")
+    with open(chars_file, 'w') as f:
+        f.write("# Characters\n\n")
+        for char in ctx.get("characters", []):
+            f.write(f"- {char}\n")
+    
+    # Save locations as markdown
+    locs_file = os.path.join(ctx_dir, "locations.md")
+    with open(locs_file, 'w') as f:
+        f.write("# Locations\n\n")
+        for loc in ctx.get("locations", []):
+            f.write(f"- {loc}\n")
+    
+    # Save key_terms as markdown
+    terms_file = os.path.join(ctx_dir, "key_terms.md")
+    with open(terms_file, 'w') as f:
+        f.write("# Key Terms\n\n")
+        for term in ctx.get("key_terms", []):
+            f.write(f"- {term}\n")
+    
+    # Save relationships as markdown
+    rels_file = os.path.join(ctx_dir, "relationships.md")
+    with open(rels_file, 'w') as f:
+        f.write("# Relationships\n\n")
+        for rel in ctx.get("relationships", []):
+            f.write(f"- {rel}\n")
+
+
+def _detect_corrections(old_ctx, new_ctx):
+    """
+    Detect corrections by comparing old context vs newly extracted context.
+    Returns a dict of corrections found.
+    """
+    corrections = {
+        "removed_characters": [],
+        "added_characters": [],
+        "removed_locations": [],
+        "added_locations": [],
+        "removed_terms": [],
+        "added_terms": [],
+        "removed_relationships": [],
+        "added_relationships": []
+    }
+    
+    old_chars = set(old_ctx.get("characters", []))
+    new_chars = set(new_ctx.get("characters", []))
+    corrections["removed_characters"] = list(old_chars - new_chars)
+    corrections["added_characters"] = list(new_chars - old_chars)
+    
+    old_locs = set(old_ctx.get("locations", []))
+    new_locs = set(new_ctx.get("locations", []))
+    corrections["removed_locations"] = list(old_locs - new_locs)
+    corrections["added_locations"] = list(new_locs - old_locs)
+    
+    old_terms = set(old_ctx.get("key_terms", []))
+    new_terms = set(new_ctx.get("key_terms", []))
+    corrections["removed_terms"] = list(old_terms - new_terms)
+    corrections["added_terms"] = list(new_terms - old_terms)
+    
+    old_rels = set(old_ctx.get("relationships", []))
+    new_rels = set(new_ctx.get("relationships", []))
+    corrections["removed_relationships"] = list(old_rels - new_rels)
+    corrections["added_relationships"] = list(new_rels - old_rels)
+    
+    return corrections
+
+
+def _store_corrections_as_constraints(corrections):
+    """
+    Store detected corrections as universal constraints in MemPalace.
+    These constraints will be used in future context extractions.
+    """
+    if not MEMPALACE_AVAILABLE:
+        log("[DEBUG] MemPalace not available, skipping constraint storage")
+        return
+    
+    try:
+        mp_manager = get_mempalace_manager()
+        if not mp_manager:
+            return
+        
+        constraints = []
+        
+        for char in corrections.get("removed_characters", []):
+            if char:
+                constraints.append(f"AVOID: Character '{char}' does not exist in this game (previously extracted but removed)")
+        
+        for loc in corrections.get("removed_locations", []):
+            if loc:
+                constraints.append(f"VERIFY: Location '{loc}' - confirm if it actually exists in the transcript")
+        
+        for rel in corrections.get("removed_relationships", []):
+            if rel:
+                constraints.append(f"VERIFY: Relationship '{rel}' - confirm if accurate")
+        
+        if constraints:
+            log(f"[LEARNING] Storing {len(constraints)} learned constraints")
+            
+            # Store in MemPalace as a "constraints" document
+            constraints_text = "\n".join(constraints)
+            
+            # Also save to a local constraints file as backup
+            constraints_file = os.path.join(CONTEXT_DIR, "learned_constraints.json")
+            existing = []
+            if os.path.exists(constraints_file):
+                try:
+                    with open(constraints_file, 'r') as f:
+                        existing = json.load(f)
+                except:
+                    pass
+            
+            existing.extend([{"constraint": c, "timestamp": datetime.now().isoformat()} for c in constraints])
+            
+            with open(constraints_file, 'w') as f:
+                json.dump(existing, f, indent=2)
+            
+            log(f"[LEARNING] Constraints saved to {constraints_file}")
+            
+    except Exception as e:
+        log(f"[ERROR] Failed to store corrections as constraints: {e}")
+
+
+def _get_learned_constraints():
+    """
+    Get learned constraints from previous corrections.
+    Returns list of constraint strings to include in prompts.
+    """
+    constraints = []
+    
+    constraints_file = os.path.join(CONTEXT_DIR, "learned_constraints.json")
+    if os.path.exists(constraints_file):
+        try:
+            with open(constraints_file, 'r') as f:
+                data = json.load(f)
+                for item in data:
+                    if "constraint" in item:
+                        constraints.append(item["constraint"])
+        except Exception as e:
+            log(f"[DEBUG] Could not load learned constraints: {e}")
+    
+    return constraints
 
 
 def _cs_extract_context_from_transcript(transcript_text, game_title):
@@ -2114,12 +2293,27 @@ def _cs_extract_context_from_transcript(transcript_text, game_title):
     if not keys:
         return None
     
+    # Get learned constraints from previous corrections
+    constraints = _get_learned_constraints()
+    constraints_text = ""
+    if constraints:
+        constraints_text = f"""
+PREVIOUS MISTAKES TO AVOID:
+{chr(10).join(f"- {c}" for c in constraints[:10])}
+
+IMPORTANT: The above items are known mistakes from previous extractions. 
+Do NOT repeat these errors. Be especially careful not to include characters 
+or relationships that were previously flagged as incorrect.
+"""
+    
     prompt = f"""Analyze this transcript from "{game_title}" and extract:
 
 1. CHARACTERS: List character names that appear in the transcript
 2. LOCATIONS: List places mentioned (e.g., dorm room, school, town)
 3. KEY_TERMS: Important story elements, themes, or concepts
 4. RELATIONSHIPS: Relationships between characters (format: "Character A and Character B are [relationship]")
+
+{constraints_text}
 
 Respond in this exact format:
 CHARACTERS: [comma-separated list or "none"]
@@ -2179,6 +2373,18 @@ Transcript excerpt:
 def _cs_update_context(extracted, transcript_name, script_summary=None):
     """Update context with new extracted data."""
     ctx = _cs_load_context()
+    
+    # Detect corrections BEFORE updating (compare old vs new)
+    corrections = _detect_corrections(ctx, extracted)
+    has_corrections = any([
+        corrections.get("removed_characters"),
+        corrections.get("removed_locations"),
+        corrections.get("removed_relationships")
+    ])
+    
+    if has_corrections:
+        log(f"[LEARNING] Detected corrections: {corrections}")
+        _store_corrections_as_constraints(corrections)
     
     # Merge characters (avoid duplicates)
     for char in extracted.get("characters", []):
@@ -3926,7 +4132,7 @@ Example: /set_voice Vindemiatrix""")
             tg_send("No logs found.")
 
     elif cmd == "/memory":
-        # Show MemPalace memory status
+        # Show MemPalace memory status + learned constraints
         try:
             mp_manager = get_mempalace_manager()
             status = mp_manager.status()
@@ -3938,9 +4144,9 @@ Example: /set_voice Vindemiatrix""")
                 for item in os.listdir(context_dir):
                     item_path = os.path.join(context_dir, item)
                     if os.path.isdir(item_path) and item != "history":
-                        # Check if has context.json
-                        ctx_file = os.path.join(item_path, "context.json")
-                        has_context = "✅" if os.path.exists(ctx_file) else "❌"
+                        # Check if has markdown context files
+                        has_chars = os.path.exists(os.path.join(item_path, "characters.md"))
+                        has_context = "✅" if has_chars else "❌"
                         games.append(f"- {item.replace('_', ' ').title()}: Context {has_context}")
             
             msg = "📚 MemPalace Memory:\n\n"
@@ -3954,6 +4160,15 @@ Example: /set_voice Vindemiatrix""")
                 msg += "\n".join(games)
             else:
                 msg += "\nNo games in Context directory yet."
+            
+            # Show learned constraints
+            constraints = _get_learned_constraints()
+            if constraints:
+                msg += f"\n\n🧠 Learned Constraints ({len(constraints)}):\n"
+                for c in constraints[:5]:
+                    msg += f"- {c[:60]}...\n" if len(c) > 60 else f"- {c}\n"
+                if len(constraints) > 5:
+                    msg += f"  ... and {len(constraints) - 5} more"
             
             tg_send(msg)
         except Exception as e:

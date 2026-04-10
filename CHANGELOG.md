@@ -4,6 +4,36 @@ All notable changes to this project are documented here.
 
 ---
 
+## 1.5.0 — 2026-04-10
+### Added
+- **Markdown-Based Context**: Context now stored as markdown files in `/Context/{game}/`
+  - `characters.md`, `locations.md`, `key_terms.md`, `relationships.md`
+  - Editable directly in Obsidian with full graph view support
+  - Replaces JSON-based context files
+- **Self-Learning Memory System**: Integrated with MemPalace for universal learning
+  - `_detect_corrections()` - Compares old vs new context to find corrections
+  - `_store_corrections_as_constraints()` - Stores learned mistakes to prevent repetition
+  - `_get_learned_constraints()` - Retrieves constraints for next extraction
+- **Prompt Integration**: Context extraction now includes learned constraints in AI prompts
+  - AI sees: "PREVIOUS MISTAKES TO AVOID" section
+  - Prevents repeating same hallucination errors
+- **User Visibility**: `/memory` command now shows learned constraints
+- **Deleted**: Removed deprecated `content_studio/context/` directory (Obsidian files)
+
+### Changed
+- `_cs_load_context()` - Now reads from markdown files instead of JSON
+- `_cs_save_context()` - Now writes to markdown files instead of JSON
+- `_cs_update_context()` - Now detects corrections and stores constraints automatically
+- Updated context menu to check for markdown files instead of JSON
+- `/memory` command checks for markdown files in context directories
+
+### Technical
+- Universal learning system applies to ALL games (not game-specific)
+- Corrections stored in `/Context/learned_constraints.json`
+- Backward compatible with existing context structure
+
+---
+
 ## 1.4.0 — 2026-04-10
 ### Added
 - **Centralized Context Directory**: New `/Context/` folder for all context files shared between Pipeline and Content Studio
