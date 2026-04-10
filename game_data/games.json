@@ -1,0 +1,25 @@
+{
+  "games": {
+    "tell_me_why": {
+      "name": "Tell Me Why",
+      "developer": "Dontnod Entertainment",
+      "path": "tell_me_why",
+      "validation_threshold": 0.6,
+      "min_context_chars": 10,
+      "max_forbidden_check": true
+    }
+  },
+  "validation_defaults": {
+    "fuzzy_threshold_persons": 80,
+    "fuzzy_threshold_locations": 75,
+    "weight_main_character": 1.5,
+    "weight_minor_character": 1.0,
+    "weight_location": 0.8
+  },
+  "timeout_estimates": {
+    "phase_3_per_script_seconds": 30,
+    "phase_4_per_clip_minutes": 2,
+    "phase_5_per_segment_seconds": 60,
+    "buffer_percentage": 30
+  }
+}

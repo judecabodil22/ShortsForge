@@ -1,5 +1,8 @@
 # Characters
 
-- [[Max]]
-- [[Safi]]
-- [[Moses]]
+- [[Alyson]]
+- [[Tyler]]
+- [[Michael]]
+- [[Aaron]]
+- [[Herbert]]
+- [[Allison]]

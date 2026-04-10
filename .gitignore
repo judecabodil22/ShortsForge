@@ -31,6 +31,20 @@ shorts/
 tts/
 transcripts/
 
+# Content Studio
+content_studio/
+
+# Context (user-specific, generated at runtime)
+Context/
+
+# MemPalace memory (user-specific)
+memory/
+game_data/memory/
+
+# Metrics (generated at runtime)
+generation_failures.jsonl
+generation_metrics.jsonl
+
 # IDE files
 .vscode/
 .idea/

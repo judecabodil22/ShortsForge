@@ -1,0 +1,40 @@
+{
+  "validation_config": {
+    "tell_me_why": {
+      "game_title": "Tell Me Why",
+      "validation_threshold": 0.6,
+      "fuzzy_threshold_persons": 80,
+      "fuzzy_threshold_locations": 75,
+      "entity_weights": {
+        "main_character": 1.5,
+        "minor_character": 1.0,
+        "location": 0.8
+      },
+      "relationship_validation": {
+        "enabled": true,
+        "required_relationships": [
+          {"from": "allison", "to": "tyler", "type": "sibling", "forbidden_words": ["friend", "companion", "buddy"]},
+          {"from": "tyler", "to": "allison", "type": "sibling", "forbidden_words": ["friend", "companion", "buddy"]},
+          {"from": "mary_anne", "to": "allison", "type": "parent", "forbidden_words": []},
+          {"from": "mary_anne", "to": "tyler", "type": "parent", "forbidden_words": []}
+        ]
+      },
+      "location_handling": {
+        "treat_as_non_character": ["Delos Crossing", "Fireweed", "old house", "Juneau", "school", "dorm room"]
+      }
+    }
+  },
+  "global_defaults": {
+    "validation_threshold": 0.7,
+    "fuzzy_threshold_persons": 80,
+    "fuzzy_threshold_locations": 75,
+    "entity_weights": {
+      "main_character": 1.0,
+      "minor_character": 1.0,
+      "location": 1.0
+    },
+    "relationship_validation": {
+      "enabled": false
+    }
+  }
+}

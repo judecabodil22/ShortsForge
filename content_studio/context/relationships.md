@@ -2,5 +2,10 @@
 
 | Character | Connected To | Relationship |
 |-----------|--------------|---------------|
-| [[Max]] | [[Safi]] | friends |
-| [[Moses]] | [[Safi]] | connected through a thesis |
+| [[Michael]] | [[Tyler]] | friends |
+| [[Alyson]] | [[Tyler]] | twins, siblings |
+| [[Allison]] | [[Tyler]] | friends |
+| [[Tyler]] | [[Michael]] | friends |
+| [[Aaron]] | [[Allison]] | counselor and mentee |
+| [[Tyler]] | [[his mentee]] | friends |
+| [[Herbert]] | [[Allison]] | implied to be acquaintances or coll |

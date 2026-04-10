@@ -10,10 +10,14 @@ Tools used:
 - RapidFuzz: Fuzzy string matching for entity validation
 - TextBlob: Sentiment analysis
 - NLTK: Readability scoring
+- MemPalace: Failure storage for self-improvement
 """
 
 import re
 import math
+import os
+import json
+from datetime import datetime, timedelta
 from rapidfuzz import fuzz
 
 
@@ -297,7 +301,7 @@ def select_best_script(candidates, context):
 
         # Word count bonus (prefer scripts closer to target length)
         word_count = len(script_text.split())
-        target_words = 200
+        target_words = 1500  # Target for 5-10 minute videos
         length_score = 1.0 - min(1.0, abs(word_count - target_words) / target_words)
 
         # Combined score (weighted)
@@ -400,9 +404,6 @@ def log_generation_metrics(script_text, metadata, fact_check, engagement, log_fi
         engagement: Engagement scores
         log_file: Optional file path for metrics log
     """
-    import json
-    from datetime import datetime
-
     metrics = {
         "timestamp": datetime.now().isoformat(),
         "source": metadata.get("source", "unknown"),
@@ -426,3 +427,401 @@ def log_generation_metrics(script_text, metadata, fact_check, engagement, log_fi
             pass
 
     return metrics
+
+
+# ── Self-Improvement: Failure Storage (Phase 1) ────────────────────────────────
+
+def _get_failure_storage_path():
+    """Get path to failure storage JSON file."""
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    return os.path.join(base_dir, "generation_failures.jsonl")
+
+
+def store_generation_failure(
+    script_text,
+    metadata,
+    fact_check,
+    engagement,
+    game_title="",
+    content_type="unknown"
+):
+    """
+    Store generation failure data for learning.
+    
+    Args:
+        script_text: The generated script
+        metadata: Generation metadata (source, model, temperature, etc.)
+        fact_check: Factuality validation result
+        engagement: Engagement scores
+        game_title: Game title for filtering
+        content_type: Type of content (mystery_recap, theory, etc.)
+    
+    Returns:
+        bool: Success status
+    """
+    # Only store if there are actual issues (factuality < 1.0 or engagement < 0.5)
+    if fact_check["score"] >= 1.0 and engagement["overall"] >= 0.5:
+        return False
+    
+    # Determine failure types
+    failure_types = []
+    failure_details = {
+        "character_hallucinations": [],
+        "location_errors": [],
+        "engagement_issues": [],
+    }
+    
+    # Extract specific failure details from fact_check
+    for entity_type, entity_name in fact_check.get("flagged_entities", []):
+        if entity_type == "person":
+            failure_details["character_hallucinations"].append(entity_name)
+            failure_types.append("character_hallucination")
+        elif entity_type == "location":
+            failure_details["location_errors"].append(entity_name)
+            failure_types.append("location_error")
+    
+    # Check engagement issues
+    if engagement["overall"] < 0.5:
+        failure_types.append("low_engagement")
+        if engagement["hook_strength"] < 0.4:
+            failure_details["engagement_issues"].append("weak_hook")
+        if engagement["readability"] < 0.4:
+            failure_details["engagement_issues"].append("poor_readability")
+    
+    # Check word count issues (for pipeline: 150-300, for cs: 1500-2000)
+    word_count = len(script_text.split())
+    target_min = 150 if content_type in ["unknown", "pipeline"] else 1500
+    target_max = 300 if content_type in ["unknown", "pipeline"] else 2000
+    
+    if word_count < target_min or word_count > target_max:
+        failure_types.append("word_count_out_of_range")
+    
+    # Create failure record
+    failure_record = {
+        "timestamp": datetime.now().isoformat(),
+        "game_title": game_title,
+        "content_type": content_type,
+        "failure_types": list(set(failure_types)),
+        "failure_details": failure_details,
+        "generation_params": {
+            "source": metadata.get("source", "unknown"),
+            "model": metadata.get("model", "unknown"),
+            "temperature": metadata.get("temperature", 0.7),
+            "variant": metadata.get("variant", "unknown"),
+        },
+        "metrics": {
+            "factuality_score": fact_check["score"],
+            "engagement_overall": engagement["overall"],
+            "hook_strength": engagement["hook_strength"],
+            "readability": engagement["readability"],
+            "word_count": word_count,
+        },
+    }
+    
+    # Store to JSONL
+    storage_path = _get_failure_storage_path()
+    try:
+        with open(storage_path, "a") as f:
+            f.write(json.dumps(failure_record) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+# ── Self-Improvement: Analysis Functions (Phase 2) ────────────────────────────
+
+def analyze_recent_failures(window_hours=24):
+    """
+    Analyze failures from the last N hours.
+    
+    Args:
+        window_hours: Time window to analyze
+    
+    Returns:
+        dict: Analysis results with patterns identified
+    """
+    storage_path = _get_failure_storage_path()
+    if not os.path.exists(storage_path):
+        return {"error": "No failure data found"}
+    
+    cutoff_time = datetime.now() - timedelta(hours=window_hours)
+    failures = []
+    
+    try:
+        with open(storage_path, "r") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    record_time = datetime.fromisoformat(record["timestamp"])
+                    if record_time >= cutoff_time:
+                        failures.append(record)
+                except:
+                    continue
+    except Exception:
+        return {"error": "Failed to read failure data"}
+    
+    if not failures:
+        return {"message": f"No failures in the last {window_hours} hours", "count": 0}
+    
+    # Analyze patterns
+    char_hallucinations = {}
+    location_errors = {}
+    engagement_issues = {}
+    content_type_scores = {}
+    
+    for failure in failures:
+        # Character hallucinations
+        for char in failure.get("failure_details", {}).get("character_hallucinations", []):
+            char_hallucinations[char] = char_hallucinations.get(char, 0) + 1
+        
+        # Location errors
+        for loc in failure.get("failure_details", {}).get("location_errors", []):
+            location_errors[loc] = location_errors.get(loc, 0) + 1
+        
+        # Engagement issues by type
+        for issue in failure.get("failure_details", {}).get("engagement_issues", []):
+            engagement_issues[issue] = engagement_issues.get(issue, 0) + 1
+        
+        # Track scores by content type
+        ct = failure.get("content_type", "unknown")
+        if ct not in content_type_scores:
+            content_type_scores[ct] = {"factuality": [], "engagement": [], "count": 0}
+        content_type_scores[ct]["factuality"].append(
+            failure.get("metrics", {}).get("factuality_score", 0)
+        )
+        content_type_scores[ct]["engagement"].append(
+            failure.get("metrics", {}).get("engagement_overall", 0)
+        )
+        content_type_scores[ct]["count"] += 1
+    
+    # Calculate averages
+    for ct, scores in content_type_scores.items():
+        if scores["factuality"]:
+            scores["avg_factuality"] = sum(scores["factuality"]) / len(scores["factuality"])
+            scores["avg_engagement"] = sum(scores["engagement"]) / len(scores["engagement"])
+    
+    return {
+        "count": len(failures),
+        "character_hallucinations": dict(
+            sorted(char_hallucinations.items(), key=lambda x: x[1], reverse=True)[:5]
+        ),
+        "location_errors": dict(
+            sorted(location_errors.items(), key=lambda x: x[1], reverse=True)[:5]
+        ),
+        "engagement_issues": engagement_issues,
+        "content_type_scores": content_type_scores,
+    }
+
+
+def get_content_type_weaknesses(content_type):
+    """
+    Get known weaknesses for a specific content type.
+    
+    Args:
+        content_type: Content type to analyze (mystery_recap, theory, etc.)
+    
+    Returns:
+        dict: Weaknesses and recommendations
+    """
+    analysis = analyze_recent_failures(window_hours=168)  # Last week
+    
+    if "error" in analysis or analysis.get("count", 0) == 0:
+        return {"message": "Not enough data to analyze"}
+    
+    ct_scores = analysis.get("content_type_scores", {}).get(content_type, {})
+    
+    if not ct_scores:
+        return {"message": f"No data for content type: {content_type}"}
+    
+    weaknesses = []
+    recommendations = []
+    
+    avg_fact = ct_scores.get("avg_factuality", 1.0)
+    avg_eng = ct_scores.get("avg_engagement", 0.5)
+    
+    if avg_fact < 0.7:
+        weaknesses.append("Low factuality score")
+        recommendations.append("Increase fact-checking constraints in prompt")
+    
+    if avg_eng < 0.6:
+        weaknesses.append("Low engagement score")
+        recommendations.append("Add hook strength requirements to prompt")
+    
+    return {
+        "content_type": content_type,
+        "sample_size": ct_scores.get("count", 0),
+        "avg_factuality": round(avg_fact, 3),
+        "avg_engagement": round(avg_eng, 3),
+        "weaknesses": weaknesses,
+        "recommendations": recommendations,
+    }
+
+
+def get_effective_prompts():
+    """
+    Find which prompt configurations work best.
+    
+    Returns:
+        dict: Effective prompt configurations by content type
+    """
+    storage_path = _get_failure_storage_path()
+    if not os.path.exists(storage_path):
+        return {"message": "No failure data to analyze"}
+    
+    # Load all records with high scores
+    successful_configs = []
+    
+    metrics_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "generation_metrics.jsonl")
+    if not os.path.exists(metrics_file):
+        return {"message": "No metrics data found"}
+    
+    try:
+        with open(metrics_file, "r") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    # High quality scripts (factuality >= 0.8, engagement >= 0.6)
+                    if record.get("factuality_score", 0) >= 0.8 and record.get("engagement_overall", 0) >= 0.6:
+                        successful_configs.append({
+                            "temperature": record.get("temperature", 0.7),
+                            "model": record.get("model", "unknown"),
+                        })
+                except:
+                    continue
+    except Exception:
+        return {"error": "Failed to read metrics"}
+    
+    if not successful_configs:
+        return {"message": "Not enough high-quality samples to analyze"}
+    
+    # Group by content type approximation (we don't have that in metrics, so just show overall)
+    temp_counts = {}
+    model_counts = {}
+    
+    for config in successful_configs:
+        temp = config["temperature"]
+        model = config["model"]
+        
+        temp_key = f"temp_{round(temp * 10) / 10}"  # Round to nearest 0.1
+        temp_counts[temp_key] = temp_counts.get(temp_key, 0) + 1
+        model_counts[model] = model_counts.get(model, 0) + 1
+    
+    return {
+        "successful_samples": len(successful_configs),
+        "effective_temperatures": temp_counts,
+        "effective_models": model_counts,
+    }
+
+
+# ── Self-Improvement: Constraint Generation (Phase 3) ────────────────────────
+
+def get_learned_constraints(game_title="", content_type="pipeline"):
+    """
+    Generate learned constraints to inject into prompts.
+    
+    Args:
+        game_title: Optional game title for game-specific constraints
+        content_type: Content type (pipeline, theory, analysis, etc.)
+    
+    Returns:
+        dict with:
+            - negative_constraints: List of things to avoid
+            - positive_emphasis: List of things to focus on
+            - recommended_temp: Optimal temperature
+            - source: Explanation of where constraints came from
+    """
+    analysis = analyze_recent_failures(window_hours=168)  # Last week
+    
+    negative_constraints = []
+    positive_emphasis = []
+    
+    # Generate negative constraints from recent failures
+    if analysis.get("count", 0) > 0:
+        # Character hallucinations to avoid
+        char_hall = analysis.get("character_hallucinations", {})
+        if char_hall:
+            # Only include if appears 2+ times
+            repeated_chars = [char for char, count in char_hall.items() if count >= 2]
+            if repeated_chars:
+                negative_constraints.append(
+                    f"AVOID mentioning these characters (hallucinated in recent scripts): {', '.join(repeated_chars)}"
+                )
+        
+        # Location errors to avoid
+        loc_errors = analysis.get("location_errors", {})
+        if loc_errors:
+            repeated_locs = [loc for loc, count in loc_errors.items() if count >= 2]
+            if repeated_locs:
+                negative_constraints.append(
+                    f"IGNORE these entities if spaCy marks them as locations (false positives): {', '.join(repeated_locs)}"
+                )
+    
+    # Generate positive emphasis from high-performing scripts
+    effective = get_effective_prompts()
+    if effective.get("successful_samples", 0) >= 3:
+        # Find most common high-performing temperature
+        temps = effective.get("effective_temperatures", {})
+        if temps:
+            best_temp = max(temps.keys(), key=lambda k: temps[k])
+            recommended_temp = float(best_temp.replace("temp_", ""))
+            positive_emphasis.append(
+                f"Use temperature around {recommended_temp} (proven effective in {temps[best_temp]} high-quality scripts)"
+            )
+    
+    return {
+        "negative_constraints": negative_constraints,
+        "positive_emphasis": positive_emphasis,
+        "recommended_temp": recommended_temp if 'recommended_temp' in dir() else None,
+        "source": "Based on analysis of last 7 days of generation data",
+    }
+
+
+def calculate_optimal_temperature(content_type="pipeline"):
+    """
+    Calculate optimal temperature based on historical performance.
+    
+    Args:
+        content_type: Content type to optimize for
+    
+    Returns:
+        float: Recommended temperature
+    """
+    effective = get_effective_prompts()
+    
+    if effective.get("successful_samples", 0) < 3:
+        return 0.7  # Default
+    
+    temps = effective.get("effective_temperatures", {})
+    if not temps:
+        return 0.7
+    
+    # Find most common successful temperature
+    best_temp = max(temps.keys(), key=lambda k: temps[k])
+    return float(best_temp.replace("temp_", ""))
+
+
+# ── Knowledge Distillation Helper (Phase 4) ──────────────────────────────────
+
+def get_learning_summary():
+    """
+    Get overall learning summary for the system.
+    
+    Returns:
+        dict: Summary of what the system has learned
+    """
+    recent_24h = analyze_recent_failures(window_hours=24)
+    recent_week = analyze_recent_failures(window_hours=168)
+    effective = get_effective_prompts()
+    
+    return {
+        "last_24h": {
+            "failures": recent_24h.get("count", 0),
+            "top_hallucinations": list(recent_24h.get("character_hallucinations", {}).keys())[:3],
+        },
+        "last_7_days": {
+            "total_failures": recent_week.get("count", 0),
+            "content_types_analyzed": len(recent_week.get("content_type_scores", {})),
+        },
+        "effective_configs": effective.get("successful_samples", 0),
+        "learning_status": "active" if recent_week.get("count", 0) > 0 else "warming_up",
+    }

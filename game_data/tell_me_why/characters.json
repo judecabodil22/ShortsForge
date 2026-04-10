@@ -1,0 +1,127 @@
+{
+  "game_title": "Tell Me Why",
+  "game_developer": "Dontnod Entertainment",
+  "game_genre": "Narrative adventure",
+  "characters": [
+    {
+      "id": "allison",
+      "name": "Allison",
+      "full_name": "Allison Ronan",
+      "relationships": [
+        {
+          "target": "tyler",
+          "type": "sibling",
+          "note": "younger sister"
+        }
+      ],
+      "role": "Protagonist (twin sister)"
+    },
+    {
+      "id": "tyler",
+      "name": "Tyler",
+      "full_name": "Tyler Ronan",
+      "relationships": [
+        {
+          "target": "allison",
+          "type": "sibling",
+          "note": "older brother"
+        }
+      ],
+      "role": "Protagonist (twin brother)"
+    },
+    {
+      "id": "mary_anne",
+      "name": "Mary Anne",
+      "full_name": "Mary Anne Ronan",
+      "relationships": [
+        {
+          "target": "allison",
+          "type": "parent",
+          "note": "mother"
+        },
+        {
+          "target": "tyler",
+          "type": "parent",
+          "note": "mother"
+        }
+      ],
+      "role": "Mother of twins"
+    },
+    {
+      "id": "delos_crossing",
+      "name": "Delos Crossing",
+      "full_name": "Delos Crossing",
+      "relationships": [],
+      "role": "Town (location, not character)"
+    },
+    {
+      "id": "fireweed",
+      "name": "Fireweed",
+      "full_name": "Fireweed",
+      "relationships": [],
+      "role": "Remote settlement (location where Tyler was sent as a child)"
+    },
+    {
+      "id": "michael",
+      "name": "Michael",
+      "full_name": "Michael",
+      "relationships": [
+        {
+          "target": "tyler",
+          "type": "friend",
+          "note": "friend"
+        }
+      ],
+      "role": "Friend of Tyler"
+    },
+    {
+      "id": "aaron",
+      "name": "Aaron",
+      "full_name": "Aaron",
+      "relationships": [],
+      "role": "Character in game"
+    },
+    {
+      "id": "herbert",
+      "name": "Herbert",
+      "full_name": "Herbert",
+      "relationships": [],
+      "role": "Character in game"
+    },
+    {
+      "id": "denise_wilson",
+      "name": "Denise Wilson",
+      "full_name": "Denise Wilson",
+      "relationships": [],
+      "role": "Character associated with Mary Anne"
+    },
+    {
+      "id": "melinda",
+      "name": "Melinda",
+      "full_name": "Melinda",
+      "relationships": [],
+      "role": "Character associated with Mary Anne"
+    },
+    {
+      "id": "eddie",
+      "name": "Eddie",
+      "full_name": "Eddie",
+      "relationships": [],
+      "role": "Character with ties to family"
+    },
+    {
+      "id": "tessa",
+      "name": "Tessa",
+      "full_name": "Tessa",
+      "relationships": [],
+      "role": "Character with conflicting accounts"
+    }
+  ],
+  "common_misspellings": {
+    "Mary Ann": "Mary Anne",
+    "Maryann": "Mary Anne",
+    "Mery Ann": "Mary Anne",
+    "Tyler Ronan": "Tyler",
+    "Allison Ronan": "Allison"
+  }
+}

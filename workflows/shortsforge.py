@@ -3,7 +3,8 @@
 ShortsForge — YouTube Shorts Pipeline
 Combines: shortsforge.sh, telegram_listener.sh, generate_script.sh, onboard.sh
 """
-import argparse, base64, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
+import argparse, base64, datetime, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
+from datetime import datetime
 
 _workflow_dir = os.path.dirname(os.path.abspath(__file__))
 _workspace = os.path.dirname(_workflow_dir)
@@ -30,9 +31,10 @@ try:
 except ImportError as e:
     MEMPALACE_AVAILABLE = False
     print(f"[DEBUG] MemPalace import failed: {e}")
+    # Fallback function when MemPalace is not available
     def get_mempalace_manager():
         """Fallback when MemPalace is not available."""
-        return None
+        return None  # type: ignore
 from script_validation import (
     validate_script_factuality,
     score_engagement,
@@ -40,6 +42,19 @@ from script_validation import (
     score_context_relevance,
     summarize_context,
     log_generation_metrics,
+    store_generation_failure,
+    get_learned_constraints,
+    get_learning_summary,
+    calculate_optimal_temperature,
+)
+from context_manager import (
+    load_verified_context,
+    save_verified_context,
+    is_first_run,
+    compare_context_with_history,
+    format_context_for_confirmation,
+    get_verified_context_for_validation,
+    clear_verified_context,
 )
 import requests
 from jinja2 import Environment, FileSystemLoader, BaseLoader
@@ -128,7 +143,21 @@ CS_TRANSCRIPTS_DIR = os.path.join(CONTENT_STUDIO_DIR, "transcripts")
 CS_SHORTS_DIR      = os.path.join(CONTENT_STUDIO_DIR, "shorts")
 CS_SCRIPTS_DIR     = os.path.join(CONTENT_STUDIO_DIR, "scripts")
 CS_TTS_DIR         = os.path.join(CONTENT_STUDIO_DIR, "tts")
-CS_CONTEXT_FILE    = os.path.join(CONTENT_STUDIO_DIR, "context.json")
+
+# Centralized Context Directory
+CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
+
+# Get game-specific context file based on current game title (called at runtime)
+def get_cs_context_file():
+    """Get the context file path for current game."""
+    game_title = env("GAME_TITLE", "default") if 'env' in globals() else "default"
+    game_key = game_title.lower().replace(" ", "_")
+    game_dir = os.path.join(CONTEXT_DIR, game_key)
+    os.makedirs(game_dir, exist_ok=True)
+    return os.path.join(game_dir, "context.json")
+
+# CS_CONTEXT_FILE will be set after env() is defined - use a lazy approach
+CS_CONTEXT_FILE = None  # Will be set lazily
 
 STREAMING = False  # set True when called from listener
 PIPELINE_RUNNING = False
@@ -315,24 +344,597 @@ def notify(msg):
     if STREAMING:
         tg_send(msg)
 
+
+# ─── Context Confirmation Functions ────────────────────────────────────────────
+
+def send_context_confirmation(game_title, extracted, verified, comparison):
+    """Send context confirmation request via Telegram or CLI."""
+    from context_manager import format_context_for_confirmation
+    
+    formatted = format_context_for_confirmation(extracted, verified, comparison)
+    
+    # Build inline keyboard for confirmation
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Approve", "callback_data": f"ctx_approve_{game_title.replace(' ', '_')}"},
+                {"text": "📝 Edit", "callback_data": f"ctx_edit_{game_title.replace(' ', '_')}"},
+            ],
+            [
+                {"text": "❌ Cancel", "callback_data": "ctx_cancel"},
+            ]
+        ]
+    }
+    
+    # Check if Telegram is available
+    token = env("TELEGRAM_BOT_TOKEN")
+    chat = env("TELEGRAM_CHAT_ID")
+    
+    if token and chat:
+        # Send via Telegram
+        msg = f"🤖 Context Confirmation - {game_title}\n\n{formatted}\n\n⚠️ Please review and approve to continue to script generation."
+        try:
+            params = {"chat_id": chat, "text": msg, "reply_markup": json.dumps(keyboard)}
+            data = urllib.parse.urlencode(params).encode()
+            req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                          data=data, method="POST")
+            urllib.request.urlopen(req, timeout=10)
+            return "telegram"
+        except Exception as e:
+            print(f"Telegram context confirmation error: {e}")
+    
+    # Fallback to CLI
+    return cli_context_confirmation(game_title, formatted)
+
+
+def cli_context_confirmation(game_title, formatted):
+    """CLI fallback for context confirmation."""
+    print(f"\n{'='*60}")
+    print(f"🤖 Context Confirmation - {game_title}")
+    print(f"{'='*60}")
+    print(f"\n{formatted}")
+    print(f"\n{'='*60}")
+    print("⚠️ Please review and approve to continue.")
+    print("Options: (a) Approve | (c) Cancel | (v) View full context")
+    print("="*60)
+    
+    while True:
+        choice = input("Your choice (a/c/v): ").strip().lower()
+        
+        if choice == "a":
+            return "approved"
+        elif choice == "c":
+            return "cancelled"
+        elif choice == "v":
+            # Show full context
+            print("\n--- Full Context ---")
+            print(formatted)
+            print("--- End ---\n")
+        else:
+            print("Invalid choice. Please enter a, c, or v")
+
+
+def handle_context_callback(callback_data, game_title, cb_id):
+    """Handle context confirmation callback."""
+    from context_manager import save_verified_context, load_verified_context, compare_context_with_history
+    global CONTEXT_EDIT_STATE
+    
+    log(f"[DEBUG] handle_context_callback: checking CONTEXT_EDIT_STATE")
+    log(f"[DEBUG] handle_context_callback: {callback_data}")
+    log(f"[DEBUG] handle_context_callback: CONTEXT_EDIT_STATE = {CONTEXT_EDIT_STATE}")
+    
+    log(f"[DEBUG] ctx_edit flow - CONTEXT_EDIT_STATE: {CONTEXT_EDIT_STATE}")
+    # Edit context - start editing session with inline submenu
+    
+    if callback_data.startswith("ctx_approve_"):
+        # Approve and save verified context
+        from context_manager import save_verified_context
+        from context_manager import compare_context_with_history
+        
+        # Get extracted context from current run
+        extracted = _cs_load_context()
+        verified = load_verified_context(game_title)
+        comparison = compare_context_with_history(extracted, verified)
+        
+        # Save the resolved context as verified
+        save_verified_context(game_title, comparison.get("resolved_context", extracted))
+        
+        return "✅ Context verified and saved! Proceeding to script generation...", "proceed_to_scripts"
+    
+    elif callback_data.startswith("ctx_edit_"):
+        # Edit context - start editing session with inline submenu
+        
+        game = callback_data.replace("ctx_edit_", "").replace("_", " ")
+        game_title = game if game else env("GAME_TITLE", "Unknown")
+        
+        pending = get_pending_context(game_title)
+        if pending:
+            extracted = pending.get("extracted", {})
+        else:
+            extracted = _cs_load_context()
+        
+        # Store editing state
+        CONTEXT_EDIT_STATE = {
+            "game_title": game_title,
+            "step": "choose_field",
+            "extracted": extracted
+        }
+        
+        chars = extracted.get("characters", [])
+        locs = extracted.get("locations", [])
+        rels = extracted.get("relationships", [])
+        
+        # Build submenu inline keyboard
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": f"📝 Characters ({len(chars)})", "callback_data": "ctx_edit_characters"},
+                 {"text": f"📍 Locations ({len(locs)})", "callback_data": "ctx_edit_locations"}],
+                [{"text": f"👥 Relationships ({len(rels)})", "callback_data": "ctx_edit_relationships"},
+                 {"text": "✅ Done", "callback_data": "ctx_edit_done"}],
+                [{"text": "❌ Cancel", "callback_data": "ctx_cancel"}]
+            ]
+        }
+        
+        return None, keyboard
+    
+    elif callback_data == "ctx_edit_characters":
+        # Edit characters submenu
+        state = CONTEXT_EDIT_STATE
+        log(f"[DEBUG] ctx_edit_characters - CONTEXT_EDIT_STATE: {state}")
+        if not state:
+            log("[DEBUG] CONTEXT_EDIT_STATE is empty")
+            return "⚠️ No editing session active. Start a new context confirmation first."
+        
+        if "extracted" not in state:
+            log(f"[DEBUG] 'extracted' not in state, keys: {state.keys()}")
+            return "⚠️ No context data. Start a new context confirmation first."
+        
+        extracted = state.get("extracted", {})
+        chars = extracted.get("characters", [])
+        
+        if not chars:
+            return "⚠️ No characters in context to edit."
+        
+        keyboard = {"inline_keyboard": []}
+        for i, char in enumerate(chars[:10]):
+            keyboard["inline_keyboard"].append([{"text": f"❌ {char}", "callback_data": f"ctx_rem_char_{i}"}])
+        
+        keyboard["inline_keyboard"].append([{"text": "+ Add Character", "callback_data": "ctx_add_char"}])
+        keyboard["inline_keyboard"].append([{"text": "⬅️ Back", "callback_data": "ctx_edit_back"}])
+        
+        return f"📝 Characters ({len(chars)}):\n\nSelect to remove, or add new:", keyboard
+    
+    elif callback_data == "ctx_edit_locations":
+        # Edit locations submenu
+        state = CONTEXT_EDIT_STATE
+        log(f"[DEBUG] ctx_edit_locations called, state: {bool(state)}")
+        if not state or "extracted" not in state:
+            return "⚠️ No editing session active. Click Edit first to start."
+        
+        extracted = state.get("extracted", {})
+        locs = extracted.get("locations", [])
+        
+        if not locs:
+            return "⚠️ No locations in context to edit."
+        
+        keyboard = {"inline_keyboard": []}
+        for i, loc in enumerate(locs[:10]):
+            keyboard["inline_keyboard"].append([{"text": f"❌ {loc}", "callback_data": f"ctx_rem_loc_{i}"}])
+        
+        keyboard["inline_keyboard"].append([{"text": "+ Add Location", "callback_data": "ctx_add_loc"}])
+        keyboard["inline_keyboard"].append([{"text": "⬅️ Back", "callback_data": "ctx_edit_back"}])
+        
+        return f"📍 Locations ({len(locs)}):\n\nSelect to remove, or add new:", keyboard
+    
+    elif callback_data == "ctx_edit_relationships":
+        # Edit relationships submenu
+        state = CONTEXT_EDIT_STATE
+        log(f"[DEBUG] ctx_edit_relationships called, state: {bool(state)}")
+        if not state or "extracted" not in state:
+            return "⚠️ No editing session active. Click Edit first to start."
+        
+        extracted = state.get("extracted", {})
+        rels = extracted.get("relationships", [])
+        
+        if not rels:
+            return "⚠️ No relationships in context to edit."
+        
+        keyboard = {"inline_keyboard": []}
+        for i, rel in enumerate(rels[:10]):
+            if isinstance(rel, dict):
+                label = f"{rel.get('from', '')} ↔ {rel.get('to', '')}: {rel.get('relationship', '')}"
+            else:
+                label = str(rel)
+            keyboard["inline_keyboard"].append([{"text": f"❌ {label[:30]}", "callback_data": f"ctx_rem_rel_{i}"}])
+        
+        keyboard["inline_keyboard"].append([{"text": "+ Add Relationship", "callback_data": "ctx_add_rel"}])
+        keyboard["inline_keyboard"].append([{"text": "⬅️ Back", "callback_data": "ctx_edit_back"}])
+        
+        return f"👥 Relationships ({len(rels)}):\n\nSelect to remove:", keyboard
+    
+    elif callback_data == "ctx_edit_done":
+        # Save and proceed
+        state = CONTEXT_EDIT_STATE
+        if not state:
+            return "⚠️ No editing session active."
+        
+        game_title = state.get("game_title", env("GAME_TITLE", ""))
+        extracted = state.get("extracted", {})
+        
+        if not extracted:
+            return "⚠️ No context to save."
+        
+        _cs_update_context_for_edit(extracted)
+        save_verified_context(game_title, extracted)
+        CONTEXT_EDIT_STATE.clear()
+        
+        return "✅ Context saved!", None
+    
+    elif callback_data == "ctx_edit_back":
+        # Go back to edit menu
+        state = CONTEXT_EDIT_STATE
+        if not state:
+            return "⚠️ No editing session active. Start a new context confirmation first."
+        
+        game_title = state.get("game_title", env("GAME_TITLE", ""))
+        extracted = state.get("extracted", {})
+        
+        chars = extracted.get("characters", [])
+        locs = extracted.get("locations", [])
+        rels = extracted.get("relationships", [])
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": f"📝 Characters ({len(chars)})", "callback_data": "ctx_edit_characters"},
+                 {"text": f"📍 Locations ({len(locs)})", "callback_data": "ctx_edit_locations"}],
+                [{"text": f"👥 Relationships ({len(rels)})", "callback_data": "ctx_edit_relationships"},
+                 {"text": "✅ Done", "callback_data": "ctx_edit_done"}],
+                [{"text": "❌ Cancel", "callback_data": "ctx_cancel"}]
+            ]
+        }
+        
+        return "📝 Edit Context - Main Menu:", keyboard
+    
+    elif callback_data.startswith("ctx_rem_char_"):
+        idx = int(callback_data.replace("ctx_rem_char_", ""))
+        state = CONTEXT_EDIT_STATE
+        if not state or "extracted" not in state:
+            return "⚠️ No editing session active."
+        
+        chars = state.get("extracted", {}).get("characters", [])
+        removed = None
+        if 0 <= idx < len(chars):
+            removed = chars.pop(idx)
+            tg_answer_callback(cb_id, f"Removed {removed}")
+        
+        # Rebuild keyboard with updated list
+        chars = state.get("extracted", {}).get("characters", [])
+        keyboard = {"inline_keyboard": []}
+        for i, char in enumerate(chars[:10]):
+            keyboard["inline_keyboard"].append([{"text": f"❌ {char}", "callback_data": f"ctx_rem_char_{i}"}])
+        keyboard["inline_keyboard"].append([{"text": "+ Add Character", "callback_data": "ctx_add_char"}])
+        keyboard["inline_keyboard"].append([{"text": "⬅️ Back", "callback_data": "ctx_edit_back"}])
+        
+        msg = f"📝 Character removed.\n\nSelect to remove, or add new:" if not removed else f"📝 Character '{removed}' removed.\n\nSelect to remove, or add new:"
+        return msg, keyboard
+    
+    elif callback_data == "ctx_cancel":
+        return "❌ Context confirmation cancelled. Pipeline will stop.", "stop_pipeline"
+    
+    # Context menu handlers
+    elif callback_data == "ctx_view":
+        return _show_context_view()
+    
+    # Not a known context callback
+    return None, None
+
+
+# Store pending context for confirmation
+PENDING_CONTEXT = {}
+
+# Store context edit state for Telegram editing flow
+CONTEXT_EDIT_STATE = {}
+
+def handle_context_edit_input(txt, chat_id):
+    """Handle context editing flow via Telegram."""
+    global CONTEXT_EDIT_STATE
+    
+    step = CONTEXT_EDIT_STATE.get("step", "")
+    state = CONTEXT_EDIT_STATE
+    
+    if step == "choose_field":
+        if txt == "1":
+            # Edit characters
+            chars = state.get("extracted", {}).get("characters", [])
+            state["step"] = "edit_characters"
+            state["current_items"] = chars
+            CONTEXT_EDIT_STATE.update(state)
+            
+            items = "\n".join([f"{i+1}. {c}" for i, c in enumerate(chars)])
+            tg_send(f"📝 Current Characters:\n{items}\n\nEnter the number to remove, or type a name to add:")
+            return True
+            
+        elif txt == "2":
+            # Edit locations
+            locs = state.get("extracted", {}).get("locations", [])
+            state["step"] = "edit_locations"
+            state["current_items"] = locs
+            CONTEXT_EDIT_STATE.update(state)
+            
+            items = "\n".join([f"{i+1}. {l}" for i, l in enumerate(locs)])
+            tg_send(f"📍 Current Locations:\n{items}\n\nEnter the number to remove, or type a name to add:")
+            return True
+            
+        elif txt == "3":
+            # Edit relationships
+            rels = state.get("extracted", {}).get("relationships", [])
+            state["step"] = "edit_relationships"
+            state["current_items"] = rels
+            CONTEXT_EDIT_STATE.update(state)
+            
+            items = "\n".join([f"{i+1}. {r}" for i, r in enumerate(rels[:10])])
+            tg_send(f"👥 Current Relationships:\n{items}\n\nEnter the number to remove, or type in format 'Name1 -> Name2: relationship' to add:")
+            return True
+        else:
+            tg_send("Invalid choice. Reply with 1, 2, or 3")
+            return True
+            
+    elif step == "edit_characters":
+        # Check if number (remove) or name (add)
+        if txt.isdigit():
+            idx = int(txt) - 1
+            items = state.get("current_items", [])
+            if 0 <= idx < len(items):
+                removed = items.pop(idx)
+                state["current_items"] = items
+                tg_send(f"✅ Removed: {removed}")
+            else:
+                tg_send("Invalid number")
+        else:
+            # Add new character
+            items = state.get("current_items", [])
+            items.append(txt)
+            state["current_items"] = items
+            tg_send(f"✅ Added: {txt}")
+        
+        state["extracted"]["characters"] = items
+        CONTEXT_EDIT_STATE.update(state)
+        tg_send("Done editing? Reply 'done' to save, or continue editing.")
+        return True
+        
+    elif step == "edit_locations":
+        if txt.isdigit():
+            idx = int(txt) - 1
+            items = state.get("current_items", [])
+            if 0 <= idx < len(items):
+                removed = items.pop(idx)
+                state["current_items"] = items
+                tg_send(f"✅ Removed: {removed}")
+            else:
+                tg_send("Invalid number")
+        else:
+            items = state.get("current_items", [])
+            items.append(txt)
+            state["current_items"] = items
+            tg_send(f"✅ Added: {txt}")
+        
+        state["extracted"]["locations"] = items
+        CONTEXT_EDIT_STATE.update(state)
+        tg_send("Done editing? Reply 'done' to save, or continue editing.")
+        return True
+        
+    elif step == "edit_relationships":
+        if txt.isdigit():
+            idx = int(txt) - 1
+            items = state.get("current_items", [])
+            if 0 <= idx < len(items):
+                removed = items.pop(idx)
+                state["current_items"] = items
+                tg_send(f"✅ Removed: {removed}")
+            else:
+                tg_send("Invalid number")
+        elif "->" in txt and ":" in txt:
+            # Add new relationship: "Name1 -> Name2: relationship"
+            try:
+                parts = txt.split("->")
+                char1 = parts[0].strip()
+                rest = parts[1].split(":")
+                char2 = rest[0].strip()
+                rel = rest[1].strip() if len(rest) > 1 else "unknown"
+                items = state.get("current_items", [])
+                items.append({"from": char1, "to": char2, "relationship": rel})
+                state["current_items"] = items
+                tg_send(f"✅ Added: {char1} -> {char2}: {rel}")
+            except:
+                tg_send("Invalid format. Use: Name1 -> Name2: relationship")
+        else:
+            tg_send("Invalid. Enter number to remove, or 'Name1 -> Name2: relationship' to add")
+        
+        items = state.get("current_items", [])
+        state["extracted"]["relationships"] = items
+        CONTEXT_EDIT_STATE.update(state)
+        tg_send("Done editing? Reply 'done' to save, or continue editing.")
+        return True
+        
+    elif txt.lower() == "done":
+        # Save the edited context
+        game_title = state.get("game_title", env("GAME_TITLE", ""))
+        extracted = state.get("extracted", {})
+        
+        # Update Obsidian markdown files
+        _cs_update_context_for_edit(extracted)
+        
+        # Save as verified
+        save_verified_context(game_title, extracted)
+        
+        CONTEXT_EDIT_STATE.clear()
+        tg_send(f"✅ Context saved for {game_title}!\n\nRun Phase 2 to verify, then Phase 3 for scripts.")
+        return True
+        
+    elif txt.lower() == "cancel":
+        CONTEXT_EDIT_STATE.clear()
+        tg_send("❌ Edit cancelled.")
+        return True
+    
+    return False
+
+
+def _cs_update_context_for_edit(extracted):
+    """Update Obsidian markdown files with edited context."""
+    obsidian_dir = os.path.join(CONTENT_STUDIO_DIR, "context")
+    os.makedirs(obsidian_dir, exist_ok=True)
+    
+    # Update characters.md
+    chars_file = os.path.join(obsidian_dir, "characters.md")
+    with open(chars_file, "w") as f:
+        f.write("# Characters\n\n")
+        for char in extracted.get("characters", []):
+            f.write(f"- [[{char}]]\n")
+    
+    # Update locations.md
+    locs_file = os.path.join(obsidian_dir, "locations.md")
+    with open(locs_file, "w") as f:
+        f.write("# Locations\n\n")
+        for loc in extracted.get("locations", []):
+            f.write(f"- [[{loc}]]\n")
+    
+    # Update relationships.md  
+    rels_file = os.path.join(obsidian_dir, "relationships.md")
+    with open(rels_file, "w") as f:
+        f.write("# Relationships\n\n")
+        f.write("| Character | Connected To | Relationship |\n")
+        f.write("| ----------- | --------------- | ------------------------------- |\n")
+        for rel in extracted.get("relationships", []):
+            if isinstance(rel, dict):
+                f.write(f"| [[{rel.get('from', '')}]] | [[{rel.get('to', '')}]] | {rel.get('relationship', '')} |\n")
+            elif isinstance(rel, str):
+                f.write(f"| {rel} |\n")
+    
+    log(f"Context files updated from Telegram edit")
+
+
+def set_pending_context(game_title, extracted, verified, comparison):
+    """Store context pending confirmation."""
+    global PENDING_CONTEXT
+    PENDING_CONTEXT[game_title] = {
+        "extracted": extracted,
+        "verified": verified,
+        "comparison": comparison,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+def get_pending_context(game_title):
+    """Get pending context for a game."""
+    return PENDING_CONTEXT.get(game_title)
+
+
+def clear_pending_context(game_title):
+    """Clear pending context after confirmation."""
+    global PENDING_CONTEXT
+    PENDING_CONTEXT.pop(game_title, None)
+
+def _show_context_view():
+    """Show current context in a formatted message."""
+    from context_manager import load_verified_context
+    ctx = _cs_load_context()
+    game = env("GAME_TITLE", "Unknown")
+    verified = load_verified_context(game)
+    
+    chars = ctx.get("characters", [])
+    locs = ctx.get("locations", [])
+    rels = ctx.get("relationships", [])
+    
+    msg = f"""📝 Context for {game}
+
+📝 Characters ({len(chars)}):
+{', '.join(chars[:15])}{'...' if len(chars) > 15 else ''}
+
+📍 Locations ({len(locs)}):
+{', '.join(locs[:10])}{'...' if len(locs) > 10 else ''}
+
+👥 Relationships ({len(rels)}):
+"""
+    for r in rels[:5]:
+        if isinstance(r, dict):
+            msg += f"• {r.get('from', '')} ↔ {r.get('to', '')}: {r.get('relationship', '')}\n"
+        else:
+            msg += f"• {r}\n"
+    
+    if len(rels) > 5:
+        msg += f"... and {len(rels) - 5} more\n"
+    
+    if verified:
+        msg += f"\n✅ Verified: Yes (saved {verified.get('verified_at', 'unknown')})"
+    else:
+        msg += "\n❌ Verified: No"
+    
+    return msg
+
+def _reload_context_from_obsidian():
+    """Reload context from Obsidian markdown files and save as verified."""
+    from context_manager import save_verified_context
+    
+    ctx = _cs_load_context()
+    game = env("GAME_TITLE", "Unknown")
+    
+    # Save as verified context
+    save_verified_context(game, ctx)
+    
+    chars = len(ctx.get("characters", []))
+    locs = len(ctx.get("locations", []))
+    rels = len(ctx.get("relationships", []))
+    
+    return f"✅ Reloaded from Obsidian and saved as verified!\n\n📝 {chars} chars\n📍 {locs} locs\n👥 {rels} rels"
+
 # ─── Inline Menu Functions ───────────────────────────────────────────────────
 def get_main_menu():
+    """Main menu reorganized by functionality groups."""
     return {
         "inline_keyboard": [
-            [{"text": "📊 Status", "callback_data": "menu_status"}, {"text": "▶️ Run Pipeline", "callback_data": "menu_pipeline"}],
-            [{"text": "📝 Scripts", "callback_data": "menu_scripts"}, {"text": "🎬 Clips", "callback_data": "menu_clips"}],
-            [{"text": "🎤 TTS", "callback_data": "menu_tts"}, {"text": "🔄 Restart", "callback_data": "menu_restart"}],
-            [{"text": "⚙️ Config", "callback_data": "menu_config"}, {"text": "🎨 Content Studio", "callback_data": "menu_content_studio"}],
-            [{"text": "📋 Help", "callback_data": "menu_help"}, {"text": "🛑 Stop", "callback_data": "menu_stop"}]
+            [{"text": "📊 Status", "callback_data": "menu_status"}],
+            [{"text": "▶️ Run Full Pipeline", "callback_data": "run_full"}],
+            [{"text": "────────── Pipeline ──────────", "callback_data": "noop"}],
+            [{"text": "📥 Download", "callback_data": "run_phase1"}, {"text": "🧠 Context", "callback_data": "run_phase2.5"}],
+            [{"text": "📝 Scripts", "callback_data": "run_phase3"}, {"text": "🎬 Clips", "callback_data": "run_phase4"}],
+            [{"text": "🎤 TTS", "callback_data": "run_phase5"}],
+            [{"text": "────────── Tools ──────────", "callback_data": "noop"}],
+            [{"text": "🎨 Content Studio", "callback_data": "menu_content_studio"}, {"text": "🗂️ Context", "callback_data": "menu_context"}],
+            [{"text": "⚙️ Config", "callback_data": "menu_config"}, {"text": "🛑 Stop", "callback_data": "menu_stop"}],
+            [{"text": "ℹ️ Help", "callback_data": "menu_help"}, {"text": "🔄 Restart", "callback_data": "menu_restart"}]
         ]
     }
 
 def get_run_menu():
+    """Run menu - organized pipeline control."""
     return {
         "inline_keyboard": [
-            [{"text": "📥 Full Pipeline", "callback_data": "run_full"}, {"text": "📥 Download", "callback_data": "run_phase1"}],
-            [{"text": "📝 Scripts", "callback_data": "run_phase3"}, {"text": "🎬 Clips", "callback_data": "run_phase4"}],
-            [{"text": "🎤 TTS", "callback_data": "run_phase5"}, {"text": "⬅️ Back", "callback_data": "menu_back"}]
+            [{"text": "▶️ Full Pipeline", "callback_data": "run_full"}],
+            [{"text": "────────── Pipeline ──────────", "callback_data": "noop"}],
+            [{"text": "📥 Phase 1 (Download)", "callback_data": "run_phase1"}],
+            [{"text": "📝 Phase 2 (Transcribe)", "callback_data": "run_phase2"}],
+            [{"text": "🧠 Phase 2.5 (Context Only)", "callback_data": "run_phase2.5"}],
+            [{"text": "📝 Phase 3 (Scripts)", "callback_data": "run_phase3"}],
+            [{"text": "🎬 Phase 4 (Clips)", "callback_data": "run_phase4"}],
+            [{"text": "🎤 Phase 5 (TTS)", "callback_data": "run_phase5"}],
+            [{"text": "────────── Options ──────────", "callback_data": "noop"}],
+            [{"text": "⬅️ Back", "callback_data": "menu_back"}]
+        ]
+    }
+
+def get_context_menu():
+    """Context management submenu."""
+    game = env("GAME_TITLE", "No game set")
+    verified = load_verified_context(game)
+    verified_info = "✅ Verified" if verified else "❌ Not verified"
+    
+    return {
+        "inline_keyboard": [
+            [{"text": "📝 View Context", "callback_data": "ctx_view"}],
+            [{"text": "🔄 Reload from Obsidian", "callback_data": "ctx_reload"}],
+            [{"text": "🗑️ Clear Context (Game)", "callback_data": "ctx_clear_game"}],
+            [{"text": f"🗑️ Clear Verified ({verified_info})", "callback_data": "ctx_clear_verified"}],
+            [{"text": "⬅️ Back", "callback_data": "menu_back"}]
         ]
     }
 
@@ -347,12 +949,100 @@ def get_config_menu():
     }
 
 def get_help_menu():
+    """Help menu with organized information."""
     return {
         "inline_keyboard": [
-            [{"text": "📖 Commands", "callback_data": "help_commands"}, {"text": "💬 Phases", "callback_data": "help_phases"}],
-            [{"text": "🎤 Voices", "callback_data": "help_voices"}, {"text": "⬅️ Back", "callback_data": "menu_back"}]
+            [{"text": "📖 Commands", "callback_data": "help_commands"}],
+            [{"text": "💬 Pipeline Phases", "callback_data": "help_phases"}],
+            [{"text": "🎤 TTS Voices", "callback_data": "help_voices"}],
+            [{"text": "📚 Context System", "callback_data": "help_context"}],
+            [{"text": "⬅️ Back to Menu", "callback_data": "menu_back"}]
         ]
     }
+
+# ─── Help Content Functions ─────────────────────────────────────────────────
+
+def handle_help_callback(callback_data):
+    """Handle help submenu callbacks."""
+    if callback_data == "help_commands":
+        return """📖 Telegram Commands
+
+📊 Status & Info:
+/status - Show listener & pipeline status
+/config - Show current settings
+/version - Show version info
+/debug - Show recent logs
+/menu - Show interactive menu
+
+▶️ Pipeline Control:
+/run - Run full pipeline
+/run_phase 2 - Run specific phase
+/stop_pipeline - Stop running pipeline
+
+🎨 Content Studio:
+/cs - Open Content Studio
+/cs_context - View/clear context
+
+🛠️ Tools:
+/cleanup - Delete all generated files
+/learning_stats - Show AI learning stats
+/update - Check for updates"""
+    
+    elif callback_data == "help_phases":
+        return """💬 Pipeline Phases
+
+Phase 1 (📥) - Download
+Downloads videos from YouTube playlist
+
+Phase 2 (📝) - Transcribe + Context
+Converts audio to text with timestamps
+Extracts context (characters, locations)
+🔧 NEW: Pauses for context confirmation!
+
+Phase 3 (📝) - Scripts
+Generates AI-powered scripts
+Uses verified context for accuracy
+
+Phase 4 (🎬) - Clips
+Extracts video clips based on scenes
+
+Phase 5 (🎤) - TTS
+Creates AI voice narration
+Generates SRT subtitles"""
+
+    elif callback_data == "help_voices":
+        return """🎤 Available TTS Voices
+
+Categories:
+🧙 Mysterious: Zephyr, Charon, Umbriel
+👥 Conversational: Aoede, Leda, Kore
+📺 Documentary: Vindemiatrix, Gacrux, Sadachbia
+🔥 Intense: Fenrir, Orus, Rasalgethi
+📚 Educational: Alnilam, Algieba, Schedar
+
+Change via:
+• Menu → Config → Voice
+• /set_voice [name]"""
+
+    elif callback_data == "help_context":
+        return """📚 Context System
+
+How it works:
+1. Phase 2 extracts context from transcript
+2. If first run → pauses for confirmation
+3. If changes detected → pauses for review
+4. You approve → saved as verified
+
+Why verify?
+• Validation uses verified context
+• Prevents hallucinated characters
+• More accurate scripts
+
+Edit via:
+• Click Edit on confirmation message
+• Edit Obsidian files directly"""
+    
+    return None
 
 def get_voice_menu():
     voices = ["Vindemiatrix", "Aoede", "Callirrhoe", "Gacrux", "Sulafat", "Leda",
@@ -451,8 +1141,12 @@ def handle_menu_callback(callback_data):
         return None, get_config_menu()
     elif callback_data == "menu_help":
         return None, get_help_menu()
+    elif callback_data.startswith("help_"):
+        return handle_help_callback(callback_data)
     elif callback_data == "menu_content_studio":
         return None, get_content_studio_menu()
+    elif callback_data == "menu_context":
+        return None, get_context_menu()
     elif callback_data == "menu_update":
         script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         update_info = check_for_updates(script_root)
@@ -464,10 +1158,16 @@ def handle_menu_callback(callback_data):
         return "🛑 Stopping pipeline...", "stop_pipeline"
     elif callback_data == "menu_back":
         return None, get_main_menu()
+    elif callback_data == "noop":
+        return None, None  # Do nothing for separator rows
     elif callback_data == "run_full":
         return "▶️ Running full pipeline...", "run_pipeline"
     elif callback_data == "run_phase1":
         return "📥 Running Phase 1...", "run_phase 1"
+    elif callback_data == "run_phase2":
+        return "📝 Running Phase 2 (Transcribe + Context)...", "run_phase 2"
+    elif callback_data == "run_phase2.5":
+        return "🧠 Running Phase 2.5 (Context Only)...", "run_phase 2.5"
     elif callback_data == "run_phase3":
         return "📝 Running Phase 3...", "run_phase 3"
     elif callback_data == "run_phase4":
@@ -522,9 +1222,38 @@ def handle_menu_callback(callback_data):
         game = callback_data.replace("set_game_", "")
         if game == "_clear":
             update_env_var("GAME_TITLE", "")
+            clear_verified_context("")
             return "✅ Game title cleared"
         update_env_var("GAME_TITLE", game)
         return f"✅ Game set to: {game}"
+    elif callback_data == "ctx_view":
+        return _show_context_view()
+    elif callback_data == "ctx_reload":
+        return _reload_context_from_obsidian()
+    elif callback_data == "ctx_clear_game":
+        # Clear game context from Context directory
+        game = env("GAME_TITLE", "")
+        if game:
+            game_key = game.lower().replace(" ", "_")
+            game_dir = os.path.join(WORKSPACE, "Context", game_key)
+            ctx_file = os.path.join(game_dir, "context.json")
+            if os.path.exists(ctx_file):
+                os.remove(ctx_file)
+                return f"✅ Context cleared for {game}"
+            else:
+                return f"ℹ️ No context file for {game}"
+        return "ℹ️ No game set"
+    elif callback_data == "ctx_clear_verified":
+        game = env("GAME_TITLE", "")
+        clear_verified_context(game)
+        return "✅ Verified context cleared"
+    elif callback_data.startswith("ctx_"):
+        # Route to context callback handler
+        # Extract cb_id from callback query if available
+        cb_id_local = None
+        # In the context of handle_menu_callback, we don't have direct access to cb_id
+        # The cb_id is handled in the listener's callback processing
+        return handle_context_callback(callback_data, env("GAME_TITLE", ""), cb_id_local)
     elif callback_data == "cleanup_files":
         count = cleanup_all_files()
         return f"🧹 Cleaned up {count} file(s)"
@@ -548,6 +1277,8 @@ def handle_menu_callback(callback_data):
 
 def _get_rich_status():
     """Get rich status card with file counts and pipeline info."""
+    from context_manager import load_verified_context, get_verified_context_for_validation
+    
     script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     local_ver = get_local_version(script_root)
     
@@ -571,6 +1302,18 @@ def _get_rich_status():
     style = env("TTS_STYLE", "Default")
     game = env("GAME_TITLE", "Not set")
     
+    # Context status
+    game_title = game if game else "No game set"
+    verified = load_verified_context(game_title)
+    if verified:
+        ctx = verified.get("context", {})
+        ctx_chars = len(ctx.get("characters", []))
+        ctx_locs = len(ctx.get("locations", []))
+        ctx_rels = len(ctx.get("relationships", []))
+        verified_info = f"✅ Verified ({ctx_chars} chars, {ctx_locs} locs, {ctx_rels} rels)"
+    else:
+        verified_info = "❌ Not verified"
+    
     status = f"""📊 Lambda Cut Status — v{local_ver}
 
 🔹 Pipeline: {status_line}
@@ -581,10 +1324,12 @@ def _get_rich_status():
   🎤 TTS: {wc}
   📄 Transcripts: {tc}
 
+🎮 Game: {game_title}
+🗂️ Context: {verified_info}
+
 ⚙️ Config:
   🎤 Voice: {voice}
-  🎵 Style: {style[:20]}...
-  🎮 Game: {game}"""
+  🎵 Style: {style[:20]}..."""
     return status
 
 
@@ -823,6 +1568,21 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
     ctx = _cs_load_context()
     ctx = summarize_context(ctx, max_per_category=10)
     
+    # Get verified context for validation (source of truth)
+    verified_ctx = get_verified_context_for_validation(game_title)
+    
+    # Merge: prefer verified context characters/locations/relationships over extracted
+    validation_ctx = {}
+    if verified_ctx:
+        validation_ctx = {
+            "characters": verified_ctx.get("characters", ctx.get("characters", [])),
+            "locations": verified_ctx.get("locations", ctx.get("locations", [])),
+            "key_terms": ctx.get("key_terms", []),
+            "relationships": verified_ctx.get("relationships", ctx.get("relationships", []))
+        }
+    else:
+        validation_ctx = ctx
+    
     stored_chars = ", ".join(ctx.get("characters", [])) if ctx.get("characters") else "None yet"
     stored_locs = ", ".join(ctx.get("locations", [])) if ctx.get("locations") else "None yet"
     stored_rels = "; ".join(ctx.get("relationships", [])) if ctx.get("relationships") else "None yet"
@@ -842,6 +1602,17 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
     
     type_prompt = type_prompts.get(content_type, type_prompts["Analysis"])
     
+    # Get learned constraints for self-improvement
+    game_title = env("GAME_TITLE", "the game")
+    learned = get_learned_constraints(game_title=game_title, content_type=content_type.lower() if content_type else "unknown")
+    learned_constraints_text = ""
+    if learned.get("negative_constraints") or learned.get("positive_emphasis"):
+        learned_constraints_text = "\n\nLEARNED CONSTRAINTS (from previous generation data - follow these):\n"
+        for nc in learned.get("negative_constraints", []):
+            learned_constraints_text += f"- {nc}\n"
+        for pe in learned.get("positive_emphasis", []):
+            learned_constraints_text += f"- {pe}\n"
+    
     allowed_chars = ", ".join(real_characters) if real_characters else f"Use these verified characters only: {stored_chars}"
     plot_points_str = "; ".join(key_plot_points) if key_plot_points else "Only use events explicitly mentioned in the transcript"
     
@@ -849,6 +1620,7 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
 - Characters: {stored_chars}
 - Locations: {stored_locs}
 - Relationships: {stored_rels}{prev_script_info}
+{learned_constraints_text}
 
 Focus on this angle: {angle}
 
@@ -914,7 +1686,7 @@ Write the complete script now."""
         try:
             body = json.dumps({
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": temperature, "maxOutputTokens": 500}
+                "generationConfig": {"temperature": temperature, "maxOutputTokens": 3072}
             }).encode()
             
             for i in range(len(keys)):
@@ -966,7 +1738,7 @@ Write the complete script now."""
         log(f"   Content Studio: Selected best script from {len(scores)} candidates (score: {scores[0]['combined']})")
     
     # Phase 5: Log quality metrics
-    fact_check = validate_script_factuality(best_script, ctx)
+    fact_check = validate_script_factuality(best_script, validation_ctx)
     engagement = score_engagement(best_script)
     log(f"   Content Studio quality: factuality={fact_check['score']}, engagement={engagement['overall']}, words={len(best_script.split())}")
     if fact_check["issues"]:
@@ -974,6 +1746,11 @@ Write the complete script now."""
             log(f"   Content Studio WARNING: {issue}")
     
     log_generation_metrics(best_script, best_metadata, fact_check, engagement, METRICS_FILE)
+    
+    # Store failure data for self-improvement
+    game_title = env("GAME_TITLE", "Content Studio")
+    content_type_val = content_type.lower() if content_type else "unknown"
+    store_generation_failure(best_script, best_metadata, fact_check, engagement, game_title=game_title, content_type=content_type_val)
     
     return best_script
 
@@ -1294,7 +2071,7 @@ def _cs_generate_tts_only():
 
 
 def _cs_load_context():
-    """Load context from Obsidian markdown files only."""
+    """Load context from centralized Context directory."""
     ctx = {
         "characters": [],
         "locations": [],
@@ -1304,106 +2081,31 @@ def _cs_load_context():
         "previous_scripts": []
     }
     
-    obsidian_dir = os.path.join(CONTENT_STUDIO_DIR, "context")
+    # Use centralized Context directory
+    game = env("GAME_TITLE", "default").lower().replace(" ", "_")
+    ctx_dir = os.path.join(CONTEXT_DIR, game)
+    os.makedirs(ctx_dir, exist_ok=True)
     
-    # Load characters from markdown
-    chars_file = os.path.join(obsidian_dir, "characters.md")
-    if os.path.exists(chars_file):
-        with open(chars_file) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#') or 'Total:' in line:
-                    continue
-                char = re.sub(r'^\[\[', '', re.sub(r'\]\]$', '', line.lstrip('- ').lstrip('* ')))
-                if char and char not in ctx["characters"] and char[0].isalpha() and char[0].isupper():
-                    ctx["characters"].append(char)
-    
-    # Load locations from markdown
-    locs_file = os.path.join(obsidian_dir, "locations.md")
-    if os.path.exists(locs_file):
-        with open(locs_file) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#') or 'Total:' in line:
-                    continue
-                loc = re.sub(r'^\[\[', '', re.sub(r'\]\]$', '', line.lstrip('- ').lstrip('* ')))
-                if loc and loc not in ctx["locations"] and loc[0].isalpha():
-                    ctx["locations"].append(loc)
-    
-    # Load key_terms from markdown (skip table format)
-    terms_file = os.path.join(obsidian_dir, "key_terms.md")
-    if os.path.exists(terms_file) and os.path.getsize(terms_file) > 0:
-        with open(terms_file) as f:
-            content = f.read()
-            if "|" not in content:  # Skip table format
-                for line in content.split('\n'):
-                    line = line.strip()
-                    if not line or line.startswith('#') or 'Total:' in line:
-                        continue
-                    term = re.sub(r'^\[\[', '', re.sub(r'\]\]$', '', line.lstrip('- ').lstrip('* ')))
-                    if term and term not in ctx["key_terms"] and term[0].isalpha():
-                        ctx["key_terms"].append(term)
-    
-    # Load relationships from markdown table
-    rels_file = os.path.join(obsidian_dir, "relationships.md")
-    if os.path.exists(rels_file) and os.path.getsize(rels_file) > 0:
-        with open(rels_file) as f:
-            content = f.read()
-            if "|" in content and "---" in content:
-                for line in content.split('\n'):
-                    line = line.strip()
-                    if not line.startswith('|') or line.startswith('|---') or 'Character' in line or 'Total' in line:
-                        continue
-                    parts = [p.strip() for p in line.split('|')[1:-1]]
-                    if len(parts) >= 2 and parts[0]:
-                        # Handle both wiki-links [[Name]] and plain names
-                        char1 = parts[0].replace('[[', '').replace(']]', '')
-                        char2 = parts[1].replace('[[', '').replace(']]', '') if len(parts) > 1 else ""
-                        rel_text = parts[2] if len(parts) > 2 else ""
-                        if char1 and char1[0].isalpha():
-                            ctx["relationships"].append(f"{char1} and {char2} are {rel_text}")
+    ctx_file = os.path.join(ctx_dir, "context.json")
+    if os.path.exists(ctx_file):
+        try:
+            with open(ctx_file, 'r') as f:
+                saved_ctx = json.load(f)
+                ctx.update(saved_ctx)
+        except Exception:
+            pass
     
     return ctx
 
-
 def _cs_save_context(ctx):
-    """Save context to Obsidian markdown files only."""
-    obsidian_dir = os.path.join(CONTENT_STUDIO_DIR, "context")
-    os.makedirs(obsidian_dir, exist_ok=True)
+    """Save context to centralized Context directory."""
+    game = env("GAME_TITLE", "default").lower().replace(" ", "_")
+    ctx_dir = os.path.join(CONTEXT_DIR, game)
+    os.makedirs(ctx_dir, exist_ok=True)
     
-    # Save characters as wiki-links
-    with open(os.path.join(obsidian_dir, "characters.md"), "w") as f:
-        f.write("# Characters\n\n")
-        for char in ctx.get("characters", []):
-            f.write(f"- [[{char}]]\n")
-    
-    # Save locations as wiki-links
-    with open(os.path.join(obsidian_dir, "locations.md"), "w") as f:
-        f.write("# Locations\n\n")
-        for loc in ctx.get("locations", []):
-            f.write(f"- [[{loc}]]\n")
-    
-    # Save key_terms as wiki-links
-    with open(os.path.join(obsidian_dir, "key_terms.md"), "w") as f:
-        f.write("# Key Terms\n\n")
-        for term in ctx.get("key_terms", []):
-            f.write(f"- [[{term}]]\n")
-    
-    # Save relationships as table
-    with open(os.path.join(obsidian_dir, "relationships.md"), "w") as f:
-        f.write("# Relationships\n\n")
-        f.write("| Character | Connected To | Relationship |\n")
-        f.write("|-----------|--------------|---------------|\n")
-        for rel in ctx.get("relationships", []):
-            parts = rel.split(" are ")
-            if len(parts) >= 2:
-                left = parts[0].strip()
-                right = parts[1].strip()[:35]
-                if " and " in left:
-                    chars = left.split(" and ", 1)
-                    char1 = chars[0].strip()
-                    char2 = chars[1].strip() if len(chars) > 1 else ""
-                    f.write(f"| [[{char1}]] | [[{char2}]] | {right} |\n")
+    ctx_file = os.path.join(ctx_dir, "context.json")
+    with open(ctx_file, 'w') as f:
+        json.dump(ctx, f, indent=2)
 
 
 def _cs_extract_context_from_transcript(transcript_text, game_title):
@@ -1701,17 +2403,7 @@ def phase_transcribe(video):
         log(f"faster-whisper failed: {e}")
         
         if not transcription_success:
-            try:
-                import stable_whisper
-                log("Falling back to stable-whisper...")
-                model = stable_whisper.load_model("base")
-                result = model.transcribe(video, language="en", vad=True)
-                result.to_srt_vtt(os.path.join(TRANSCRIPTS_DIR, f"{basename}.srt"))
-                result.save_as_json(os.path.join(TRANSCRIPTS_DIR, f"{basename}.json"))
-                log("stable-whisper transcription complete")
-                transcription_success = True
-            except Exception as e2:
-                log(f"stable-whisper failed: {e2}")
+            log("Falling back to stable-ts CLI...")
         
         if not transcription_success:
             log("Falling back to stable-ts CLI...")
@@ -1738,6 +2430,118 @@ def phase_transcribe(video):
     notify("Phase 2 Complete: Transcript generated")
     set_status("Phase 2 Complete")
     return json_file
+
+# ─── Phase 2.5: Context Only (Extract/Update Context) ─────────────────────────
+def phase_context():
+    """Extract or update context from existing transcript - no transcription needed."""
+    json_file = None
+    
+    # Find existing transcript
+    if os.path.exists(TRANSCRIPTS_DIR):
+        transcripts = sorted(glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.json")), 
+                            key=os.path.getmtime, reverse=True)
+        if transcripts:
+            json_file = transcripts[0]
+    
+    if not json_file:
+        log_error("Phase 2.5 Failed: No transcript found")
+        notify("Phase 2.5 Failed: No transcript. Run Phase 2 first.")
+        set_status("Phase 2.5 FAILED")
+        return
+    
+    # Extract text from transcript
+    try:
+        with open(json_file) as f:
+            data = json.load(f)
+        transcript_text = ""
+        for seg in data.get("segments", []):
+            text = re.sub(r"<[^>]*>", "", seg.get("text", ""))
+            if text.strip():
+                transcript_text += text + " "
+    except Exception as e:
+        log_error(f"Phase 2.5 Failed: Could not read transcript: {e}")
+        notify(f"Phase 2.5 Failed: {e}")
+        set_status("Phase 2.5 FAILED")
+        return
+    
+    if not transcript_text:
+        log_error("Phase 2.5 Failed: Empty transcript")
+        notify("Phase 2.5 Failed: Transcript is empty")
+        set_status("Phase 2.5 FAILED")
+        return
+    
+    # Extract context
+    game_title = env("GAME_TITLE", "Unknown Game")
+    set_status("Phase 2.5: Extracting context...")
+    log("Phase 2.5: Extracting context from transcript...")
+    notify("Phase 2.5: Extracting context...")
+    
+    try:
+        extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
+    except Exception as e:
+        log_error(f"Phase 2.5 Failed: Context extraction error: {e}")
+        notify(f"Phase 2.5 Failed: API error - {e}")
+        set_status("Phase 2.5 FAILED")
+        return
+    
+    if not extracted:
+        log_error("Phase 2.5 Failed: Context extraction failed")
+        notify("Phase 2.5 Failed: Could not extract context (empty response)")
+        set_status("Phase 2.5 FAILED")
+        return
+    
+    # Context verification flow
+    verified = load_verified_context(game_title)
+    
+    if not verified:
+        # First run - need confirmation
+        log(f"First run for {game_title} - requesting context confirmation...")
+        notify(f"🤖 Context Confirmation - {game_title}\n\nPlease review and approve context via Telegram inline buttons.")
+        
+        set_pending_context(game_title, extracted, {}, {
+            "has_significant_change": True,
+            "reason": "first_run",
+            "changes": {},
+            "resolved_context": extracted
+        })
+        
+        result = send_context_confirmation(game_title, extracted, {}, {
+            "has_significant_change": True,
+            "reason": "first_run",
+            "changes": {},
+            "resolved_context": extracted
+        })
+        
+        log("Waiting for context confirmation... Pipeline paused.")
+        set_status("Waiting for context confirmation...")
+        return
+        
+    else:
+        # Check for significant changes
+        comparison = compare_context_with_history(extracted, verified)
+        
+        if comparison.get("needs_confirmation"):
+            log(f"Context changes detected for {game_title} - requesting confirmation...")
+            notify(f"🤖 Context Changes Detected - {game_title}\n\nPlease review changes via Telegram.")
+            
+            set_pending_context(game_title, extracted, verified, comparison)
+            
+            result = send_context_confirmation(game_title, extracted, verified, comparison)
+            
+            log("Waiting for context confirmation... Pipeline paused.")
+            set_status("Waiting for context confirmation...")
+            return
+        else:
+            # No significant changes - use verified context
+            log(f"Context verified (no significant changes)")
+            save_verified_context(game_title, verified.get("context", {}))
+    
+    # Update Obsidian files
+    transcript_name = os.path.basename(json_file)
+    _cs_update_context(extracted, transcript_name)
+    log(f"Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs, {len(extracted.get('relationships', []))} rels")
+    notify(f"✅ Phase 2.5 Complete: Context extracted\n📝 {len(extracted.get('characters', []))} chars\n📍 {len(extracted.get('locations', []))} locs\n👥 {len(extracted.get('relationships', []))} rels")
+    set_status("Phase 2.5 Complete")
 
 # ─── Phase 3: Scripts ─────────────────────────────────────────────────────────
 
@@ -1824,6 +2628,15 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
     """Build script prompt using Jinja2 templates (Phase 1) with fallback to legacy."""
     variant = SCRIPT_VARIANTS[variant_key]
     env = _get_prompt_env()
+    
+    learned = get_learned_constraints(game_title=game_title, content_type="pipeline")
+    learned_constraints_text = ""
+    if learned.get("negative_constraints") or learned.get("positive_emphasis"):
+        learned_constraints_text = "\n\nLEARNED CONSTRAINTS (from previous generation data):\n"
+        for nc in learned.get("negative_constraints", []):
+            learned_constraints_text += f"- {nc}\n"
+        for pe in learned.get("positive_emphasis", []):
+            learned_constraints_text += f"- {pe}\n"
 
     if env is not None:
         try:
@@ -1850,6 +2663,7 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
                 instruction=variant["instruction"],
                 context_info=context_info,
                 transcript=transcript,
+                learned_constraints=learned_constraints_text,
             )
             return prompt
         except Exception as e:
@@ -1873,6 +2687,7 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
             context_info += f"Relationships: {'; '.join(rels)}\n"
 
     return f"""You are an expert YouTube Shorts scriptwriter specializing in gaming content. {game_line}{context_info}
+{learned_constraints_text}
 Style: {variant['style']}
 Perspective: {perspective}
 
@@ -1915,8 +2730,19 @@ Transcript:
 
 
 def _get_temperature(variant_key):
-    """Get adaptive temperature for content type (Phase 4)."""
-    return TEMPERATURE_BY_TYPE.get(variant_key, 0.7)
+    """Get adaptive temperature for content type (Phase 4) with learned optimization."""
+    base_temp = TEMPERATURE_BY_TYPE.get(variant_key, 0.7)
+    
+    # Try to get learned optimal temperature
+    try:
+        learned_temp = calculate_optimal_temperature(content_type=variant_key)
+        if learned_temp:
+            # Blend learned with base (70% learned, 30% base)
+            return round(learned_temp * 0.7 + base_temp * 0.3, 1)
+    except Exception:
+        pass
+    
+    return base_temp
 
 
 def _get_groq_model(variant_key):
@@ -2059,6 +2885,22 @@ def phase_scripts(json_file, duration, num_hours):
     ctx = summarize_context(ctx, max_per_category=10)
     log(f"   Context loaded: {len(ctx.get('characters', []))} chars, {len(ctx.get('locations', []))} locs, {len(ctx.get('key_terms', []))} terms")
     
+    # Get verified context for validation
+    game_title = env("GAME_TITLE", "")
+    verified_ctx = get_verified_context_for_validation(game_title)
+    
+    # Merge: prefer verified context for validation
+    validation_ctx = {}
+    if verified_ctx:
+        validation_ctx = {
+            "characters": verified_ctx.get("characters", ctx.get("characters", [])),
+            "locations": verified_ctx.get("locations", ctx.get("locations", [])),
+            "key_terms": ctx.get("key_terms", []),
+            "relationships": verified_ctx.get("relationships", ctx.get("relationships", []))
+        }
+    else:
+        validation_ctx = ctx
+    
     set_status("Phase 3: Generating scripts...")
     log("Phase 3: Generating scripts (one per hour, Groq primary, Gemini fallback)...")
     notify(f"Phase 3 Started: Generating {num_hours} scripts...")
@@ -2140,7 +2982,7 @@ def phase_scripts(json_file, duration, num_hours):
 
             # Log quality metrics (Phase 5)
             if best_script and best_metadata.get("source") != "raw_transcript":
-                fact_check = validate_script_factuality(best_script, ctx)
+                fact_check = validate_script_factuality(best_script, validation_ctx)
                 engagement = score_engagement(best_script)
                 log(f"   Script {i} quality: factuality={fact_check['score']}, engagement={engagement['overall']}, words={len(best_script.split())}")
                 if fact_check["issues"]:
@@ -2149,6 +2991,10 @@ def phase_scripts(json_file, duration, num_hours):
 
                 # Write structured metrics to JSONL file
                 log_generation_metrics(best_script, best_metadata, fact_check, engagement, METRICS_FILE)
+                
+                # Store failure data for self-improvement
+                game_title = env("GAME_TITLE", "")
+                store_generation_failure(best_script, best_metadata, fact_check, engagement, game_title=game_title, content_type=variant_key)
                 
                 # NEW: Also log to MemPalace for quality tracking
                 if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
@@ -2691,7 +3537,64 @@ def run_pipeline(skip=None, phases=None):
             if transcript_text:
                 game_title = env("GAME_TITLE", "Unknown Game")
                 extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
+                
+                # Context verification flow
                 if extracted:
+                    # Check against verified context
+                    verified = load_verified_context(game_title)
+                    
+                    if not verified:
+                        # First run - need confirmation
+                        log(f"First run for {game_title} - requesting context confirmation...")
+                        notify(f"🤖 Context Confirmation - {game_title}\n\nPlease review and approve context via Telegram inline buttons.")
+                        
+                        # Store pending context for callback
+                        set_pending_context(game_title, extracted, {}, {
+                            "has_significant_change": True,
+                            "reason": "first_run",
+                            "changes": {},
+                            "resolved_context": extracted
+                        })
+                        
+                        # Show confirmation and WAIT
+                        result = send_context_confirmation(game_title, extracted, {}, {
+                            "has_significant_change": True,
+                            "reason": "first_run",
+                            "changes": {},
+                            "resolved_context": extracted
+                        })
+                        
+                        # For Telegram, we need to wait for callback - stop pipeline here
+                        # User will click Approve to continue to Phase 3
+                        log("Waiting for context confirmation... Pipeline paused.")
+                        set_status("Waiting for context confirmation...")
+                        
+                        # Ask user to approve via Telegram
+                        return  # Stop here, user must approve via Telegram to continue
+                    else:
+                        # Check for significant changes
+                        comparison = compare_context_with_history(extracted, verified)
+                        
+                        if comparison.get("needs_confirmation"):
+                            log(f"Context changes detected for {game_title} - requesting confirmation...")
+                            notify(f"🤖 Context Changes Detected - {game_title}\n\nPlease review changes via Telegram.")
+                            
+                            # Store pending context for callback
+                            set_pending_context(game_title, extracted, verified, comparison)
+                            
+                            result = send_context_confirmation(game_title, extracted, verified, comparison)
+                            
+                            # Wait for user confirmation via callback
+                            log("Waiting for context confirmation... Pipeline paused.")
+                            set_status("Waiting for context confirmation...")
+                            
+                            return  # Stop here, user must approve to continue
+                        else:
+                            # No significant changes - use verified context
+                            log(f"Context verified (no significant changes)")
+                            save_verified_context(game_title, verified.get("context", {}))
+                    
+                    # Update context with extracted data
                     transcript_name = os.path.basename(json_file)
                     _cs_update_context(extracted, transcript_name)
                     log(f"Context extracted: {len(extracted.get('characters', []))} characters")
@@ -3022,6 +3925,73 @@ Example: /set_voice Vindemiatrix""")
         else:
             tg_send("No logs found.")
 
+    elif cmd == "/memory":
+        # Show MemPalace memory status
+        try:
+            mp_manager = get_mempalace_manager()
+            status = mp_manager.status()
+            
+            # Get list of all games (from Context directory)
+            context_dir = os.path.join(WORKSPACE, "Context")
+            games = []
+            if os.path.exists(context_dir):
+                for item in os.listdir(context_dir):
+                    item_path = os.path.join(context_dir, item)
+                    if os.path.isdir(item_path) and item != "history":
+                        # Check if has context.json
+                        ctx_file = os.path.join(item_path, "context.json")
+                        has_context = "✅" if os.path.exists(ctx_file) else "❌"
+                        games.append(f"- {item.replace('_', ' ').title()}: Context {has_context}")
+            
+            msg = "📚 MemPalace Memory:\n\n"
+            if status.get("status_output"):
+                msg += status["status_output"]
+            else:
+                msg += "No memory indexed yet.\n"
+            
+            if games:
+                msg += "\n🎮 Games in Context:\n"
+                msg += "\n".join(games)
+            else:
+                msg += "\nNo games in Context directory yet."
+            
+            tg_send(msg)
+        except Exception as e:
+            tg_send(f"Memory check failed: {e}")
+
+    elif cmd == "/games":
+        # Show all games with their status
+        context_dir = os.path.join(WORKSPACE, "Context")
+        game_data_dir = os.path.join(WORKSPACE, "game_data")
+        
+        msg = "🎮 ShortsForge Games:\n\n"
+        
+        # Current game
+        current_game = env("GAME_TITLE", "None")
+        msg += f"Current: {current_game}\n\n"
+        
+        # Games in Context directory
+        games = []
+        if os.path.exists(context_dir):
+            for item in os.listdir(context_dir):
+                item_path = os.path.join(context_dir, item)
+                if os.path.isdir(item_path) and item != "history":
+                    ctx_file = os.path.join(item_path, "context.json")
+                    has_context = os.path.exists(ctx_file)
+                    games.append((item, has_context))
+        
+        if games:
+            msg += "📁 Context Directory:\n"
+            for game, has_context in sorted(games):
+                name = game.replace("_", " ").title()
+                status = "✅" if has_context else "❌"
+                msg += f"- {name}: Context {status}\n"
+        else:
+            msg += "No games in Context directory.\n"
+        
+        msg += "\nUse /set_game <name> to switch games."
+        tg_send(msg)
+
 
     elif cmd == "/help":
         tg_send("""Lambda Cut — YouTube Shorts Pipeline
@@ -3056,6 +4026,7 @@ Commands:
 /config     - Settings and file counts
 /status     - Listener and pipeline status
 /debug      - Show recent debug log entries
+/learning_stats - Show self-improvement learning stats
 
 /version    - Show current version
 /update     - Check for and install updates
@@ -3111,6 +4082,43 @@ Commands:
             tg_send(f"Current version: v{local_ver}\nLatest version: v{remote_ver}\n\nUpdate available! Run /update to install.")
         else:
             tg_send(f"Current version: v{local_ver}\nLatest version: v{remote_ver or 'Unknown'}\n\nYou're up to date!")
+
+    elif cmd == "/learning_stats":
+        from script_validation import get_learning_summary, analyze_recent_failures
+        try:
+            summary = get_learning_summary()
+            week_analysis = analyze_recent_failures(window_hours=168)
+            
+            status_emoji = "🟢" if summary.get("learning_status") == "active" else "🟡"
+            
+            msg = f"""🧠 ShortsForge Learning Stats
+
+{status_emoji} Status: {summary.get('learning_status', 'unknown').replace('_', ' ').title()}
+
+📊 Last 24 Hours:
+- Failures: {summary.get('last_24h', {}).get('failures', 0)}"""
+            
+            if summary.get('last_24h', {}).get('top_hallucinations'):
+                msg += f"\n- Top hallucinations: {', '.join(summary['last_24h']['top_hallucinations'])}"
+            
+            msg += f"""
+
+📈 Last 7 Days:
+- Total failures: {summary.get('last_7_days', {}).get('total_failures', 0)}
+- Content types: {summary.get('last_7_days', {}).get('content_types_analyzed', 0)}
+- High-quality scripts: {summary.get('effective_configs', 0)}"""
+            
+            hall_dict = week_analysis.get("character_hallucinations", {})
+            if hall_dict and isinstance(hall_dict, dict):
+                top_hall = list(hall_dict.items())[:3]
+                if top_hall:
+                    msg += f"\n\n⚠️ Top Character Hallucinations:"
+                    for char, count in top_hall:
+                        msg += f"\n- {char}: {count}x"
+            
+            tg_send(msg)
+        except Exception as e:
+            tg_send(f"Learning stats unavailable: {e}")
 
     elif cmd == "/update":
         script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -3294,7 +4302,12 @@ WantedBy=default.target
                     
                     if cb_chat == str(chat) and cb_data:
                         print(f"Callback: {cb_data}")
-                        result = handle_menu_callback(cb_data)
+                        
+                        # Route to appropriate handler
+                        if cb_data.startswith("ctx_"):
+                            result = handle_context_callback(cb_data, env("GAME_TITLE", ""), cb_id)
+                        else:
+                            result = handle_menu_callback(cb_data)
                         
                         if result:
                             if isinstance(result, tuple):
@@ -3345,6 +4358,18 @@ WantedBy=default.target
                                 PIPELINE_STOP_REQUESTED = True
                                 tg_answer_callback(cb_id, "Pipeline stop requested")
                                 tg_send("Pipeline stop requested. Finishing current phase...")
+                            elif action_or_markup == "proceed_to_scripts":
+                                tg_answer_callback(cb_id, "✅ Proceeding to Phase 3...")
+                                tg_send("▶️ Continuing to Phase 3 (Script Generation)...")
+                                def _run_p3():
+                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
+                                    try: 
+                                        # Skip phases 1 and 2, run from phase 3
+                                        run_pipeline(phases=[3, 4, 5])
+                                    except Exception as e: 
+                                        tg_send(f"Phase 3 error: {e}")
+                                    finally: PIPELINE_RUNNING = False
+                                threading.Thread(target=_run_p3, daemon=True).start()
                             elif action_or_markup == "run_phase 1":
                                 tg_answer_callback(cb_id, "Running Phase 1...")
                                 def _run_p1():
@@ -3353,6 +4378,22 @@ WantedBy=default.target
                                     except Exception as e: tg_send(f"Phase 1 error: {e}")
                                     finally: PIPELINE_RUNNING = False
                                 threading.Thread(target=_run_p1, daemon=True).start()
+                            elif action_or_markup == "run_phase 2":
+                                tg_answer_callback(cb_id, "Running Phase 2...")
+                                def _run_p2():
+                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
+                                    try: run_pipeline(phases=[2])
+                                    except Exception as e: tg_send(f"Phase 2 error: {e}")
+                                    finally: PIPELINE_RUNNING = False
+                                threading.Thread(target=_run_p2, daemon=True).start()
+                            elif action_or_markup == "run_phase 2.5":
+                                tg_answer_callback(cb_id, "Running Phase 2.5 (Context Only)...")
+                                def _run_p25():
+                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
+                                    try: phase_context()
+                                    except Exception as e: tg_send(f"Phase 2.5 error: {e}")
+                                    finally: PIPELINE_RUNNING = False
+                                threading.Thread(target=_run_p25, daemon=True).start()
                             elif action_or_markup == "run_phase 3":
                                 tg_answer_callback(cb_id, "Running Phase 3...")
                                 def _run_p3():
@@ -3415,6 +4456,13 @@ WantedBy=default.target
                 txt = msg.get("text", "")
                 if cid == str(chat) and txt:
                     print(f"Received: {txt}")
+                    
+                    # Handle context editing flow
+                    if CONTEXT_EDIT_STATE and "step" in CONTEXT_EDIT_STATE:
+                        result = handle_context_edit_input(txt, cid)
+                        if result:
+                            continue
+                    
                     process_cmd(txt, cid)
                     if LISTENER_RESTART:
                         LISTENER_RESTART = False

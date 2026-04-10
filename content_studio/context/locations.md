@@ -1,3 +1,15 @@
 # Locations
 
-- [[fountain]]
+- [[Old house]]
+- [[Juneau]]
+- [[Desk door]]
+- [[Dorm room]]
+- [[Delos Crossing]]
+- [[Fireweed]]
+- [[old house]]
+- [[fire lead]]
+- [[dorm room]]
+- [[school]]
+- [[town]]
+- [[desk]]
+- [[Juno]]

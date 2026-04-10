@@ -1,0 +1,42 @@
+# Cross-Game Contamination Prevention Prompts
+# These prompts prevent characters from other game franchises appearing in generated scripts
+
+## WARNING: This document is CRITICAL for preventing hallucinations
+
+Tell Me Why is a DIFFERENT game from Life is Strange. They share the same developer (Dontnod) but have different characters, settings, and stories.
+
+### FORBIDDEN CHARACTERS (Life is Strange characters - DO NOT USE):
+
+Maxine Caulfield (Max), Safi, Moses, Michael, Aaron, Chloe Price, Warren Graham, Rachel Amber, Nathan Prescott, Victoria Chase, Kate Marsh, Hayden Jones, Daniel Diaz, Mark Jefferson, Joyce Price, David Madsen, Frank Bowers, Elliott Salem, Stanford, Fernando, Juliet Watson, Ryan, Valentine, Sakura, Mikey, Taylor
+
+### CORRECT CHARACTERS (Tell Me Why):
+
+Allison Ronan, Tyler Ronan, Mary Anne, Michael (friend), Aaron, Herbert
+
+## NEGATIVE EXAMPLES (Include in prompt)
+
+WRONG: "Max and Chloe appeared in the game"
+WHY: Max and Chloe are Life is Strange characters, not Tell Me Why
+
+WRONG: "The mystery echoes Safi's journey"
+WHY: Safi is Life is Strange character
+
+WRONG: "Following in the footsteps of the Arcadia Bay"
+WHY: Arcadia Bay is Life is Strange location
+
+WRONG: "Like Daniel and his powers"
+WHY: Daniel is Life is Strange 2 character
+
+## POSITIVE EXAMPLES
+
+CORRECT: "Twin siblings reuniting after years apart"
+CORRECT: "The mystery of Delos Crossing"
+CORRECT: "The bond between Allison and Tyler"
+
+## GENERATION RULES
+
+1. NEVER mention any Life is Strange character names
+2. NEVER reference Life is Strange plot elements
+3. ALWAYS keep the focus on Tell Me Why specific content
+4. Use "twin siblings" or "the Ronan twins" instead of generic terms
+5. Reference Delos Crossing (the town setting) instead of Arcadia Bay

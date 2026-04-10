@@ -4,6 +4,32 @@ All notable changes to this project are documented here.
 
 ---
 
+## 1.4.0 — 2026-04-10
+### Added
+- **Centralized Context Directory**: New `/Context/` folder for all context files shared between Pipeline and Content Studio
+  - Located at `/home/alph4r1us/ShortsForge/Context/`
+  - Per-game subdirectories with `context.json` and `quality.json`
+  - Replaces scattered context files in content_studio/ and root directory
+- **Telegram Commands**:
+  - `/memory` - Show MemPalace memory status and game list
+  - `/games` - Show all games with context/memory status
+- **Clear Context Button**: New button in context menu to clear game-specific context
+- **Content Studio Script Length Fix**: Increased maxOutputTokens from 500 to 3072 for 5-10 minute scripts (1500-2000 words)
+- **Script Validation Target**: Updated word count target from 200 to 1500 words for longer content
+
+### Changed
+- **Context Manager**: Updated to use new `/Context/` directory
+- **Content Studio**: Now uses centralized context path based on GAME_TITLE
+- **Removed Hardcoded Forbidden Characters**: Removed static forbidden list from `game_data/tell_me_why/characters.json`
+  - Characters are now dynamically learned from script validation
+- **Updated .gitignore**: Now ignores Context/, memory/, game_data/memory/, content_studio/, and metric files
+
+### Removed
+- **Deprecated Files**: Removed empty `output/` and `memory/` directories
+- **Old Context Files**: Removed `verified_context.json` from root (now in Context/)
+
+---
+
 ## 1.3.0 — 2026-04-09
 ### Added
 - **MemPalace Integration**: Persistent memory system for storing conversation history and learned data

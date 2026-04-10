@@ -1,0 +1,35 @@
+# Relationship Validation Prompt Templates
+# These templates are used during script validation to verify correct relationships
+
+## TEMPLATE: Sibling Relationships Check
+
+Verify the following sibling relationships are correctly portrayed:
+- Allison and Tyler are SIBLINGS (brother and sister)
+- Do NOT refer to them as "friends", "companions", "friendship", etc.
+- CORRECT: "his sister", "her brother", "the twins"
+- INCORRECT: "his friend", "her companion", "their friend"
+
+## TEMPLATE: Parent-Child Relationships Check
+
+Verify the following parent-child relationships:
+- Mary Anne is the MOTHER of Allison and Tyler
+- Do NOT use alternate names like "Mary Ann"
+- CORRECT: "their mother", "Mary Anne", "the twins' mother"
+- INCORRECT: "Mary Ann", "their guardian" (unless explicitly stated)
+
+## TEMPLATE: Relationship Keywords
+
+SIBLING_RELATIONSHIP_KEYWORDS: sibling, brother, sister, twins, twin, younger sister, older brother
+PARENT_RELATIONSHIP_KEYWORDS: mother, father, parent, mom, dad, their mother, their father
+FRIEND_RELATIONSHIP_KEYWORDS: friend, companion, buddy (use ONLY for non-family connections)
+
+## EXAMPLE: Relationship Errors
+
+ERROR: "Allison, his friend and companion"
+FIX: "Allison, his twin sister"
+
+ERROR: "Mary Ann"
+FIX: "Mary Anne"
+
+ERROR: "with Tyler, his best friend"
+FIX: "with Tyler, her twin brother"
