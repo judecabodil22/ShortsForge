@@ -436,8 +436,16 @@ def handle_context_callback(callback_data, game_title, cb_id):
         verified = load_verified_context(game_title)
         comparison = compare_context_with_history(extracted, verified)
         
-        # Save the resolved context as verified
-        save_verified_context(game_title, comparison.get("resolved_context", extracted))
+        # Get resolved context (from comparison or extracted)
+        resolved = comparison.get("resolved_context", extracted)
+        
+        # Save to verified_context.json
+        save_verified_context(game_title, resolved)
+        
+        # ALSO save to markdown files in Context/ directory
+        _cs_save_context(resolved)
+        
+        log(f"Context saved for {game_title}: {len(resolved.get('characters', []))} chars, {len(resolved.get('locations', []))} locs")
         
         return "✅ Context verified and saved! Proceeding to script generation...", "proceed_to_scripts"
     
@@ -900,8 +908,7 @@ def get_main_menu():
             [{"text": "🎤 TTS", "callback_data": "run_phase5"}],
             [{"text": "────────── Tools ──────────", "callback_data": "noop"}],
             [{"text": "🎨 Content Studio", "callback_data": "menu_content_studio"}, {"text": "🗂️ Context", "callback_data": "menu_context"}],
-            [{"text": "⚙️ Config", "callback_data": "menu_config"}, {"text": "🛑 Stop", "callback_data": "menu_stop"}],
-            [{"text": "ℹ️ Help", "callback_data": "menu_help"}, {"text": "🔄 Restart", "callback_data": "menu_restart"}]
+            [{"text": "⚙️ Config", "callback_data": "menu_config"}, {"text": "ℹ️ Help", "callback_data": "menu_help"}]
         ]
     }
 
@@ -932,8 +939,7 @@ def get_context_menu():
         "inline_keyboard": [
             [{"text": "📝 View Context", "callback_data": "ctx_view"}],
             [{"text": "🔄 Reload from Obsidian", "callback_data": "ctx_reload"}],
-            [{"text": "🗑️ Clear Context (Game)", "callback_data": "ctx_clear_game"}],
-            [{"text": f"🗑️ Clear Verified ({verified_info})", "callback_data": "ctx_clear_verified"}],
+            [{"text": "🗑️ Clear Context", "callback_data": "ctx_clear_verified"}],
             [{"text": "⬅️ Back", "callback_data": "menu_back"}]
         ]
     }
@@ -981,7 +987,8 @@ def handle_help_callback(callback_data):
 
 🎨 Content Studio:
 /cs - Open Content Studio
-/cs_context - View/clear context
+/cs_context - View context
+/context_clear - Clear all context
 
 🛠️ Tools:
 /cleanup - Delete all generated files
@@ -1222,7 +1229,6 @@ def handle_menu_callback(callback_data):
         game = callback_data.replace("set_game_", "")
         if game == "_clear":
             update_env_var("GAME_TITLE", "")
-            clear_verified_context("")
             return "✅ Game title cleared"
         update_env_var("GAME_TITLE", game)
         return f"✅ Game set to: {game}"
@@ -1230,23 +1236,10 @@ def handle_menu_callback(callback_data):
         return _show_context_view()
     elif callback_data == "ctx_reload":
         return _reload_context_from_obsidian()
-    elif callback_data == "ctx_clear_game":
-        # Clear game context from Context directory
-        game = env("GAME_TITLE", "")
-        if game:
-            game_key = game.lower().replace(" ", "_")
-            game_dir = os.path.join(WORKSPACE, "Context", game_key)
-            ctx_file = os.path.join(game_dir, "context.json")
-            if os.path.exists(ctx_file):
-                os.remove(ctx_file)
-                return f"✅ Context cleared for {game}"
-            else:
-                return f"ℹ️ No context file for {game}"
-        return "ℹ️ No game set"
     elif callback_data == "ctx_clear_verified":
         game = env("GAME_TITLE", "")
         clear_verified_context(game)
-        return "✅ Verified context cleared"
+        return "✅ Context cleared"
     elif callback_data.startswith("ctx_"):
         # Route to context callback handler
         # Extract cb_id from callback query if available
@@ -2071,7 +2064,7 @@ def _cs_generate_tts_only():
 
 
 def _cs_load_context():
-    """Load context from centralized Context directory (markdown files)."""
+    """Load context from centralized Context directory (handles both list and table format)."""
     ctx = {
         "characters": [],
         "locations": [],
@@ -2086,90 +2079,603 @@ def _cs_load_context():
     ctx_dir = os.path.join(CONTEXT_DIR, game)
     os.makedirs(ctx_dir, exist_ok=True)
     
-    # Load characters from markdown
+    def extract_from_list(line):
+        """Extract name from list item or table cell."""
+        name = line.strip()
+        if name.startswith('[[') and name.endswith(']]'):
+            name = name[2:-2]
+        return name
+    
+    # Helper to extract items from table
+    def extract_items_from_table(content, category):
+        items = []
+        for line in content.split('\n'):
+            line = line.strip()
+            if line.startswith('|') and '---' not in line:
+                parts = [p.strip() for p in line.split('|')[1:-1]]
+                if parts and parts[0]:
+                    item = extract_from_table_cell(parts[0])
+                    # Skip header rows
+                    if item and item.lower() not in ['name', 'character', 'location', 'term', 'character a'] and item not in items:
+                        items.append(item)
+        return items
+    
+    def extract_from_table_cell(cell):
+        """Extract name from table cell."""
+        cell = cell.strip()
+        if cell.startswith('[[') and cell.endswith(']]'):
+            return cell[2:-2]
+        return cell
+    
+    def extract_from_table(line):
+        """Extract items from table row."""
+        if not line.startswith('|') or '---' in line:
+            return []
+        parts = [p.strip() for p in line.split('|')[1:-1]]
+        if not parts or not parts[0]:
+            return []
+        # First column contains the name (may have wiki-links)
+        name = parts[0].strip()
+        if name.startswith('[[') and name.endswith(']]'):
+            name = name[2:-2]
+        # Skip header rows
+        if name.lower() in ['name', 'character', 'location', 'term', 'character a']:
+            return []
+        return [name] if name else []
+    
+    # Load characters from markdown (table format)
     chars_file = os.path.join(ctx_dir, "characters.md")
     if os.path.exists(chars_file):
         with open(chars_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                # Skip empty lines, headers, and non-list items
-                if not line or line.startswith('#') or not line.startswith('- '):
-                    continue
-                char = line.lstrip('- ').strip()
-                if char and char not in ctx["characters"]:
-                    ctx["characters"].append(char)
+            content = f.read()
+        for line in content.split('\n'):
+            items = extract_from_table(line)
+            for item in items:
+                if item and item not in ctx["characters"]:
+                    ctx["characters"].append(item)
     
-    # Load locations from markdown
+    # Load locations from markdown (table format)
     locs_file = os.path.join(ctx_dir, "locations.md")
     if os.path.exists(locs_file):
         with open(locs_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#') or not line.startswith('- '):
-                    continue
-                loc = line.lstrip('- ').strip()
-                if loc and loc not in ctx["locations"]:
-                    ctx["locations"].append(loc)
+            content = f.read()
+        for line in content.split('\n'):
+            items = extract_from_table(line)
+            for item in items:
+                if item and item not in ctx["locations"]:
+                    ctx["locations"].append(item)
     
-    # Load key_terms from markdown
+    # Load key_terms from markdown (table format)
     terms_file = os.path.join(ctx_dir, "key_terms.md")
     if os.path.exists(terms_file):
         with open(terms_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#') or not line.startswith('- '):
-                    continue
-                term = line.lstrip('- ').strip()
-                if term and term not in ctx["key_terms"]:
-                    ctx["key_terms"].append(term)
+            content = f.read()
+        for line in content.split('\n'):
+            items = extract_from_table(line)
+            for item in items:
+                if item and item not in ctx["key_terms"]:
+                    ctx["key_terms"].append(item)
     
     # Load relationships from markdown
     rels_file = os.path.join(ctx_dir, "relationships.md")
     if os.path.exists(rels_file):
         with open(rels_file, 'r') as f:
-            for line in f:
+            content = f.read()
+        
+        # For relationships, handle table format: Character A | Connection | Character B
+        if '|' in content and '---' in content:
+            for line in content.split('\n'):
+                line = line.strip()
+                if line.startswith('|') and '---' not in line:
+                    # Skip header
+                    if 'Character A' in line or 'Character' in line:
+                        continue
+                    
+                    parts = [p.strip() for p in line.split('|')[1:-1]]
+                    if len(parts) >= 3:
+                        # Parse: Character A | Connection | Character B
+                        char_a = extract_from_table_cell(parts[0])
+                        connection = parts[1]
+                        char_b = extract_from_table_cell(parts[2])
+                        
+                        # Skip if Character A is empty or just "-"
+                        if not char_a or char_a == '-':
+                            continue
+                        
+                        # Build relationship string
+                        if char_b and char_b != '-':
+                            rel = f"{char_a} and {char_b} are {connection}"
+                        else:
+                            # Single character relationship
+                            rel = f"{char_a} is {connection}"
+                        
+                        if rel and rel not in ctx["relationships"]:
+                            ctx["relationships"].append(rel)
+        else:
+            # Fall back to list format
+            for line in content.split('\n'):
                 line = line.strip()
                 if not line or line.startswith('#') or not line.startswith('- '):
                     continue
-                rel = line.lstrip('- ').strip()
+                rel_line = line.lstrip('- ').strip()
+                rel = rel_line
+                rel = re.sub(r'\[\[([^\]]+)\]\]', r'\1', rel)
                 if rel and rel not in ctx["relationships"]:
                     ctx["relationships"].append(rel)
     
     return ctx
 
+
 def _cs_save_context(ctx):
-    """Save context to centralized Context directory (markdown files)."""
+    """Save context to centralized Context directory (smart save - preserves manual edits)."""
     game = env("GAME_TITLE", "default").lower().replace(" ", "_")
     ctx_dir = os.path.join(CONTEXT_DIR, game)
     os.makedirs(ctx_dir, exist_ok=True)
     
-    # Save characters as markdown
-    chars_file = os.path.join(ctx_dir, "characters.md")
-    with open(chars_file, 'w') as f:
-        f.write("# Characters\n\n")
-        for char in ctx.get("characters", []):
-            f.write(f"- {char}\n")
+    def wiki(name):
+        return f"[[{name}]]"
     
-    # Save locations as markdown
-    locs_file = os.path.join(ctx_dir, "locations.md")
-    with open(locs_file, 'w') as f:
-        f.write("# Locations\n\n")
-        for loc in ctx.get("locations", []):
-            f.write(f"- {loc}\n")
+    def smart_save_list_items(file_path, new_items, item_type):
+        """Save list items while preserving existing manual content."""
+        if not os.path.exists(file_path):
+            # File doesn't exist - create with full format
+            return _create_full_format_file(file_path, new_items, item_type)
+        
+        # File exists - read and preserve manual content
+        with open(file_path, 'r') as f:
+            content = f.read()
+        
+        # Extract existing items from file (both plain and wiki-link format)
+        existing_items = _extract_items_from_markdown(content)
+        
+        # Merge: existing + new (avoid duplicates)
+        merged_items = list(existing_items)
+        for item in new_items:
+            if item not in merged_items:
+                merged_items.append(item)
+        
+        # Rebuild file preserving everything except the item list
+        return _rebuild_file_preserving_content(file_path, content, merged_items, item_type)
     
-    # Save key_terms as markdown
-    terms_file = os.path.join(ctx_dir, "key_terms.md")
-    with open(terms_file, 'w') as f:
-        f.write("# Key Terms\n\n")
-        for term in ctx.get("key_terms", []):
-            f.write(f"- {term}\n")
+    # Save each category with smart save
+    smart_save_list_items(os.path.join(ctx_dir, "characters.md"), ctx.get("characters", []), "characters")
+    smart_save_list_items(os.path.join(ctx_dir, "locations.md"), ctx.get("locations", []), "locations")
+    smart_save_list_items(os.path.join(ctx_dir, "key_terms.md"), ctx.get("key_terms", []), "key_terms")
     
-    # Save relationships as markdown
+    # For relationships, handle differently since format is more complex
     rels_file = os.path.join(ctx_dir, "relationships.md")
-    with open(rels_file, 'w') as f:
-        f.write("# Relationships\n\n")
-        for rel in ctx.get("relationships", []):
-            f.write(f"- {rel}\n")
+    if os.path.exists(rels_file):
+        with open(rels_file, 'r') as f:
+            content = f.read()
+        existing_rels = _extract_relationships_from_markdown(content)
+    else:
+        existing_rels = []
+    
+    # Merge relationships
+    merged_rels = list(existing_rels)
+    for rel in ctx.get("relationships", []):
+        if rel not in merged_rels:
+            merged_rels.append(rel)
+    
+    # Rebuild relationships file preserving content
+    _rebuild_relationships_preserving_content(rels_file, merged_rels, ctx.get("characters", []))
+
+
+def _extract_items_from_markdown(content):
+    """Extract list items from markdown, handling both table and list format."""
+    items = []
+    
+    # First try table format
+    if '|' in content and '---' in content:
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line.startswith('|') or '---' in line:
+                continue
+            parts = [p.strip() for p in line.split('|')[1:-1]]
+            if not parts or not parts[0]:
+                continue
+            name = parts[0].strip()
+            if name.startswith('[[') and name.endswith(']]'):
+                name = name[2:-2]
+            # Skip header rows
+            if name.lower() in ['name', 'character', 'location', 'term', 'character a']:
+                continue
+            if name:
+                items.append(name)
+        return items
+    
+    # Fall back to list format
+    for line in content.split('\n'):
+        line = line.strip()
+        if line.startswith('- '):
+            item = line[2:].strip()
+            if item.startswith('[[') and item.endswith(']]'):
+                item = item[2:-2]
+            if item:
+                items.append(item)
+    return items
+
+
+def _extract_relationships_from_markdown(content):
+    """Extract relationship lines from markdown, handling table and list format."""
+    rels = []
+    
+    # First try table format
+    if '|' in content and '---' in content:
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line.startswith('|') or '---' in line:
+                continue
+            parts = [p.strip() for p in line.split('|')[1:-1]]
+            if len(parts) < 3:
+                continue
+            # Skip header
+            if 'Character' in parts[0]:
+                continue
+            
+            char_a = parts[0]
+            if char_a.startswith('[['):
+                char_a = char_a[2:-2]
+            if not char_a or char_a == '-':
+                continue
+            
+            connection = parts[1]
+            char_b = parts[2]
+            if char_b.startswith('[['):
+                char_b = char_b[2:-2]
+            
+            if char_b and char_b != '-':
+                rel = f"{char_a} and {char_b} are {connection}"
+            else:
+                rel = f"{char_a} is {connection}"
+            
+            if rel:
+                rels.append(rel)
+        return rels
+    
+    # Fall back to list format
+    for line in content.split('\n'):
+        line = line.strip()
+        if line.startswith('- '):
+            rel = line[2:].strip()
+            if rel and not rel.startswith('[[') and not rel.startswith('#'):
+                rels.append(rel)
+    return rels
+
+
+def _create_full_format_file(file_path, items, item_type):
+    """Create a new file with full beautiful format."""
+    def wiki(name):
+        return f"[[{name}]]"
+    
+    game = env("GAME_TITLE", "default")
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Get appropriate data based on type
+    ctx = _cs_load_context()
+    
+    with open(file_path, 'w') as f:
+        # Frontmatter
+        f.write(f"""---
+game: {game}
+game_developer: 
+created: {today}
+updated: {today}
+type: {item_type}
+tags: [context, {item_type}]
+---
+
+# {item_type.title().replace('_', ' ')}
+
+> [!NOTE]
+> Verified {item_type} extracted from game transcripts.
+
+## {item_type.title().replace('_', ' ')} List
+
+""")
+        
+        # Table header
+        f.write(f"| Name | Status | Notes |\n")
+        f.write(f"|------|--------|-------|\n")
+        
+        for item in items:
+            f.write(f"| {wiki(item)} | ✅ Verified | |\n")
+        
+        # Mermaid with proper unique nodes
+        unique_items = list(dict.fromkeys(items))[:10]
+        
+        mermaid_header = f"""
+## {item_type.title().replace('_', ' ')} Graph
+
+```mermaid
+graph TD
+"""
+        f.write(mermaid_header)
+        
+        for i, item in enumerate(unique_items):
+            safe_id = f"{item_type[0].upper()}{i}"
+            f.write(f"    {safe_id}[{item}]\n")
+        
+        if len(unique_items) > 1:
+            for i in range(min(3, len(unique_items) - 1)):
+                safe_id1 = f"{item_type[0].upper()}{i}"
+                safe_id2 = f"{item_type[0].upper()}{i+1}"
+                f.write(f"    {safe_id1} --> {safe_id2}\n")
+        
+        f.write("```\n")
+        
+        footer = f"""
+
+---
+
+### 🔍 Sources
+- 
+
+### ✅ Last Verified
+{today}
+
+### 📝 Notes
+- 
+
+---
+
+**Tags:** #{item_type}
+"""
+        f.write(footer)
+    
+    return True
+
+
+def _rebuild_file_preserving_content(file_path, content, items, item_type):
+    """Rebuild markdown file preserving manual edits."""
+    def wiki(name):
+        return f"[[{name}]]"
+    
+    game = env("GAME_TITLE", "default")
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Extract frontmatter and sections that shouldn't be regenerated
+    sections = {}
+    
+    # Find frontmatter
+    if content.startswith('---'):
+        parts = content.split('---', 2)
+        if len(parts) >= 3:
+            sections['frontmatter'] = parts[1]
+            content = parts[2]
+    
+    # Extract existing manual sections (Notes, Sources, etc.)
+    manual_sections = []
+    in_notes = False
+    notes_content = []
+    
+    for line in content.split('\n'):
+        if '### 📝 Notes' in line or '### Notes' in line:
+            in_notes = True
+            continue
+        if in_notes:
+            if line.startswith('---') or line.startswith('**Tags'):
+                in_notes = False
+                if notes_content:
+                    manual_sections = notes_content
+                notes_content = []
+            else:
+                notes_content.append(line)
+    
+    # Build new content
+    new_content = []
+    
+    # Keep frontmatter if exists
+    if 'frontmatter' in sections:
+        new_content.append(f"---\n{sections['frontmatter']}\n---")
+    else:
+        new_content.append(f"""---
+game: {game}
+game_developer: 
+created: {today}
+updated: {today}
+type: {item_type}
+tags: [context, {item_type}]
+---""")
+    
+    new_content.append(f"""
+# {item_type.title().replace('_', ' ')}
+
+> [!NOTE]
+> Verified {item_type} extracted from game transcripts.
+
+## {item_type.title().replace('_', ' ')} List
+
+| Name | Status | Notes |
+|------|--------|-------|
+""")
+    
+    for item in items:
+        new_content.append(f"| {wiki(item)} | ✅ Verified | |")
+    
+    # Add Mermaid with proper unique nodes
+    unique_items = list(dict.fromkeys(items))  # Remove duplicates while preserving order
+    
+    new_content.append(f"""
+## {item_type.title().replace('_', ' ')} Graph
+
+```mermaid
+graph TD
+""")
+    
+    # Create unique nodes for each item with proper Mermaid syntax
+    for i, item in enumerate(unique_items[:10]):  # Limit to 10 items
+        safe_id = f"{item_type[0].upper()}{i}"  # e.g., C0, L0, K0
+        new_content.append(f"    {safe_id}[{item}]")
+    
+    # Create proper connections between items
+    if len(unique_items) > 1:
+        for i in range(min(3, len(unique_items) - 1)):
+            safe_id1 = f"{item_type[0].upper()}{i}"
+            safe_id2 = f"{item_type[0].upper()}{i+1}"
+            new_content.append(f"    {safe_id1} --> {safe_id2}")
+    
+    new_content.append("```")
+    
+    # Add sections
+    new_content.append(f"""
+---
+
+### 🔍 Sources
+- 
+
+### ✅ Last Verified
+{today}
+
+### 📝 Notes
+{chr(10).join(manual_sections) if manual_sections else '-'}
+
+---
+
+**Tags:** #{item_type}
+""")
+    
+    with open(file_path.replace('\\', '/'), 'w') as f:
+        f.write('\n'.join(new_content))
+    
+    return True
+
+
+def _rebuild_relationships_preserving_content(file_path, relationships, characters):
+    """Rebuild relationships file preserving manual edits."""
+    def wiki(name):
+        return f"[[{name}]]"
+    
+    game = env("GAME_TITLE", "default")
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Read existing file
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            existing_content = f.read()
+    else:
+        existing_content = ""
+    
+    # Extract manual sections
+    manual_notes = ""
+    if '### 📝 Notes' in existing_content:
+        start = existing_content.find('### 📝 Notes')
+        end = existing_content.find('---', start + 10)
+        if end > start:
+            manual_notes = existing_content[start:end]
+    
+    # Build proper relationship entries
+    parsed_rels = []
+    for rel in relationships:
+        # Parse "Character A and Character B are relationship"
+        if ' and ' in rel and ' are ' in rel:
+            left = rel.split(' are ')[0].strip()
+            connection = rel.split(' are ')[1].strip() if ' are ' in rel else rel
+            
+            chars_in_rel = left.split(' and ')
+            char_a = chars_in_rel[0].strip() if len(chars_in_rel) > 0 else ""
+            char_b = chars_in_rel[1].strip() if len(chars_in_rel) > 1 else ""
+            
+            # Skip self-referential relationships (broken AI output)
+            if not char_a or not char_b or char_a.lower() == char_b.lower():
+                continue
+            
+            parsed_rels.append({
+                "char_a": char_a,
+                "char_b": char_b,
+                "connection": connection
+            })
+        elif ' is ' in rel:
+            # Handle single character: "Allison is daughter"
+            left = rel.split(' is ')[0].strip()
+            connection = rel.split(' is ')[1].strip() if ' is ' in rel else ""
+            
+            if left and connection:
+                parsed_rels.append({
+                    "char_a": left,
+                    "char_b": "",
+                    "connection": connection
+                })
+    
+    with open(file_path.replace('\\', '/'), 'w') as f:
+        f.write(f"""---
+game: {game}
+game_developer: 
+created: {today}
+updated: {today}
+type: relationships
+tags: [context, relationships]
+---
+
+# Relationships
+
+> [!NOTE]
+> Verified character relationships from game transcripts.
+
+## Relationship List
+
+| Character A | Connection | Character B | Status | Notes |
+|------------|------------|-------------|--------|-------|
+""")
+        
+        # Write parsed relationships to table
+        for rel in parsed_rels:
+            char_a_wiki = wiki(rel["char_a"]) if rel["char_a"] else "-"
+            char_b_wiki = wiki(rel["char_b"]) if rel["char_b"] else "-"
+            connection = rel["connection"] if rel["connection"] else "-"
+            
+            f.write(f"| {char_a_wiki} | {connection} | {char_b_wiki} | ✅ Verified | |\n")
+        
+        # Add Mermaid diagram with proper connections
+        f.write(f"""
+## Relationship Diagram
+
+```mermaid
+graph TD
+""")
+        
+        # Create unique relationships for Mermaid with unique IDs
+        used_ids = set()
+        for i, rel in enumerate(parsed_rels):
+            if rel["char_a"]:
+                # Create unique ID
+                safe_a = rel["char_a"].replace(" ", "_")[:8]
+                if safe_a in used_ids:
+                    safe_a = f"{safe_a}_{i}"
+                used_ids.add(safe_a)
+                
+                if rel["char_b"]:
+                    # Two-way relationship
+                    safe_b = rel["char_b"].replace(" ", "_")[:8]
+                    if safe_b in used_ids:
+                        safe_b = f"{safe_b}_{i}"
+                    used_ids.add(safe_b)
+                    
+                    conn = rel["connection"].replace(" ", "_")[:10] if rel["connection"] else "related"
+                    f.write(f"    {safe_a}[{rel['char_a']}] -->|{conn}| {safe_b}[{rel['char_b']}]\n")
+                else:
+                    # Single character - show as standalone node
+                    conn = rel["connection"].replace(" ", "_")[:10] if rel["connection"] else "related"
+                    f.write(f"    {safe_a}[{rel['char_a']}] -->|{conn}| R{i}[Relationship]\n")
+        
+        f.write("```\n")
+        
+        f.write(f"""
+
+---
+
+### 🔍 Sources
+- 
+
+### ✅ Last Verified
+{today}
+
+{manual_notes}
+
+---
+
+**Tags:** #relationships
+""")
 
 
 def _detect_corrections(old_ctx, new_ctx):
@@ -2315,7 +2821,17 @@ or relationships that were previously flagged as incorrect.
 
 {constraints_text}
 
+TITLE STRATEGY: Create a compelling YouTube title that:
+- Uses curiosity gap: tease without revealing too much
+- Incorporates power words: Secret, Truth, Revealed, Shocking, etc. when appropriate
+- Considers question format when it creates genuine intrigue
+- Uses numbers for list-based content when relevant (e.g., "3 Secrets", "5 Things")
+- Creates emotional hook (surprise, wonder, controversy, warmth)
+- Matches video content accurately (no bait-and-switch)
+- Optimizes for watch time: promise delivery in the content
+
 Respond in this exact format:
+TITLE: [engaging YouTube title following the strategies above]
 CHARACTERS: [comma-separated list or "none"]
 LOCATIONS: [comma-separated list or "none"]
 KEY_TERMS: [comma-separated list or "none"]
@@ -2339,14 +2855,17 @@ Transcript excerpt:
         with urllib.request.urlopen(req, timeout=60) as resp:
             r = json.loads(resp.read())
             text = r["candidates"][0]["content"]["parts"][0]["text"]
-            
+
             characters = []
             locations = []
             key_terms = []
             relationships = []
-            
+            title = ""
+
             for line in text.split("\n"):
-                if line.startswith("CHARACTERS:"):
+                if line.startswith("TITLE:"):
+                    title = line.split(":", 1)[1].strip()
+                elif line.startswith("CHARACTERS:"):
                     chars = line.split(":", 1)[1].strip()
                     characters = [c.strip() for c in chars.split(",") if c.strip() and c.strip().lower() != "none"]
                 elif line.startswith("LOCATIONS:"):
@@ -2358,8 +2877,9 @@ Transcript excerpt:
                 elif line.startswith("RELATIONSHIPS:"):
                     rels = line.split(":", 1)[1].strip()
                     relationships = [r.strip() for r in rels.split(";") if r.strip() and r.strip().lower() != "none"]
-            
+
             return {
+                "title": title,
                 "characters": characters,
                 "locations": locations,
                 "key_terms": key_terms,
@@ -2385,22 +2905,27 @@ def _cs_update_context(extracted, transcript_name, script_summary=None):
     if has_corrections:
         log(f"[LEARNING] Detected corrections: {corrections}")
         _store_corrections_as_constraints(corrections)
-    
+
+    # Merge title (use the most recent non-empty title)
+    extracted_title = extracted.get("title", "").strip()
+    if extracted_title and (not ctx.get("title") or len(extracted_title) > len(ctx.get("title", ""))):
+        ctx["title"] = extracted_title
+
     # Merge characters (avoid duplicates)
     for char in extracted.get("characters", []):
         if char not in ctx["characters"]:
             ctx["characters"].append(char)
-    
+
     # Merge locations
     for loc in extracted.get("locations", []):
         if loc not in ctx["locations"]:
             ctx["locations"].append(loc)
-    
+
     # Merge key terms
     for term in extracted.get("key_terms", []):
         if term not in ctx["key_terms"]:
             ctx["key_terms"].append(term)
-    
+
     # Merge relationships
     for rel in extracted.get("relationships", []):
         if rel not in ctx["relationships"]:
@@ -2561,8 +3086,44 @@ def phase_transcribe(video):
     json_file = os.path.join(TRANSCRIPTS_DIR, f"{basename}.json")
 
     if os.path.exists(json_file):
-        log("Phase 2: Transcript exists, skipping")
+        log("Phase 2: Transcript exists, skipping transcription")
         notify("Phase 2 Skipped (transcript exists)")
+        
+        # STILL extract context even if transcript exists
+        try:
+            import json
+            with open(json_file) as f:
+                data = json.load(f)
+            transcript_text = ""
+            for seg in data.get("segments", []):
+                text = re.sub(r"<[^>]*>", "", seg.get("text", ""))
+                if text.strip():
+                    transcript_text += text + " "
+            
+            if transcript_text:
+                game_title = env("GAME_TITLE", "Unknown Game")
+                extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
+                
+                if extracted:
+                    _cs_update_context(extracted, os.path.basename(json_file))
+                    _cs_save_context(extracted)
+                    save_verified_context(game_title, extracted)
+                    
+                    log(f"Context extracted from existing transcript: {len(extracted.get('characters', []))} chars")
+                    notify(f"📚 Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
+                    
+                    # Mine to MemPalace
+                    if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+                        try:
+                            mp_manager = get_mempalace_manager()
+                            if mp_manager and json_file:
+                                mp_manager.mine_transcript(json_file, game_title)
+                                log("MemPalace: Transcript mined")
+                        except Exception as mp_err:
+                            log(f"MemPalace mining failed: {mp_err}")
+        except Exception as ctx_err:
+            log(f"Context extraction failed: {ctx_err}")
+        
         return json_file
 
     set_status("Phase 2: Transcribing...")
@@ -2586,6 +3147,7 @@ def phase_transcribe(video):
             return f"{hrs:02}:{mins:02}:{secs:02},{ms:03}"
         
         seg_list = []
+        transcript_text = ""
         with open(srt_path, "w") as srt_f:
             sidx = 1
             for segment in segments:
@@ -2605,6 +3167,29 @@ def phase_transcribe(video):
         
         log("faster-whisper transcription complete")
         transcription_success = True
+        
+        # Extract context from transcript after successful transcription
+        if 'transcript_text' in locals() and transcript_text:
+            game_title = env("GAME_TITLE", "Unknown Game")
+            extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
+            
+            if extracted:
+                _cs_update_context(extracted, os.path.basename(json_path))
+                _cs_save_context(extracted)
+                save_verified_context(game_title, extracted)
+                
+                log(f"Context extracted from transcript: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
+                notify(f"📚 Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
+                
+                # Mine to MemPalace
+                if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
+                    try:
+                        mp_manager = get_mempalace_manager()
+                        if mp_manager and json_path:
+                            mp_manager.mine_transcript(json_path, game_title)
+                            log("MemPalace: Transcript mined")
+                    except Exception as mp_err:
+                        log(f"MemPalace mining failed: {mp_err}")
     except Exception as e:
         log(f"faster-whisper failed: {e}")
         
@@ -2891,6 +3476,18 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
             context_info += f"Key Terms: {', '.join(terms)}\n"
         if rels:
             context_info += f"Relationships: {'; '.join(rels)}\n"
+    
+    # Title generation guidance for more engaging YouTube titles
+    title_guidance = """
+TITLE STRATEGY: Create a compelling YouTube title that:
+- Uses curiosity gap: tease without revealing too much
+- Incorporates power words: Secret, Truth, Revealed, Shocking, etc. when appropriate
+- Considers question format when it creates genuine intrigue
+- Uses numbers for list-based content when relevant (e.g., "3 Secrets", "5 Things")
+- Creates emotional hook (surprise, wonder, controversy, warmth)
+- Matches video content accurately (no bait-and-switch)
+- Optimizes for watch time: promise delivery in the content
+"""
 
     return f"""You are an expert YouTube Shorts scriptwriter specializing in gaming content. {game_line}{context_info}
 {learned_constraints_text}
@@ -2926,10 +3523,13 @@ Line 2: (blank)
 Line 3+: The spoken script — pure text, no labels, no headers, no formatting
 
 TITLE RULES:
-- 6-10 words maximum
-- No ALL CAPS words
-- No exclamation marks or question marks
-- Hint at the topic without spoiling the ending
+- 5-12 words optimal (flexible range for impact)
+- Strategic punctuation allowed: ?, !, :, ... (use purposefully)
+- Power words encouraged: Secret, Truth, Revealed, Shocking, etc.
+- Questions highly effective (create curiosity gap)
+- Numbers perform well: "3 Secrets", "Why You", "How to"
+- Hint at topic without full reveal (maintain intrigue)
+- Avoid: Excessive clickbait, misleading claims, ALL CAPS overuse
 
 Transcript:
 {transcript}"""
@@ -3744,68 +4344,22 @@ def run_pipeline(skip=None, phases=None):
                 game_title = env("GAME_TITLE", "Unknown Game")
                 extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
                 
-                # Context verification flow
+                # Auto-save context (no confirmation needed - user can edit in Obsidian later)
                 if extracted:
-                    # Check against verified context
-                    verified = load_verified_context(game_title)
-                    
-                    if not verified:
-                        # First run - need confirmation
-                        log(f"First run for {game_title} - requesting context confirmation...")
-                        notify(f"🤖 Context Confirmation - {game_title}\n\nPlease review and approve context via Telegram inline buttons.")
-                        
-                        # Store pending context for callback
-                        set_pending_context(game_title, extracted, {}, {
-                            "has_significant_change": True,
-                            "reason": "first_run",
-                            "changes": {},
-                            "resolved_context": extracted
-                        })
-                        
-                        # Show confirmation and WAIT
-                        result = send_context_confirmation(game_title, extracted, {}, {
-                            "has_significant_change": True,
-                            "reason": "first_run",
-                            "changes": {},
-                            "resolved_context": extracted
-                        })
-                        
-                        # For Telegram, we need to wait for callback - stop pipeline here
-                        # User will click Approve to continue to Phase 3
-                        log("Waiting for context confirmation... Pipeline paused.")
-                        set_status("Waiting for context confirmation...")
-                        
-                        # Ask user to approve via Telegram
-                        return  # Stop here, user must approve via Telegram to continue
-                    else:
-                        # Check for significant changes
-                        comparison = compare_context_with_history(extracted, verified)
-                        
-                        if comparison.get("needs_confirmation"):
-                            log(f"Context changes detected for {game_title} - requesting confirmation...")
-                            notify(f"🤖 Context Changes Detected - {game_title}\n\nPlease review changes via Telegram.")
-                            
-                            # Store pending context for callback
-                            set_pending_context(game_title, extracted, verified, comparison)
-                            
-                            result = send_context_confirmation(game_title, extracted, verified, comparison)
-                            
-                            # Wait for user confirmation via callback
-                            log("Waiting for context confirmation... Pipeline paused.")
-                            set_status("Waiting for context confirmation...")
-                            
-                            return  # Stop here, user must approve to continue
-                        else:
-                            # No significant changes - use verified context
-                            log(f"Context verified (no significant changes)")
-                            save_verified_context(game_title, verified.get("context", {}))
-                    
                     # Update context with extracted data
                     transcript_name = os.path.basename(json_file)
                     _cs_update_context(extracted, transcript_name)
-                    log(f"Context extracted: {len(extracted.get('characters', []))} characters")
+                    
+                    # Save to markdown files for Obsidian
+                    _cs_save_context(extracted)
+                    
+                    # Also save to verified context
+                    save_verified_context(game_title, extracted)
+                    
+                    log(f"Context auto-extracted and saved: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
+                    notify(f"📚 Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
                 
-                # NEW: Also mine to MemPalace for persistent memory
+                # Mine to MemPalace for persistent memory
                 log(f"[DEBUG] MEMPALACE_AVAILABLE={MEMPALACE_AVAILABLE}, MEMORY_ENABLED={env('MEMORY_ENABLED', 'true')}")
                 if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
                     try:
@@ -4058,10 +4612,10 @@ Example: /set_voice Vindemiatrix""")
         msg += f"Previous Scripts: {len(scripts)}"
         
         tg_send(msg)
-        
-        if args and args.lower() == "clear":
-            _cs_clear_context()
-            tg_send("Context cleared.")
+
+    elif cmd == "/context_clear":
+        _cs_clear_context()
+        tg_send("Context cleared.")
 
     elif cmd in ("/config", "/settings"):
         voice = env("TTS_VOICE", "Vindemiatrix")
@@ -4236,7 +4790,7 @@ Commands:
 /set_game Title   - Set game title for scripts
 /set_game clear   - Clear game title
 /cs_context       - Show Content Studio context
-/cs_context clear - Clear context
+/context_clear     - Clear all context
 
 /config     - Settings and file counts
 /status     - Listener and pipeline status

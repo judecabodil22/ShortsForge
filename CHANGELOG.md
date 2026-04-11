@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 
 ---
 
+## 1.6.0 — 2026-04-11
+### Added
+- **Desktop Application Framework**: New side-by-side button/terminal menu design prepared
+  - Button panel for pipeline control and configuration
+  - Terminal-style status display for real-time monitoring
+  - Ready for PyQt6 implementation
+- **Dedicated Context Clear Command**: New `/context_clear` command
+  - Clears all pipeline and content studio context
+  - Available in both CLI and Telegram
+
+### Changed
+- **Telegram Inline Menu Cleanup**:
+  - Removed `Stop` button (🛑) from main menu - replaced with help
+  - Removed inline `/cs_context clear` - use `/context_clear` instead
+  - Removed `/set_game clear` context clearing - only clears game title
+  - Removed `clear_verified_context` calls from menus (except viewing context)
+  - Removed `ctx_clear_game` callback - consolidated to one clear method
+- **Improved Syntax**: Fixed indentation error in `_cs_extract_context_from_transcript()`
+  - Lines 2880-2896 had 2-space indent in 4-space indented block
+
+### Technical
+- All existing CLI and Telegram commands still work
+- Context system issues documented in `CONTEXT_SYSTEM_ISSUES.md`
+- MemPalace integration preserved
+
+---
+
 ## 1.5.0 — 2026-04-10
 ### Added
 - **Markdown-Based Context**: Context now stored as markdown files in `/Context/{game}/`
