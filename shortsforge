@@ -1,0 +1,23 @@
+#!/bin/bash
+# ShortsForge Launcher
+
+cd "$(dirname "$0")"
+
+# If --ui flag is passed, try to launch desktop app
+if [[ "$1" == "--ui" ]]; then
+    if command -v python3 &> /dev/null; then
+        # Try to find and launch desktop.py if it exists
+        if [[ -f "ui/desktop.py" ]]; then
+            exec python3 ui/desktop.py
+        else
+            echo "Desktop app not found. Run 'pip install PyQt6' first, then create ui/desktop.py"
+            exit 1
+        fi
+    else
+        echo "Python3 not found"
+        exit 1
+    fi
+fi
+
+# Default: run CLI
+exec python3 workflows/shortsforge.py "$@"

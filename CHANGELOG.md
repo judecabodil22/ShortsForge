@@ -4,6 +4,40 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.0.0 — 2026-04-12
+### Added
+- **Desktop Application (PyQt6)**: Full native desktop UI
+  - Side-by-side layout: Buttons panel | Terminal status display
+  - Real-time file counts and pipeline status
+  - Dark theme matching KDE desktop
+  - Run via `./shortsforge --ui`
+- **Local Recordings Support**: Process local video files
+  - Videos from `~/ShortsForge/recordings/` directory
+  - Supported formats: mp4, mkv, avi, mov, webm
+  - Source selection (YouTube Playlist / Local Recordings)
+  - Phase 1 for local copies videos to streams/
+- **Enhanced Configuration UI**:
+  - Set Voice (TTS voice selection)
+  - Set Game Title
+  - Set Clips per Hour (1-20)
+  - Start/Stop Telegram listener
+- **New Launcher Script**: `./shortsforge` for easy CLI access
+
+### Changed
+- Desktop app no longer requires importing broken workflow modules
+- Fixed phase buttons to work with both YouTube and local sources
+- Added QRadioButton for source selection
+- Improved error handling for missing video files
+- Added `shutil` import for file operations
+
+### Technical
+- Version: 2.0.0
+- All v1.6.0 features preserved
+- CLI commands: run, listen, stop, cleanup, onboard all functional
+- Telegram bot fully operational
+
+---
+
 ## 1.6.0 — 2026-04-11
 ### Added
 - **Desktop Application Framework**: New side-by-side button/terminal menu design prepared
