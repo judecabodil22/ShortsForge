@@ -5,26 +5,45 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-purple.svg)](https://archlinux.org/)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
-
-ShortsForge is an automated pipeline that transforms long-form YouTube game streams into ready-to-edit YouTube Shorts. It handles downloading, transcription, AI-powered script generation, clip extraction, and TTS narration — all with minimal setup.
+[![React](https://img.shields.io/badge/React-18.2-blue)](https://react.dev)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109-green)](https://fastapi.tiangolo.com)
 
 ---
 
 ## Table of Contents
 
-1. [What is ShortsForge?](#what-is-shortsforge)
-2. [Features](#features)
-3. [How It Works](#how-it-works)
-4. [Quick Start](#quick-start)
-5. [Installation](#installation)
-6. [Configuration](#configuration)
-7. [Telegram Commands](#telegram-commands)
-8. [Content Studio](#content-studio)
-9. [Project Structure](#project-structure)
-10. [Tech Stack](#tech-stack)
-11. [Security](#security)
-12. [Troubleshooting](#troubleshooting)
-13. [License](#license)
+1. [Overview](#overview)
+2. [What is ShortsForge?](#what-is-shortsforge)
+3. [Features](#features)
+4. [Architecture](#architecture)
+5. [System Requirements](#system-requirements)
+6. [Installation](#installation)
+7. [Configuration](#configuration)
+8. [Usage](#usage)
+9. [Telegram Commands](#telegram-commands)
+10. [Web Interface](#web-interface)
+11. [Content Studio](#content-studio)
+12. [Learning Engine](#learning-engine)
+13. [Metrics & Analytics](#metrics--analytics)
+14. [Project Structure](#project-structure)
+15. [Tech Stack](#tech-stack)
+16. [Security](#security)
+17. [Troubleshooting](#troubleshooting)
+18. [Development](#development)
+19. [License](#license)
+
+---
+
+## Overview
+
+ShortsForge is a comprehensive, AI-powered pipeline that transforms long-form YouTube game streams into ready-to-publish YouTube Shorts. It automates the entire content creation workflow from video download to final TTS-narrated clips with subtitles.
+
+The project has evolved from a simple CLI script into a full-stack application with:
+- **CLI Pipeline** - Command-line interface for batch processing
+- **Telegram Bot** - Interactive bot control and monitoring
+- **Web Interface** - React-based dashboard with real-time updates
+- **Learning Engine** - ML-based content optimization
+- **Performance Database** - SQLite-backed metrics tracking
 
 ---
 
@@ -32,13 +51,22 @@ ShortsForge is an automated pipeline that transforms long-form YouTube game stre
 
 ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
-- **Downloaded videos** from YouTube
-- **Transcripts** with timestamps (JSON + SRT)
-- **AI-generated scripts** using Gemini AI
-- **Video clips** segmented by topic/scene
-- **TTS audio narration** with matching subtitles
+| Output | Description | Format |
+|--------|-------------|--------|
+| **Downloaded Videos** | Full videos from YouTube playlist | MP4 |
+| **Transcripts** | Speech-to-text with timestamps | JSON + SRT |
+| **AI Scripts** | Gemini AI-generated narration | TXT |
+| **Video Clips** | Scene-based short segments | MP4 |
+| **TTS Audio** | AI voice narration | WAV + SRT |
 
-Each phase runs independently and can be skipped. The pipeline saves progress — if you restart, it picks up where you left off.
+### Key Capabilities
+
+- **5-Phase Pipeline**: Download → Transcribe → Script → Clip → TTS
+- **Resumable**: Each phase saves progress - restart anywhere
+- **Skippable Phases**: Run any combination of phases independently
+- **Content Studio**: Generate additional content from existing transcripts
+- **Real-time Metrics**: Track YouTube performance via API
+- **ML Learning**: Optimize content based on historical performance
 
 ---
 
@@ -46,101 +74,139 @@ Each phase runs independently and can be skipped. The pipeline saves progress �
 
 ### Pipeline (5 Phases)
 
-| Phase | Feature | Description |
-|-------|---------|-------------|
-| **1** | Download | Downloads videos from YouTube playlist |
-| **2** | Transcribe | Converts video audio to text with timestamps |
-| **3** | Scripts | Generates AI-powered narration scripts |
-| **4** | Clip | Extracts video clips based on scene detection |
-| **5** | TTS | Creates AI voice narration with subtitle files |
+| Phase | Name | Description | Output |
+|-------|------|-------------|--------|
+| **1** | Download | Downloads videos from YouTube playlist | `streams/` |
+| **2** | Transcribe | Converts audio to text with timestamps | `transcripts/` |
+| **3** | Scripts | Generates AI-powered narration scripts | `scripts/` |
+| **4** | Clip | Extracts video clips based on scene detection | `shorts/` |
+| **5** | TTS | Creates AI voice narration with subtitles | `tts/` |
 
 ### Content Studio
 
-- Generate additional content from existing transcripts
-- Analyze multiple transcripts for deeper context
-- Create custom scripts with AI assistance
-- Generate TTS from custom scripts
+- **Import Pipeline Data**: Copy transcripts from main pipeline
+- **Generate Scripts**: Create AI scripts with context awareness
+- **Generate TTS**: Convert scripts to voice narration
+- **Series Continuity**: Context accumulates across runs
+- **Context Memory**: Characters, locations, relationships tracked
 
-### Integrations
+### Web Interface
 
-- **YouTube**: Playlist-based video downloading
-- **Telegram**: Bot commands for full control
-- **Google Gemini**: AI-powered script generation
-- **Faster-Whisper**: High-quality speech-to-text
-- **FFmpeg**: Video processing and clip extraction
+- **Cyberpunk Dashboard**: React-based UI with real-time updates
+- **Pipeline Control**: Start/stop/monitor pipeline from browser
+- **Metrics Visualization**: Charts showing video performance
+- **Context Graph**: Visual representation of game context
+- **WebSocket Support**: Live updates without refresh
 
----
+### Learning Engine
 
-## How It Works
+- **Performance Tracking**: Store and analyze video metrics
+- **Feature Extraction**: NLP analysis of script content
+- **Thompson Sampling**: Optimize content type selection (70/30 explore/exploit)
+- **Virality Prediction**: ML model predicting short performance
+- **Content Type Analysis**: Compare performance by script style
 
-```
-YouTube Playlist → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5
-   (URL)         (DL)      (Trans)   (Scripts) (Clips)    (TTS)
-                      ↓           ↓         ↓        ↓
-                   .json      .txt      .mp4     .wav + .srt
-                 (Transcript) (Script)  (Clip)   (Audio) (Subtitles)
-```
+### Metrics System
 
-**Flow:**
-1. Provide a YouTube playlist URL
-2. Pipeline downloads videos (or skips if already downloaded)
-3. Faster-Whisper transcribes audio with timestamps
-4. Gemini AI generates narration scripts from transcripts
-5. FFmpeg extracts clips based on scene changes
-6. Gemini TTS creates voice narration with SRT subtitles
+- **YouTube API Integration**: Fetch views, likes, comments
+- **OAuth Support**: Authenticated access for channel data
+- **Auto-matching**: Link YouTube shorts to source scripts
+- **Performance Scores**: Calculate engagement metrics
+- **Learning Data**: Store content type performance for optimization
 
 ---
 
-## Quick Start
+## Architecture
 
-```bash
-# 1. Clone the repository
-git clone https://github.com/judecabodil22/ShortsForge.git
-cd ShortsForge
-
-# 2. Copy environment template
-cp .env.example .env
-
-# 3. Edit .env with your API keys
-nano .env
-
-# 4. Set up virtual environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# 5. Run onboarding wizard
-python workflows/shortsforge.py onboard
-
-# 6. Start Telegram listener
-python workflows/shortsforge.py listen
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        ShortsForge                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    │
+│  │   Telegram   │    │   Web UI     │    │     CLI      │    │
+│  │     Bot       │    │   (React)    │    │   Pipeline   │    │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘    │
+│         │                   │                   │             │
+│         └───────────────────┴───────────────────┘             │
+│                             │                                   │
+│                    ┌────────▼────────┐                        │
+│                    │   FastAPI       │                        │
+│                    │   Backend       │                        │
+│                    └────────┬────────┘                        │
+│                             │                                   │
+│  ┌─────────────────────────┼─────────────────────────────┐   │
+│  │                    Workflows                            │   │
+│  ├──────────────┬──────────┼──────────┬──────────────┬────┤   │
+│  │ shortsforge   │ context  │ metrics  │ learning     │ other│
+│  │ .py           │ _manager │ _fetcher │ _engine      │ .py │
+│  └──────┬────────┴──────────┴──────────┴──────┬──────┘   │
+│         │                                       │             │
+│         └───────────────┬───────────────────────┘             │
+│                         │                                       │
+│              ┌──────────▼──────────┐                          │
+│              │  SQLite Database    │                          │
+│              │  (Performance DB)   │                          │
+│              └─────────────────────┘                          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-Then control everything via Telegram!
+### Component Descriptions
+
+| Component | Purpose |
+|-----------|---------|
+| `shortsforge.py` | Main pipeline orchestration, CLI, Telegram bot |
+| `context_manager.py` | Context storage and retrieval for scripts |
+| `context_manager_v2.py` | Enhanced context with graph visualization |
+| `metrics_fetcher.py` | YouTube API integration for video metrics |
+| `learning_engine.py` | ML-based performance prediction and optimization |
+| `performance_database.py` | SQLite storage for scripts, videos, metrics, learnings |
+| `script_validation.py` | Script quality scoring and content type detection |
+| `audio_analysis.py` | Audio feature extraction for clip selection |
+| `keychain_manager.py` | Secure API key storage in system keychain |
+| `backend/main.py` | FastAPI web server with REST API |
+
+---
+
+## System Requirements
+
+### Hardware
+
+- **CPU**: Multi-core (4+ cores recommended)
+- **RAM**: 8GB+ (16GB recommended for video processing)
+- **Storage**: 50GB+ for video processing
+- **GPU**: Optional (for faster video encoding)
+
+### Software
+
+| Requirement | Version | Purpose |
+|-------------|---------|---------|
+| **Python** | 3.10+ | Runtime |
+| **FFmpeg** | Latest | Video processing |
+| **Git** | Latest | Version control |
+| **Node.js** | 18+ | Frontend build (optional) |
+
+### API Keys
+
+| Service | Required | Purpose |
+|---------|----------|---------|
+| **Google Gemini** | Yes | Script generation + TTS |
+| **YouTube Data API** | Yes | Video metrics |
+| **Telegram Bot** | Optional | Bot control |
 
 ---
 
 ## Installation
 
-### Prerequisites
-
-- **Python 3.10+**
-- **FFmpeg** (for video processing)
-- **Git**
-- **YouTube API key** (for downloading)
-- **Gemini API key** (for AI scripts + TTS)
-- **Telegram Bot Token** (optional, for bot control)
-
-### Step-by-Step
-
-#### 1. Clone the Repository
+### 1. Clone Repository
 
 ```bash
 git clone https://github.com/judecabodil22/ShortsForge.git
 cd ShortsForge
 ```
 
-#### 2. Install System Dependencies
+### 2. Install System Dependencies
 
 **Arch Linux:**
 ```bash
@@ -152,7 +218,7 @@ sudo pacman -S ffmpeg python python-pip git
 sudo apt install ffmpeg python3 python3-pip git
 ```
 
-#### 3. Create Virtual Environment
+### 3. Set Up Python Environment
 
 ```bash
 python3 -m venv venv
@@ -160,31 +226,34 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-#### 4. Configure Environment
+### 4. Configure Environment
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-#### 5. Run Onboarding (Recommended)
+### 5. Start Using ShortsForge
 
-```bash
-python workflows/shortsforge.py onboard
-```
-
-This interactive wizard helps you:
-- Set up API keys
-- Configure Telegram bot
-- Test your setup
-
-#### 6. Start the Listener
-
+**Option A: Telegram Bot**
 ```bash
 python workflows/shortsforge.py listen
 ```
 
-The listener runs in the background and responds to Telegram commands.
+**Option B: Web Interface**
+```bash
+# Start backend
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+# Frontend is pre-built in frontend/dist/
+# Access at http://localhost:8000
+```
+
+**Option C: Direct CLI**
+```bash
+python workflows/shortsforge.py run
+python workflows/shortsforge.py status
+```
 
 ---
 
@@ -192,40 +261,81 @@ The listener runs in the background and responds to Telegram commands.
 
 All configuration is in the `.env` file:
 
-### Required
+### Required Variables
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `PLAYLIST_URL` | YouTube playlist URL | `https://youtube.com/playlist?list=...` |
-| `GEMINI_API_KEY` | Google Gemini API key | `AIzaSy...` |
+```bash
+# YouTube
+PLAYLIST_URL=https://youtube.com/playlist?list=...
 
-### Optional
+# AI
+GEMINI_API_KEY=AIzaSy...
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TTS_VOICE` | `Vindemiatrix` | Gemini TTS voice name |
-| `GAME_TITLE` | (none) | Game title for context in scripts |
-| `CLIPS_PER_HOUR` | `5` | Number of clips to extract per hour |
-| `SRT_MAX_WORDS` | `10` | Max words per subtitle line (Phase 5) |
-| `PLAYLIST_INDEX` | `1` | Which video to download from playlist |
-| `TELEGRAM_BOT_TOKEN` | (none) | Telegram bot token for commands |
-| `TELEGRAM_CHAT_ID` | (none) | Your Telegram chat ID for notifications |
+### Optional Variables
 
-### Getting Your API Keys
+```bash
+# Telegram Bot
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+TELEGRAM_CHAT_ID=123456789
+
+# Content Settings
+GAME_TITLE=Rise of the Tomb Raider
+TTS_VOICE=Vindemiatrix
+CLIPS_PER_HOUR=5
+
+# Advanced
+SRT_MAX_WORDS=10
+PLAYLIST_INDEX=1
+```
+
+### Getting API Keys
 
 **Google Gemini API Key:**
-1. Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
+1. Visit [Google AI Studio](https://makersuite.google.com/app/apikey)
 2. Create a new API key
 3. Copy to `.env`
 
 **YouTube Data API:**
-- Uses yt-dlp with browser cookies (see docs)
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Create project and enable YouTube Data API v3
+3. Create credentials (API Key)
+4. For full metrics, set up OAuth 2.0
 
 **Telegram Bot:**
 1. Open @BotFather on Telegram
-2. Create a new bot with `/newbot`
-3. Copy the token to `.env`
-4. Get your chat ID: start a chat with @userinfobot
+2. Create new bot with `/newbot`
+3. Copy token to `.env`
+4. Get chat ID from @userinfobot
+
+---
+
+## Usage
+
+### Running the Pipeline
+
+```bash
+# Full pipeline (all 5 phases)
+python workflows/shortsforge.py run
+
+# Specific phases
+python workflows/shortsforge.py run --phase 3
+python workflows/shortsforge.py run --phase 1,2,3
+
+# Local video processing
+python workflows/shortsforge.py run_local media
+```
+
+### Pipeline Commands
+
+```bash
+python workflows/shortsforge.py run         # Run pipeline
+python workflows/shortsforge.py listen       # Start Telegram listener
+python workflows/shortsforge.py stop        # Stop running pipeline
+python workflows/shortsforge.py status      # Show status
+python workflows/shortsforge.py cleanup      # Clean generated files
+python workflows/shortsforge.py debug       # Show recent logs
+python workflows/shortsforge.py onboard     # Interactive setup
+```
 
 ---
 
@@ -235,12 +345,12 @@ All configuration is in the `.env` file:
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Start the pipeline |
-| `/run` | Run full pipeline (all phases) |
-| `/run_phase 1,2,3` | Run specific phases |
-| `/skip_phase 3` | Skip a specific phase |
-| `/status` | Show current pipeline status |
+| `/start` | Initialize bot |
+| `/run` | Run full pipeline |
+| `/run_phase N` | Run specific phase |
+| `/skip_phase N` | Skip a phase |
 | `/stop_pipeline` | Stop running pipeline |
+| `/status` | Show current status |
 
 ### Configuration
 
@@ -248,69 +358,171 @@ All configuration is in the `.env` file:
 |---------|-------------|
 | `/set_voice Puck` | Change TTS voice |
 | `/voices` | List available voices |
-| `/set_style Your style...` | Set TTS style prefix |
 | `/set_clips 10` | Set clips per hour (1-20) |
-| `/set_srt_words 10` | Set max words per subtitle (3-20) |
-| `/set_game Game Title` | Set game title for scripts |
+| `/set_game Game Title` | Set game title |
 | `/config` | Show current settings |
 
-### Tools
+### Content Studio
+
+| Command | Description |
+|---------|-------------|
+| `/cs` | Open Content Studio |
+| `/cs_generate` | Generate script |
+| `/cs_tts` | Generate TTS |
+| `/cs_context` | View context |
+
+### Utilities
 
 | Command | Description |
 |---------|-------------|
 | `/menu` | Show interactive menu |
-| `/cs` | Open Content Studio |
-| `/status` | Show listener + pipeline status |
-| `/debug` | Show recent log entries |
-| `/version` | Show current version |
-| `/delete_partial` | Delete incomplete files |
-| `/cleanup` | Delete all generated files |
-| `/help` | Show all commands |
+| `/debug` | Show recent logs |
+| `/version` | Show version |
+| `/cleanup` | Delete generated files |
+| `/help` | Show help |
+
+---
+
+## Web Interface
+
+### Starting the Web Server
+
+```bash
+# Backend only
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+# Or use the script
+./start_web.sh
+```
+
+### Accessing the UI
+
+Open `http://localhost:8000` in your browser.
+
+### Features
+
+- **Dashboard**: Pipeline status, metrics summary
+- **Pipeline Control**: Start, stop, configure pipeline
+- **Metrics**: Video performance charts
+- **Scripts**: View generated scripts
+- **Context**: Game context graph visualization
+- **Settings**: Configuration management
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/status` | GET | System status |
+| `/api/pipeline/run` | POST | Start pipeline |
+| `/api/pipeline/stop` | POST | Stop pipeline |
+| `/api/pipeline/settings` | GET/POST | Pipeline settings |
+| `/api/metrics/summary` | GET | Performance summary |
+| `/api/metrics/videos` | GET | All videos with metrics |
+| `/api/metrics/sync` | POST | Sync YouTube metrics |
+| `/api/scripts` | GET | All scripts |
+| `/api/learnings` | GET | ML learnings |
+| `/api/context/{game}` | GET | Game context |
+| `/api/config` | GET/POST | Configuration |
+| `/ws` | WS | WebSocket for real-time updates |
 
 ---
 
 ## Content Studio
 
-Content Studio lets you generate additional content from existing transcripts.
+Content Studio generates additional content from existing transcripts.
 
 ### Access
 
 Send `/cs` to your Telegram bot.
 
-### Features
+### Workflow
 
-1. **Import Pipeline Data** — Copy transcripts from main pipeline
-2. **Generate Script** — Create scripts from transcripts with AI context
-3. **Generate TTS** — Create TTS audio from generated scripts
-4. **Clear All** — Reset content studio files
-
-### Series Generation
-
-Content Studio generates scripts sequentially for series continuity:
-
-| Run | Transcript Used | Context | Result |
-|-----|----------------|---------|--------|
-| 1 | Chapter 1 | Empty | Script 1 |
-| 2 | Chapter 2 | + Chapter 1 data | Script 2 |
-| 3 | Chapter 3 | + Chapters 1-2 data | Script 3 |
-
-- Each run uses the newest unprocessed transcript
-- Previous scripts are referenced for series continuity
-- Context accumulates (characters, locations, relationships)
-- Wait 10 minutes between runs to avoid rate limiting
+1. **Import**: Copy transcripts from main pipeline
+2. **Analyze**: Extract characters, locations, terms
+3. **Generate**: Create scripts with context awareness
+4. **TTS**: Convert scripts to voice narration
 
 ### Context Memory
 
 Content Studio maintains context across runs:
-- Character names extracted from transcripts
-- Key terms and locations
-- Relationships between characters
-- Previous script summaries for series continuity
+- Character names and descriptions
+- Location names
+- Key terms and plot points
+- Relationships between entities
+- Previous script summaries
 
-Use `/cs_context` to view stored context.
-Use `/cs_context clear` to reset context.
+---
 
-**Context is shared** with the main pipeline - running pipeline updates context, which Content Studio then uses.
+## Learning Engine
+
+The Learning Engine optimizes content creation based on historical performance.
+
+### Components
+
+**Performance Database (SQLite)**
+- Scripts with NLP features
+- Video metrics (views, likes, comments)
+- Content type performance
+- TTS voice effectiveness
+
+**Feature Extraction**
+- Script text analysis
+- Content type classification
+- Engagement prediction
+- Word count patterns
+
+**Thompson Sampling**
+- 70% exploitation (best performing)
+- 30% exploration (new content types)
+- Balances optimization with discovery
+
+**Virality Prediction**
+- ML model trained on historical data
+- Predicts likely performance before publishing
+- Feature-based scoring
+
+### Usage
+
+```python
+from workflows.learning_engine import extract_script_features, get_virality_predictor
+
+# Extract features from script
+features = extract_script_features(script_text, content_type)
+
+# Get prediction
+predictor = get_virality_predictor()
+prediction = predictor.predict(features)
+```
+
+---
+
+## Metrics & Analytics
+
+### YouTube Metrics
+
+ShortsForge tracks:
+- **Views**: Total video views
+- **Likes**: Total likes
+- **Comments**: Total comments
+- **Engagement Ratio**: (likes + comments) / views * 100
+
+### Auto-Matching
+
+The system matches YouTube shorts to source scripts by:
+1. Reading `TITLE:` from script files
+2. Comparing with YouTube video titles
+3. Scoring word overlap
+4. Linking when score >= 0.3
+
+### Performance Analysis
+
+```python
+from workflows.performance_database import get_variant_performance_stats
+
+stats = get_variant_performance_stats()
+# Returns: {content_type: {views, likes, comments, count, avg_engagement}}
+```
 
 ---
 
@@ -318,47 +530,138 @@ Use `/cs_context clear` to reset context.
 
 ```
 ShortsForge/
-├── workflows/           # Main pipeline code
-│   ├── shortsforge.py  # Main application
-│   ├── keychain_manager.py
-│   └── update_manager.py
-├── content_studio/      # Content Studio feature
-│   ├── context.json    # Stored context
-│   ├── scripts/        # Generated scripts
-│   ├── transcripts/   # Imported transcripts
-│   └── tts/           # Generated TTS
-├── docs/               # Documentation
-├── .env.example       # Configuration template
-├── install.sh         # Installation script
-├── requirements.txt   # Python dependencies
-├── VERSION           # Version file
-└── README.md         # This file
+├── backend/                    # FastAPI web backend
+│   ├── main.py                # API server
+│   └── requirements.txt      # Backend dependencies
+├── frontend/                   # React web interface
+│   ├── src/                   # React source
+│   └── dist/                 # Pre-built static files
+├── workflows/                  # Core pipeline modules
+│   ├── shortsforge.py        # Main application (6121 lines)
+│   ├── context_manager.py    # Context storage v1
+│   ├── context_manager_v2.py  # Context storage v2 (graph)
+│   ├── metrics_fetcher.py    # YouTube API integration
+│   ├── learning_engine.py    # ML optimization
+│   ├── performance_database.py # SQLite storage
+│   ├── script_validation.py  # Script quality scoring
+│   ├── audio_analysis.py     # Audio feature extraction
+│   ├── keychain_manager.py   # Secure key storage
+│   └── update_manager.py     # Update checking
+├── prompts/                   # AI prompt templates
+│   ├── base.j2               # Base prompt
+│   ├── character_pov.j2      # Character POV style
+│   ├── narrative.j2          # Narrative style
+│   └── *.j2                  # Other styles (11 total)
+├── docs/                      # Documentation
+├── scripts/                   # Generated scripts
+├── shorts/                   # Generated clips
+├── tts/                      # Generated TTS audio
+├── transcripts/              # Generated transcripts
+├── streams/                  # Downloaded videos
+├── Context/                  # Game context files
+├── .shortsforge/            # App data (OAuth, DB, API key)
+├── .env.example             # Configuration template
+├── requirements.txt         # Python dependencies
+├── VERSION                  # Version file
+├── CHANGELOG.md             # Version history
+├── SECURITY.md              # Security policy
+├── README.md                # This file
+└── LICENSE                  # MIT License
 ```
 
-### Generated Output
+### Generated Output Directories
 
 | Directory | Contents |
 |-----------|----------|
 | `streams/` | Downloaded YouTube videos |
 | `transcripts/` | JSON + SRT transcripts |
-| `scripts/` | AI-generated narration scripts |
+| `scripts/` | AI-generated scripts with TITLE |
 | `shorts/` | Extracted video clips |
-| `tts/` | TTS audio + subtitle files |
+| `tts/` | TTS audio + SRT subtitles |
 
 ---
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| **Language** | Python 3.10+ |
-| **Video Processing** | FFmpeg |
-| **Speech-to-Text** | Faster-Whisper |
-| **AI Scripts** | Google Gemini API |
-| **AI TTS** | Google Gemini TTS |
-| **Video Download** | yt-dlp |
-| **Bot Interface** | Telegram Bot API |
-| **Storage** | JSON files |
+### Core Technologies
+
+| Component | Technology | Version |
+|-----------|------------|---------|
+| **Language** | Python | 3.10+ |
+| **Web Framework** | FastAPI | 0.109+ |
+| **Web Server** | Uvicorn | 0.27+ |
+| **Frontend** | React | 18.2.0 |
+| **Frontend Build** | Vite | 5.1.0 |
+| **UI Components** | Radix UI | Latest |
+| **State Management** | Zustand | Latest |
+| **Database** | SQLite | 3.x |
+| **Video Processing** | FFmpeg | Latest |
+
+### AI & APIs
+
+| Service | Purpose | Integration |
+|---------|---------|-------------|
+| **Google Gemini** | Script generation | API |
+| **Google Gemini TTS** | Voice synthesis | API |
+| **YouTube Data API** | Video metrics | API + OAuth |
+| **YouTube Data API** | Video downloading | yt-dlp |
+| **Telegram Bot** | Interactive control | Bot API |
+
+### Speech & Audio
+
+| Technology | Purpose |
+|------------|---------|
+| **Faster-Whisper** | Speech-to-text |
+| **stable-ts** | Alternative STT |
+
+### ML & Data Science
+
+| Technology | Purpose |
+|------------|---------|
+| **XGBoost** | Virality prediction |
+| **Thompson Sampling** | Content selection |
+
+---
+
+## Security
+
+### API Key Management
+
+ShortsForge supports secure API key storage:
+
+1. **System Keychain** (Recommended)
+   - Linux: GNOME Keyring / KWallet
+   - macOS: Keychain Access
+   - Windows: Credential Manager
+
+2. **Environment Variables** (For servers)
+   - `.env` file (gitignored)
+
+### Web Interface Security
+
+- **API Key Authentication**: Protected endpoints require `X-API-Key` header
+- **Rate Limiting**: Prevents abuse (5-60 requests/minute depending on endpoint)
+- **Security Headers**: X-Frame-Options, X-XSS-Protection, HSTS, Referrer-Policy
+- **Input Sanitization**: Prevents injection attacks
+- **CORS**: Restricted to localhost
+
+### Protected Endpoints
+
+These endpoints require API key authentication:
+- `POST /api/config`
+- `POST /api/system/cleanup`
+- `POST /api/system/restart-listener`
+- `POST /api/context/import`
+- `POST /api/context/clear`
+- `POST /api/pipeline/download`
+
+### Best Practices
+
+1. **Never commit secrets** - `.env` and `client_secret.json` are gitignored
+2. **Use HTTPS** - In production, use reverse proxy with TLS
+3. **Restrict access** - Firewall rules for web interface
+4. **Rotate keys** - Periodically update API keys
+5. **Review SECURITY.md** - See `SECURITY.md` for full details
 
 ---
 
@@ -375,12 +678,17 @@ ShortsForge/
 - Check YouTube playlist is public
 
 **Q: TTS not generating**
-- Ensure `TTS_VOICE` is valid (see `/voices` command)
+- Ensure `TTS_VOICE` is valid (use `/voices` command)
 - Check API key has TTS quota
 
 **Q: Telegram bot not responding**
 - Verify `TELEGRAM_BOT_TOKEN` in `.env`
 - Check bot was started with `/start`
+
+**Q: Metrics sync not working**
+- Verify YouTube OAuth is configured
+- Check video duration (must be < 3 minutes)
+- Ensure script with matching TITLE exists
 
 ### Debug Mode
 
@@ -390,43 +698,47 @@ python workflows/shortsforge.py debug
 
 # Check pipeline status
 python workflows/shortsforge.py status
+
+# Verbose output
+python workflows/shortsforge.py run --verbose
 ```
 
 ---
 
-## Security
+## Development
 
-ShortsForge includes several security features to protect your API keys and system:
+### Adding New Features
 
-### API Key Storage
+1. **Script Styles**: Add new `.j2` template in `prompts/`
+2. **TTS Voices**: Update voice list in `shortsforge.py`
+3. **API Endpoints**: Add route in `backend/main.py`
+4. **Metrics**: Add tracking in `performance_database.py`
 
-- **Keychain (Recommended)**: On desktop systems with a GUI, API keys are stored securely in your system's keychain
-- **Environment Variables**: For headless/server deployments, use `.env` file
+### Running Tests
 
-### Web Interface Security
+```bash
+# Install test dependencies
+pip install pytest pytest-asyncio
 
-The web backend includes:
-- **API Key Authentication**: Sensitive endpoints require `X-API-Key` header
-- **Rate Limiting**: Prevents API abuse
-- **Security Headers**: X-Frame-Options, X-XSS-Protection, HSTS
+# Run tests
+pytest
+```
 
-### Best Practices
+### Contributing
 
-1. **Never commit secrets**: `.env` and `client_secret.json` are gitignored
-2. **Use HTTPS**: In production, run behind a reverse proxy with TLS
-3. **Restrict access**: Use firewall rules to limit who can access the web interface
-4. **Rotate keys**: Periodically rotate your API keys
-5. **Review SECURITY.md**: See [SECURITY.md](./SECURITY.md) for full security details
+1. Fork the repository
+2. Create feature branch
+3. Make changes
+4. Run tests
+5. Submit pull request
 
-### Protected Endpoints
+---
 
-The following endpoints require API key authentication:
-- `/api/config` - Update configuration
-- `/api/system/cleanup` - Cleanup files
-- `/api/system/restart-listener` - Restart listener
-- `/api/context/import` - Import context
-- `/api/context/clear` - Clear context
-- `/api/pipeline/download` - Download from URL
+## Version History
+
+See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
+
+Current version: **2.0.1**
 
 ---
 
@@ -438,4 +750,14 @@ See [LICENSE](./LICENSE) for full details.
 
 ---
 
+## Support
+
+- **Issues**: Open a GitHub issue
+- **Discussions**: Use GitHub Discussions
+- **Documentation**: Check `docs/` folder
+
+---
+
 **ShortsForge** — Turn your game streams into YouTube Shorts automatically.
+
+Built with FastAPI, React, Python, and Google Gemini AI.
