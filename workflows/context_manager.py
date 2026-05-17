@@ -14,6 +14,7 @@ Key features:
 import os
 import json
 import re
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 
@@ -22,6 +23,110 @@ from typing import Dict, List, Tuple, Optional, Any
 def _get_workspace():
     """Get workspace path."""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+WORKSPACE = _get_workspace()
+
+
+# MemPalace integration
+def _get_mempalace_manager():
+    """Get MemPalace manager if available."""
+    try:
+        from game_data.mempalace import get_mempalace_manager as get_manager
+        return get_manager()
+    except ImportError:
+        return None
+
+
+# ── Context → MemPalace Sync ─────────────────────────────────────────────────
+
+def sync_context_to_mempalace(game_title: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Sync verified context to MemPalace for learning.
+    This ensures MemPalace learns from user corrections.
+    
+    Uses file-based mining: creates temp file with context, mines it into MemPalace.
+    """
+    if not game_title or not context:
+        return {"error": "Missing game_title or context"}
+    
+    result = {"synced": 0, "errors": [], "details": {}}
+    
+    temp_dir = os.path.join(CONTEXT_DIR, ".sync_temp")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    game_sanitized = game_title.lower().strip().replace(" ", "_")
+    temp_file = os.path.join(temp_dir, f"{game_sanitized}_context.md")
+    
+    try:
+        # Format context as markdown
+        lines = [f"# {game_title} Context\n"]
+        
+        # Characters
+        chars = context.get("characters", [])
+        if chars:
+            lines.append("## Characters\n")
+            for c in chars:
+                name = c.get("name", "") if isinstance(c, dict) else str(c)
+                if name:
+                    lines.append(f"- **{name}** is a verified character in {game_title}")
+            lines.append("")
+        
+        # Locations
+        locs = context.get("locations", [])
+        if locs:
+            lines.append("## Locations\n")
+            for l in locs:
+                name = l.get("name", "") if isinstance(l, dict) else str(l)
+                if name:
+                    lines.append(f"- **{name}** is a verified location in {game_title}")
+            lines.append("")
+        
+        # Key Terms
+        terms = context.get("key_terms", [])
+        if terms:
+            lines.append("## Key Terms\n")
+            for t in terms:
+                term = t.get("term", "") if isinstance(t, dict) else str(t)
+                if term:
+                    lines.append(f"- **{term}** is a verified key term in {game_title}")
+            lines.append("")
+        
+        # Relationships
+        rels = context.get("relationships", [])
+        if rels:
+            lines.append("## Relationships\n")
+            for r in rels:
+                rel = r.get("from", "") if isinstance(r, dict) else str(r)
+                if rel:
+                    lines.append(f"- **{rel}** is a verified relationship in {game_title}")
+            lines.append("")
+        
+        # Write temp file
+        content = "\n".join(lines)
+        with open(temp_file, "w") as f:
+            f.write(content)
+        
+        # Mine the file into MemPalace
+        mp_manager = _get_mempalace_manager()
+        if mp_manager:
+            stdout, stderr, rc = mp_manager._run_command([
+                "mine", temp_dir, "--mode", "docs"
+            ])
+            result["mempalace_output"] = stdout
+            result["synced"] = len(chars) + len(locs) + len(terms) + len(rels)
+        else:
+            result["errors"].append("MemPalace not available")
+        
+        # Clean up temp file
+        try:
+            os.remove(temp_file)
+        except:
+            pass
+    
+    except Exception as e:
+        result["errors"].append(str(e))
+    
+    return result
 
 WORKSPACE = _get_workspace()
 CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
@@ -41,14 +146,14 @@ def load_verified_context(game_title: str) -> Dict[str, Any]:
     try:
         with open(VERIFIED_CONTEXT_FILE, "r") as f:
             all_context = json.load(f)
-        game_key = game_title.lower().strip()
+        game_key = game_title.lower().replace(" ", "_").strip()
         return all_context.get(game_key, {})
     except Exception:
         return {}
 
 
 def save_verified_context(game_title: str, context: Dict[str, Any]):
-    """Save verified context for a game."""
+    """Save verified context for a game and sync to MemPalace."""
     all_context = {}
     
     if os.path.exists(VERIFIED_CONTEXT_FILE):
@@ -58,7 +163,7 @@ def save_verified_context(game_title: str, context: Dict[str, Any]):
         except Exception:
             pass
     
-    game_key = game_title.lower().strip()
+    game_key = game_title.lower().replace(" ", "_").strip()
     all_context[game_key] = {
         "context": context,
         "verified_at": datetime.now().isoformat(),
@@ -70,6 +175,14 @@ def save_verified_context(game_title: str, context: Dict[str, Any]):
             json.dump(all_context, f, indent=2)
     except Exception:
         pass
+    
+    # Sync to MemPalace for learning
+    try:
+        sync_result = sync_context_to_mempalace(game_title, context)
+        if sync_result.get("synced", 0) > 0:
+            pass  # Sync succeeded, logged by function
+    except Exception:
+        pass  # Don't break context save if sync fails
 
 
 def is_first_run(game_title: str) -> bool:
@@ -85,12 +198,74 @@ def clear_verified_context(game_title: str):
     try:
         with open(VERIFIED_CONTEXT_FILE, "r") as f:
             all_context = json.load(f)
-        game_key = game_title.lower().strip()
+        game_key = game_title.lower().replace(" ", "_").strip()
         all_context.pop(game_key, None)
         with open(VERIFIED_CONTEXT_FILE, "w") as f:
             json.dump(all_context, f, indent=2)
     except Exception:
         pass
+
+
+def clear_mempalace_for_game(game_title: str) -> Dict[str, Any]:
+    """Clear MemPalace memory for a specific game."""
+    result = {"cleared": False, "errors": []}
+    
+    if not game_title:
+        result["errors"].append("No game title provided")
+        return result
+    
+    game_sanitized = game_title.lower().strip().replace(" ", "_")
+    
+    try:
+        mp_manager = _get_mempalace_manager()
+        if not mp_manager:
+            result["errors"].append("MemPalace not available")
+            return result
+        
+        palace_path = mp_manager.palace_path
+        
+        game_wing_dir = os.path.join(palace_path, game_sanitized)
+        
+        if os.path.exists(game_wing_dir):
+            import shutil
+            shutil.rmtree(game_wing_dir)
+            result["cleared"] = True
+            result["message"] = f"Cleared MemPalace memory for {game_title}"
+        else:
+            result["cleared"] = True
+            result["message"] = f"No MemPalace memory found for {game_title}"
+    
+    except Exception as e:
+        result["errors"].append(str(e))
+    
+    return result
+
+
+def clear_all_context_for_game(game_title: str) -> Dict[str, Any]:
+    """Clear both verified context and MemPalace memory for a game."""
+    result = {"verified_cleared": False, "mempalace_cleared": False, "errors": []}
+    
+    if not game_title:
+        result["errors"].append("No game title provided")
+        return result
+    
+    # Clear verified context
+    try:
+        clear_verified_context(game_title)
+        result["verified_cleared"] = True
+    except Exception as e:
+        result["errors"].append(f"Verified context: {e}")
+    
+    # Clear MemPalace
+    try:
+        mp_result = clear_mempalace_for_game(game_title)
+        result["mempalace_cleared"] = mp_result.get("cleared", False)
+        if mp_result.get("errors"):
+            result["errors"].extend(mp_result["errors"])
+    except Exception as e:
+        result["errors"].append(f"MemPalace: {e}")
+    
+    return result
 
 
 # ── Context Comparison with "Latest Wins" Logic ─────────────────────────────

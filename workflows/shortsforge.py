@@ -47,6 +47,59 @@ from script_validation import (
     get_learning_summary,
     calculate_optimal_temperature,
 )
+
+try:
+    from performance_database import (
+        store_script,
+        store_clip,
+        link_video,
+        store_metrics,
+        get_channel_baseline,
+        get_successful_scripts,
+        get_learnings,
+        store_learning,
+        get_learned_variant_weights,
+        get_variant_performance_stats,
+        get_weighted_tts_voices,
+        update_tts_learning,
+    )
+    PERFORMANCE_DB_AVAILABLE = True
+except ImportError:
+    PERFORMANCE_DB_AVAILABLE = False
+    def store_script(*args, **kwargs): return None
+    def store_clip(*args, **kwargs): return None
+    def link_video(*args, **kwargs): return None
+    def store_metrics(*args, **kwargs): return None
+    def get_channel_baseline(): return {}
+    def get_successful_scripts(*args, **kwargs): return []
+    def get_learnings(*args, **kwargs): return []
+    def store_learning(*args, **kwargs): pass
+    def get_learned_variant_weights(*args, **kwargs): return {}
+    def get_variant_performance_stats(): return {}
+    def get_weighted_tts_voices(): return []
+    def update_tts_learning(*args, **kwargs): pass
+
+try:
+    from learning_engine import (
+        extract_script_features,
+        calculate_virality_score,
+        analyze_performance_patterns,
+        get_optimized_params
+    )
+    LEARNING_ENGINE_AVAILABLE = True
+except ImportError:
+    LEARNING_ENGINE_AVAILABLE = False
+    def extract_script_features(*args, **kwargs): return {}
+    def calculate_virality_score(*args, **kwargs): return 50.0
+    def analyze_performance_patterns(*args, **kwargs): return {}
+    def get_optimized_params(*args, **kwargs): return {}
+
+try:
+    from audio_analysis import enhance_scene_selection
+    AUDIO_ANALYSIS_AVAILABLE = True
+except ImportError:
+    AUDIO_ANALYSIS_AVAILABLE = False
+    def enhance_scene_selection(*args, **kwargs): return args[0] if args else []
 from context_manager import (
     load_verified_context,
     save_verified_context,
@@ -111,17 +164,61 @@ METRICS_FILE = os.path.join(WORKSPACE, "generation_metrics.jsonl")
 STATUS_FILE  = "/tmp/pipeline_status"
 LAST_CALL    = "/tmp/gemini_last_call.txt"
 
-STREAMS_DIR      = os.path.join(WORKSPACE, "streams")
 TRANSCRIPTS_DIR  = os.path.join(WORKSPACE, "transcripts")
 SCRIPTS_DIR      = os.path.join(WORKSPACE, "scripts")
 TTS_DIR          = os.path.join(WORKSPACE, "tts")
 SHORTS_DIR       = os.path.join(WORKSPACE, "shorts")
 OUTPUT_DIR       = os.path.join(WORKSPACE, "output")
 
+# Media import directory (for local videos)
+MEDIA_DIR        = os.path.join(WORKSPACE, "media")
+
 # Prompt templates directory
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "prompts")
 if not os.path.exists(PROMPTS_DIR):
     PROMPTS_DIR = os.path.join(WORKSPACE, "prompts")
+
+# ── ASR Error Corrector ───────────────────────────────────────────────────────
+_ASR_CORRECTIONS = {
+    # Cyberpunk 2077 specific ASR errors
+    "cyber cycle": "cyberpsycho",
+    "cyper cycle": "cyberpsycho", 
+    "cypre cycle": "cyberpsycho",
+    "cycle": "cyberpsycho",
+    "cycles": "cyberpsycho",
+    # Other common gaming terms
+    "n c p d": "NCPD",
+    "n cpd": "NCPD",
+    "cpd": "NCPD",
+}
+
+def _correct_transcript_asr_errors(json_path):
+    """Post-process transcript to fix known ASR errors for gaming content."""
+    if not os.path.exists(json_path):
+        return
+    
+    try:
+        import json, re
+        with open(json_path, "r") as f:
+            data = json.load(f)
+        
+        corrections_made = 0
+        for seg in data.get("segments", []):
+            original = seg.get("text", "")
+            corrected = original
+            for wrong, right in _ASR_CORRECTIONS.items():
+                corrected = re.sub(rf'\b{re.escape(wrong)}\b', right, corrected, flags=re.IGNORECASE)
+            
+            if corrected != original:
+                seg["text"] = corrected
+                corrections_made += 1
+        
+        if corrections_made > 0:
+            with open(json_path, "w") as f:
+                json.dump(data, f)
+            log(f"   Corrected {corrections_made} ASR errors in transcript")
+    except Exception as e:
+        log(f"   ASR error correction failed: {e}")
 
 # Jinja2 template environment
 _prompt_env = None
@@ -167,7 +264,17 @@ LISTENER_RUNNING = True  # set False to stop listener
 PID_FILE = "/tmp/SHORTSFORGE_listener.pid"
 OFFSET_FILE = "/tmp/SHORTSFORGE_listener_offset"
 
-# Round-robin state for script generation (initialized per pipeline run)
+# Learning state (refreshed at pipeline start)
+_LEARNING_BASELINE = {}
+_LEARNING_VARIANT_WEIGHTS = {}
+_LEARNING_VARIANT_STATS = {}
+_LEARNING_TTS_WEIGHTS = []
+_LEARNING_OPTIMIZED_PARAMS = {}
+
+# Shared state between phases (used for linking clips to scripts in DB)
+_SCRIPT_ID_MAP = {}  # {script_hour_index: script_id}
+
+# Round-robin state for variant/voice/style cycling (initialized by _init_round_robin)
 _rr_variants = []
 _rr_perspectives = []
 _rr_voices = []
@@ -175,12 +282,72 @@ _rr_styles = []
 _rr_script_index = 0
 _rr_tts_index = 0
 
+
+def _clear_shared_state():
+    """Clear shared state between phase runs."""
+    global _SCRIPT_ID_MAP
+    _SCRIPT_ID_MAP = {}
+
+
+def _refresh_learning_state():
+    """Refresh all learning state from DB at pipeline start.
+
+    This is the feedback loop trigger - it reads YouTube performance data
+    and makes it available to all downstream decisions. Also pulls fresh
+    metrics from YouTube before reading.
+    """
+    global _LEARNING_BASELINE, _LEARNING_VARIANT_WEIGHTS, _LEARNING_VARIANT_STATS
+    global _LEARNING_TTS_WEIGHTS, _LEARNING_OPTIMIZED_PARAMS, _SCRIPT_ID_MAP
+    _clear_shared_state()
+
+    if not PERFORMANCE_DB_AVAILABLE:
+        return
+
+    try:
+        oauth_file = os.path.join(WORKSPACE, ".shortsforge", "youtube_oauth.json")
+        if os.path.exists(oauth_file):
+            try:
+                from metrics_fetcher import get_recent_uploads
+                from performance_database import auto_match_and_fetch
+                log("[LEARNING] Fetching latest YouTube metrics...")
+                recent = get_recent_uploads(days=30, max_results=50)
+                if recent:
+                    result = auto_match_and_fetch(recent)
+                    log(f"[LEARNING] YouTube sync: {result.get('matched_count', 0)} matched, {result.get('new_metrics', 0)} new metrics")
+                else:
+                    log("[LEARNING] No recent uploads found")
+            except Exception as sync_err:
+                log(f"[LEARNING] YouTube sync skipped: {sync_err}")
+
+        _LEARNING_BASELINE = get_channel_baseline()
+        _LEARNING_VARIANT_WEIGHTS = get_learned_variant_weights(min_samples=3)
+        _LEARNING_VARIANT_STATS = get_variant_performance_stats()
+        _LEARNING_TTS_WEIGHTS = get_weighted_tts_voices()
+
+        try:
+            from learning_engine import get_optimized_params
+            from performance_database import get_learnings as pdb_get_learnings
+            learnings = pdb_get_learnings()
+            _LEARNING_OPTIMIZED_PARAMS = get_optimized_params(learnings, _LEARNING_BASELINE)
+        except Exception:
+            _LEARNING_OPTIMIZED_PARAMS = {}
+
+        sample_count = _LEARNING_BASELINE.get('sample_count', 0)
+        log(f"[LEARNING] Refreshed: {sample_count} samples, {len(_LEARNING_VARIANT_WEIGHTS)} weighted variants, {len(_LEARNING_TTS_WEIGHTS)} TTS combos")
+    except Exception as e:
+        log(f"[LEARNING] Refresh failed: {e}")
+
+
+def _get_variant_weight(variant_key):
+    """Get the weight multiplier for a variant based on performance."""
+    return _LEARNING_VARIANT_WEIGHTS.get(variant_key, 1.0)
+
+
 def _init_round_robin(num_scripts):
-    """Initialize round-robin lists - shuffled once per pipeline run."""
+    """Initialize round-robin lists - learning-weighted once per pipeline run."""
     global _rr_variants, _rr_perspectives, _rr_voices, _rr_styles, _rr_script_index, _rr_tts_index
     import random
-    
-    # Get all options
+
     all_variants = list(SCRIPT_VARIANTS.keys())
     all_perspectives = list(SCRIPT_PERSPECTIVES)
     all_voices = [
@@ -191,29 +358,45 @@ def _init_round_robin(num_scripts):
         "Sadachbia", "Sadaltager", "Achird", "Zubenelgenubi", "Algenib", "Autonoe"
     ]
     all_styles = list(TTS_STYLE_OPTIONS)
-    
-    # Shuffle once at start
-    random.shuffle(all_variants)
+
     random.shuffle(all_perspectives)
-    random.shuffle(all_voices)
-    random.shuffle(all_styles)
-    
-    # Extend to cover all scripts (cycle through if more scripts than options)
-    _rr_variants = (all_variants * ((num_scripts // len(all_variants)) + 2))[:num_scripts]
-    _rr_perspectives = (all_perspectives * ((num_scripts // len(all_perspectives)) + 2))[:num_scripts]
-    _rr_voices = (all_voices * ((num_scripts // len(all_voices)) + 2))[:num_scripts]
-    _rr_styles = (all_styles * ((num_scripts // len(all_styles)) + 2))[:num_scripts]
+
+    weighted_variants = []
+    for variant in all_variants:
+        weight = _get_variant_weight(variant)
+        slots = max(1, round(weight * 2))
+        weighted_variants.extend([variant] * slots)
+
+    random.shuffle(weighted_variants)
+    _rr_variants = (weighted_variants * ((num_scripts // max(len(weighted_variants), 1)) + 2))[:num_scripts]
+
+    _rr_perspectives = (all_perspectives * ((num_scripts // max(len(all_perspectives), 1)) + 2))[:num_scripts]
+
+    if _LEARNING_TTS_WEIGHTS:
+        weighted_voices = []
+        for item in _LEARNING_TTS_WEIGHTS:
+            slots = max(1, round(item['weight'] * 3))
+            weighted_voices.extend([(item['voice'], item['style'])] * slots)
+        random.shuffle(weighted_voices)
+        voice_style_pairs = weighted_voices
+    else:
+        voice_style_pairs = [(v, s) for v in all_voices for s in all_styles]
+        random.shuffle(voice_style_pairs)
+
+    _rr_voices = [v for v, s in voice_style_pairs]
+    _rr_styles = [s for v, s in voice_style_pairs]
+
     _rr_script_index = 0
     _rr_tts_index = 0
-    
-    print(f"Round-robin initialized: {len(_rr_variants)} variants, {len(_rr_perspectives)} perspectives")
+
+    log(f"[LEARNING] Round-robin: {len(_rr_variants)} variants, {len(_rr_voices)} TTS combos")
 
 def _get_next_round_robin():
     """Get next round-robin item and advance index."""
     global _rr_script_index
     if not _rr_variants:
         return random.choice(list(SCRIPT_VARIANTS.keys())), random.choice(SCRIPT_PERSPECTIVES)
-    
+
     variant = _rr_variants[_rr_script_index] if _rr_script_index < len(_rr_variants) else random.choice(list(SCRIPT_VARIANTS.keys()))
     perspective = _rr_perspectives[_rr_script_index] if _rr_script_index < len(_rr_perspectives) else random.choice(SCRIPT_PERSPECTIVES)
     _rr_script_index += 1
@@ -286,6 +469,13 @@ def set_status(msg):
     except OSError:
         pass
 
+def set_progress(phase_num, percent, label):
+    if percent < 0:
+        percent = 0
+    elif percent > 100:
+        percent = 100
+    set_status(f"Phase {phase_num}: {label} ({percent}%)")
+
 # ─── Telegram ─────────────────────────────────────────────────────────────────
 def tg_send(msg, parse_mode=None):
     token = env("TELEGRAM_BOT_TOKEN")
@@ -349,42 +539,9 @@ def notify(msg):
 
 def send_context_confirmation(game_title, extracted, verified, comparison):
     """Send context confirmation request via Telegram or CLI."""
-    from context_manager import format_context_for_confirmation
-    
-    formatted = format_context_for_confirmation(extracted, verified, comparison)
-    
-    # Build inline keyboard for confirmation
-    keyboard = {
-        "inline_keyboard": [
-            [
-                {"text": "✅ Approve", "callback_data": f"ctx_approve_{game_title.replace(' ', '_')}"},
-                {"text": "📝 Edit", "callback_data": f"ctx_edit_{game_title.replace(' ', '_')}"},
-            ],
-            [
-                {"text": "❌ Cancel", "callback_data": "ctx_cancel"},
-            ]
-        ]
-    }
-    
-    # Check if Telegram is available
-    token = env("TELEGRAM_BOT_TOKEN")
-    chat = env("TELEGRAM_CHAT_ID")
-    
-    if token and chat:
-        # Send via Telegram
-        msg = f"🤖 Context Confirmation - {game_title}\n\n{formatted}\n\n⚠️ Please review and approve to continue to script generation."
-        try:
-            params = {"chat_id": chat, "text": msg, "reply_markup": json.dumps(keyboard)}
-            data = urllib.parse.urlencode(params).encode()
-            req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
-                                          data=data, method="POST")
-            urllib.request.urlopen(req, timeout=10)
-            return "telegram"
-        except Exception as e:
-            print(f"Telegram context confirmation error: {e}")
-    
-    # Fallback to CLI
-    return cli_context_confirmation(game_title, formatted)
+    # Auto-approve without waiting - context syncs to MemPalace for learning
+    log(f"Context auto-approved for {game_title} (sync to MemPalace enabled)")
+    return "auto_approved"
 
 
 def cli_context_confirmation(game_title, formatted):
@@ -441,9 +598,6 @@ def handle_context_callback(callback_data, game_title, cb_id):
         
         # Save to verified_context.json
         save_verified_context(game_title, resolved)
-        
-        # ALSO save to markdown files in Context/ directory
-        _cs_save_context(resolved)
         
         log(f"Context saved for {game_title}: {len(resolved.get('characters', []))} chars, {len(resolved.get('locations', []))} locs")
         
@@ -572,7 +726,6 @@ def handle_context_callback(callback_data, game_title, cb_id):
         if not extracted:
             return "⚠️ No context to save."
         
-        _cs_update_context_for_edit(extracted)
         save_verified_context(game_title, extracted)
         CONTEXT_EDIT_STATE.clear()
         
@@ -769,14 +922,11 @@ def handle_context_edit_input(txt, chat_id):
         game_title = state.get("game_title", env("GAME_TITLE", ""))
         extracted = state.get("extracted", {})
         
-        # Update Obsidian markdown files
-        _cs_update_context_for_edit(extracted)
-        
         # Save as verified
         save_verified_context(game_title, extracted)
         
         CONTEXT_EDIT_STATE.clear()
-        tg_send(f"✅ Context saved for {game_title}!\n\nRun Phase 2 to verify, then Phase 3 for scripts.")
+        tg_send(f"✅ Context saved for {game_title}!\n\nRun Phase 2 to verify, then Phase 4 for scripts.")
         return True
         
     elif txt.lower() == "cancel":
@@ -902,10 +1052,6 @@ def get_main_menu():
         "inline_keyboard": [
             [{"text": "📊 Status", "callback_data": "menu_status"}],
             [{"text": "▶️ Run Full Pipeline", "callback_data": "run_full"}],
-            [{"text": "────────── Pipeline ──────────", "callback_data": "noop"}],
-            [{"text": "📥 Download", "callback_data": "run_phase1"}, {"text": "🧠 Context", "callback_data": "run_phase2.5"}],
-            [{"text": "📝 Scripts", "callback_data": "run_phase3"}, {"text": "🎬 Clips", "callback_data": "run_phase4"}],
-            [{"text": "🎤 TTS", "callback_data": "run_phase5"}],
             [{"text": "────────── Tools ──────────", "callback_data": "noop"}],
             [{"text": "🎨 Content Studio", "callback_data": "menu_content_studio"}, {"text": "🗂️ Context", "callback_data": "menu_context"}],
             [{"text": "⚙️ Config", "callback_data": "menu_config"}, {"text": "ℹ️ Help", "callback_data": "menu_help"}]
@@ -916,14 +1062,7 @@ def get_run_menu():
     """Run menu - organized pipeline control."""
     return {
         "inline_keyboard": [
-            [{"text": "▶️ Full Pipeline", "callback_data": "run_full"}],
-            [{"text": "────────── Pipeline ──────────", "callback_data": "noop"}],
-            [{"text": "📥 Phase 1 (Download)", "callback_data": "run_phase1"}],
-            [{"text": "📝 Phase 2 (Transcribe)", "callback_data": "run_phase2"}],
-            [{"text": "🧠 Phase 2.5 (Context Only)", "callback_data": "run_phase2.5"}],
-            [{"text": "📝 Phase 3 (Scripts)", "callback_data": "run_phase3"}],
-            [{"text": "🎬 Phase 4 (Clips)", "callback_data": "run_phase4"}],
-            [{"text": "🎤 Phase 5 (TTS)", "callback_data": "run_phase5"}],
+            [{"text": "▶️ Run Full Pipeline", "callback_data": "run_full"}],
             [{"text": "────────── Options ──────────", "callback_data": "noop"}],
             [{"text": "⬅️ Back", "callback_data": "menu_back"}]
         ]
@@ -982,7 +1121,6 @@ def handle_help_callback(callback_data):
 
 ▶️ Pipeline Control:
 /run - Run full pipeline
-/run_phase 2 - Run specific phase
 /stop_pipeline - Stop running pipeline
 
 🎨 Content Studio:
@@ -1006,14 +1144,14 @@ Converts audio to text with timestamps
 Extracts context (characters, locations)
 🔧 NEW: Pauses for context confirmation!
 
-Phase 3 (📝) - Scripts
+Phase 4 (📝) - Scripts
 Generates AI-powered scripts
 Uses verified context for accuracy
 
-Phase 4 (🎬) - Clips
+Phase 5 (🎬) - Clips
 Extracts video clips based on scenes
 
-Phase 5 (🎤) - TTS
+Phase 6 (🎤) - TTS
 Creates AI voice narration
 Generates SRT subtitles"""
 
@@ -1136,12 +1274,6 @@ def handle_menu_callback(callback_data):
         return _get_rich_status()
     elif callback_data == "menu_pipeline":
         return None, get_run_menu()
-    elif callback_data == "menu_scripts":
-        return "📝 Running Phase 3...", "run_phase 3"
-    elif callback_data == "menu_clips":
-        return "🎬 Running Phase 4...", "run_phase 4"
-    elif callback_data == "menu_tts":
-        return "🎤 Running Phase 5...", "run_phase 5"
     elif callback_data == "menu_restart":
         return "🔄 Restarting listener...", "do_restart"
     elif callback_data == "menu_config":
@@ -1169,18 +1301,6 @@ def handle_menu_callback(callback_data):
         return None, None  # Do nothing for separator rows
     elif callback_data == "run_full":
         return "▶️ Running full pipeline...", "run_pipeline"
-    elif callback_data == "run_phase1":
-        return "📥 Running Phase 1...", "run_phase 1"
-    elif callback_data == "run_phase2":
-        return "📝 Running Phase 2 (Transcribe + Context)...", "run_phase 2"
-    elif callback_data == "run_phase2.5":
-        return "🧠 Running Phase 2.5 (Context Only)...", "run_phase 2.5"
-    elif callback_data == "run_phase3":
-        return "📝 Running Phase 3...", "run_phase 3"
-    elif callback_data == "run_phase4":
-        return "🎬 Running Phase 4...", "run_phase 4"
-    elif callback_data == "run_phase5":
-        return "🎤 Running Phase 5...", "run_phase 5"
     elif callback_data == "config_voice":
         return None, get_voice_menu()
     elif callback_data == "config_index":
@@ -1659,7 +1779,7 @@ Before outputting, verify:
 
 Write the complete script now."""
 
-    # Phase 4: Use Groq primary with adaptive temperature
+    # Phase 5: Use Groq primary with adaptive temperature
     groq_model = _get_groq_model("narrative")  # Content Studio uses narrative style
     temperature = 0.8  # Content Studio uses slightly higher temperature for creative content
     
@@ -1730,7 +1850,7 @@ Write the complete script now."""
     if scores and len(scores) > 1:
         log(f"   Content Studio: Selected best script from {len(scores)} candidates (score: {scores[0]['combined']})")
     
-    # Phase 5: Log quality metrics
+    # Phase 6: Log quality metrics
     fact_check = validate_script_factuality(best_script, validation_ctx)
     engagement = score_engagement(best_script)
     log(f"   Content Studio quality: factuality={fact_check['score']}, engagement={engagement['overall']}, words={len(best_script.split())}")
@@ -1858,7 +1978,7 @@ def _cs_generate_srt(audio_file):
     # Use faster-whisper to generate transcript with timestamps
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel("base", device="cpu", compute_type="int8")
+        model = WhisperModel(env("WHISPER_MODEL", "large-v3"), device="cpu", compute_type="int8")
         segments, info = model.transcribe(audio_file, language="en", word_timestamps=False)
         
         srt_file = audio_file.replace(".wav", ".srt")
@@ -1936,11 +2056,13 @@ def _cs_generate_script_only():
     
     # Extract and update context from transcript
     game_title = env("GAME_TITLE", "Unknown Game")
+    game_key = game_title.lower().replace(" ", "_")
     tg_send("🔍 Extracting context from transcript...")
     extracted = _cs_extract_context_from_transcript(transcript_text, game_title)
     ctx = _cs_load_context()
     if extracted:
         ctx = _cs_update_context(extracted, transcript_name)
+        _save_segment_references(game_key, transcript_name, extracted)
         tg_send(f"📚 Context updated: {len(ctx['characters'])} characters, {len(ctx['locations'])} locations")
         
         # NEW: Also mine to MemPalace for persistent memory
@@ -2061,6 +2183,10 @@ def _cs_generate_tts_only():
         return
     
     tg_send(f"✅ TTS generated!\n🎤 Voice: {voice}\n📁 Saved: {os.path.basename(audio_file)}")
+
+
+# ── ASR ErrorCorrector ───────────────────────────────────────────────────────────
+# (ASR corrector already defined above)
 
 
 def _cs_load_context():
@@ -2817,7 +2943,7 @@ or relationships that were previously flagged as incorrect.
 1. CHARACTERS: List character names that appear in the transcript
 2. LOCATIONS: List places mentioned (e.g., dorm room, school, town)
 3. KEY_TERMS: Important story elements, themes, or concepts
-4. RELATIONSHIPS: Relationships between characters (format: "Character A and Character B are [relationship]")
+4. RELATIONSHIPS: Relationships between characters
 
 {constraints_text}
 
@@ -2830,19 +2956,27 @@ TITLE STRATEGY: Create a compelling YouTube title that:
 - Matches video content accurately (no bait-and-switch)
 - Optimizes for watch time: promise delivery in the content
 
-Respond in this exact format:
-TITLE: [engaging YouTube title following the strategies above]
-CHARACTERS: [comma-separated list or "none"]
-LOCATIONS: [comma-separated list or "none"]
-KEY_TERMS: [comma-separated list or "none"]
-RELATIONSHIPS: [semicolon-separated list or "none"]
+Respond ONLY with a valid JSON object matching this exact schema:
+{{
+    "title": "engaging YouTube title following the strategies above",
+    "characters": ["character1", "character2"],
+    "locations": ["location1", "location2"],
+    "key_terms": ["term1", "term2"],
+    "relationships": [
+        {{"from": "Character A", "to": "Character B", "relationship": "friends"}}
+    ]
+}}
 
 Transcript excerpt:
 {transcript_text[:5000]}"""
     
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 512}
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 512,
+            "response_mime_type": "application/json"
+        }
     }).encode()
     
     key = keys[0]
@@ -2856,38 +2990,59 @@ Transcript excerpt:
             r = json.loads(resp.read())
             text = r["candidates"][0]["content"]["parts"][0]["text"]
 
-            characters = []
-            locations = []
-            key_terms = []
-            relationships = []
-            title = ""
-
-            for line in text.split("\n"):
-                if line.startswith("TITLE:"):
-                    title = line.split(":", 1)[1].strip()
-                elif line.startswith("CHARACTERS:"):
-                    chars = line.split(":", 1)[1].strip()
-                    characters = [c.strip() for c in chars.split(",") if c.strip() and c.strip().lower() != "none"]
-                elif line.startswith("LOCATIONS:"):
-                    locs = line.split(":", 1)[1].strip()
-                    locations = [l.strip() for l in locs.split(",") if l.strip() and l.strip().lower() != "none"]
-                elif line.startswith("KEY_TERMS:"):
-                    terms = line.split(":", 1)[1].strip()
-                    key_terms = [t.strip() for t in terms.split(",") if t.strip() and t.strip().lower() != "none"]
-                elif line.startswith("RELATIONSHIPS:"):
-                    rels = line.split(":", 1)[1].strip()
-                    relationships = [r.strip() for r in rels.split(";") if r.strip() and r.strip().lower() != "none"]
-
-            return {
-                "title": title,
-                "characters": characters,
-                "locations": locations,
-                "key_terms": key_terms,
-                "relationships": relationships
-            }
+            try:
+                data = json.loads(text)
+                return {
+                    "title": data.get("title", ""),
+                    "characters": data.get("characters", []),
+                    "locations": data.get("locations", []),
+                    "key_terms": data.get("key_terms", []),
+                    "relationships": data.get("relationships", [])
+                }
+            except json.JSONDecodeError:
+                log(f"Failed to parse JSON context from LLM output: {text}")
+                return None
     except Exception as e:
         log(f"Context extraction error: {e}")
         return None
+
+
+def _save_segment_references(game_key, transcript_name, extracted_context):
+    """Save segment references for context nodes."""
+    import uuid
+    SEGMENT_REF_FILE = os.path.join(WORKSPACE, "Context", "segment_references.json")
+    
+    try:
+        if os.path.exists(SEGMENT_REF_FILE):
+            with open(SEGMENT_REF_FILE, "r") as f:
+                refs = json.load(f)
+        else:
+            refs = {}
+        
+        if game_key not in refs:
+            refs[game_key] = {}
+        
+        transcript_key = transcript_name.replace(".json", "")
+        
+        node_refs = []
+        for char in extracted_context.get("characters", []):
+            node_refs.append({"node": char, "type": "character", "transcript": transcript_key})
+        for loc in extracted_context.get("locations", []):
+            node_refs.append({"node": loc, "type": "location", "transcript": transcript_key})
+        for term in extracted_context.get("key_terms", []):
+            node_refs.append({"node": term, "type": "term", "transcript": transcript_key})
+        for rel in extracted_context.get("relationships", []):
+            if isinstance(rel, dict):
+                node_refs.append({"node": f"{rel.get('from')}-{rel.get('to')}", "type": "relationship", "transcript": transcript_key})
+        
+        refs[game_key][transcript_key] = node_refs
+        
+        with open(SEGMENT_REF_FILE, "w") as f:
+            json.dump(refs, f, indent=2)
+        
+        log(f"[CONTEXT] Saved segment references for {transcript_key}")
+    except Exception as e:
+        log(f"[CONTEXT] Failed to save segment references: {e}")
 
 
 def _cs_update_context(extracted, transcript_name, script_summary=None):
@@ -3009,23 +3164,74 @@ def fmt_dur(seconds):
 def delete_partial_files():
     count = 0
     for pattern in ["*.part", "*.part-*.part", "*.ytdl", "*.f*.mp4.part"]:
-        for d in [STREAMS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR]:
+        for d in [MEDIA_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR]:
             for f in glob.glob(os.path.join(d, pattern)):
                 os.remove(f)
                 count += 1
     return count
 
 def cleanup_all_files():
+    """Delete generated files but keep scripts and shortsforge data for learning."""
     count = 0
-    for d in [STREAMS_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR]:
+    for d in [MEDIA_DIR, TRANSCRIPTS_DIR, TTS_DIR, SHORTS_DIR]:
         for f in glob.glob(os.path.join(d, "*")):
             if os.path.isfile(f):
                 os.remove(f)
                 count += 1
+        for f in glob.glob(os.path.join(d, "**/*"), recursive=True):
+            if os.path.isfile(f):
+                os.remove(f)
+                count += 1
+    log("Cleanup complete (scripts and shortsforge data preserved for learning)")
     return count
 
 def run(cmd, check=True):
     return subprocess.run(cmd, capture_output=True, text=True, check=check, env=os.environ.copy())
+
+# ─── Download from URL ───────────────────────────────────────────────────────
+def download_from_url(url: str) -> bool:
+    """Download video or playlist from a URL."""
+    set_status("Downloading from URL...")
+    log(f"Downloading from URL: {url}")
+    notify(f"Download Started: {url}")
+    
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    
+    def do_dl():
+        r = run([
+            "yt-dlp",
+            "--cookies-from-browser", "chrome",
+            "-f", "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
+            "--merge-output-format", "mp4",
+            "-o", f"{MEDIA_DIR}/%(title)s.%(ext)s",
+            "--progress",
+            url
+        ], check=False)
+        return r
+    
+    result = do_dl()
+    
+    if result.returncode != 0:
+        log_error(f"Download failed: {result.stderr}")
+        notify(f"Download Failed: {result.stderr[:200]}")
+        set_status("Download FAILED")
+        return False
+    
+    downloaded_files = list(glob.glob(os.path.join(MEDIA_DIR, "*.mp4")))
+    downloaded_files += list(glob.glob(os.path.join(MEDIA_DIR, "*.mk4")))
+    downloaded_files += list(glob.glob(os.path.join(MEDIA_DIR, "*.webm")))
+    
+    if downloaded_files:
+        latest = max(downloaded_files, key=os.path.getmtime)
+        log(f"Download complete: {os.path.basename(latest)}")
+        notify(f"Download Complete: {os.path.basename(latest)}")
+        set_status("Download Complete")
+        return True
+    else:
+        log_error("Download completed but no video file found")
+        notify("Download Failed: No file found")
+        set_status("Download FAILED")
+        return False
 
 # ─── Phase 1: Download ────────────────────────────────────────────────────────
 def phase_download():
@@ -3047,16 +3253,21 @@ def phase_download():
         set_status("Phase 1 FAILED")
         raise RuntimeError("Chrome cookies not available")
 
+    set_progress(1, 10, "Downloading video")
+    
     def do_dl():
         playlist_index = env("PLAYLIST_INDEX", "1")
+        os.makedirs(MEDIA_DIR, exist_ok=True)
+        set_progress(1, 30, "Downloading video")
         r = run(["yt-dlp", "--playlist-items", playlist_index,
                  "--cookies-from-browser", "chrome",
                  "-f", "bestvideo+bestaudio",
-                 "-o", f"{STREAMS_DIR}/%(title)s.%(ext)s",
+                 "-o", f"{MEDIA_DIR}/%(title)s.%(ext)s",
                  playlist_url])
         log(r.stdout[-500:] if r.stdout else "")
         if r.returncode != 0 and r.stderr:
             log_error(f"yt-dlp error: {r.stderr[-300:]}")
+        set_progress(1, 80, "Downloading video")
 
     if not retry(do_dl, 3, 10, "Download video"):
         log_error("Phase 1 failed after 3 attempts")
@@ -3133,11 +3344,35 @@ def phase_transcribe(video):
     
     try:
         from faster_whisper import WhisperModel
-        log("Using faster-whisper for transcription (primary, fastest)...")
-        model = WhisperModel("base", device="cpu", compute_type="int8")
-        segments, info = model.transcribe(video, language="en", vad_filter=True)
+        log("Using faster-whisper for transcription...")
+        
+        whisper_model = env("WHISPER_MODEL", "large-v3")
+        log(f"Transcription model: {whisper_model}")
+        
+        model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
+        
+        log("Optimized transcription settings:")
+        # Optimized settings per research:
+        # - beam_size=5: better decoding than default
+        # - temperature=0.2: lower = more deterministic
+        # - condition_on_previous_text=True: helps with continuity
+        # - VAD with 500ms silence: removes non-speech
+        segments, info = model.transcribe(
+            video,
+            language="en",
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+            beam_size=5,
+            temperature=0.2,
+            condition_on_previous_text=True,
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+        )
         srt_path = os.path.join(TRANSCRIPTS_DIR, f"{basename}.srt")
         json_path = os.path.join(TRANSCRIPTS_DIR, f"{basename}.json")
+        
+        total_duration = info.duration if hasattr(info, 'duration') and info.duration else 0
+        last_update = 0
         
         def fmt_srt_time(seconds):
             hrs = int(seconds // 3600)
@@ -3156,14 +3391,24 @@ def phase_transcribe(video):
                 text = segment.text.strip()
                 if text:
                     seg_list.append({"start": start, "end": end, "text": text})
+                    transcript_text += text + " "
                     srt_f.write(f"{sidx}\n")
                     srt_f.write(f"{fmt_srt_time(start)} --> {fmt_srt_time(end)}\n")
                     srt_f.write(f"{text}\n\n")
                     sidx += 1
+                
+                if total_duration > 0 and end > last_update:
+                    pct = int((end / total_duration) * 100)
+                    if pct != last_update:
+                        set_progress(2, pct, "Transcribing")
+                        last_update = pct
         
         import json
         with open(json_path, "w") as json_f:
             json.dump({"segments": seg_list}, json_f)
+        
+        # Post-process: Correct known gaming ASR errors
+        _correct_transcript_asr_errors(json_path)
         
         log("faster-whisper transcription complete")
         transcription_success = True
@@ -3222,7 +3467,7 @@ def phase_transcribe(video):
     set_status("Phase 2 Complete")
     return json_file
 
-# ─── Phase 2.5: Context Only (Extract/Update Context) ─────────────────────────
+# ─── Phase 3: Context Only (Extract/Update Context) ─────────────────────────
 def phase_context():
     """Extract or update context from existing transcript - no transcription needed."""
     json_file = None
@@ -3235,9 +3480,9 @@ def phase_context():
             json_file = transcripts[0]
     
     if not json_file:
-        log_error("Phase 2.5 Failed: No transcript found")
-        notify("Phase 2.5 Failed: No transcript. Run Phase 2 first.")
-        set_status("Phase 2.5 FAILED")
+        log_error("Phase 3 Failed: No transcript found")
+        notify("Phase 3 Failed: No transcript. Run Phase 2 first.")
+        set_status("Phase 3 FAILED")
         return
     
     # Extract text from transcript
@@ -3250,78 +3495,54 @@ def phase_context():
             if text.strip():
                 transcript_text += text + " "
     except Exception as e:
-        log_error(f"Phase 2.5 Failed: Could not read transcript: {e}")
-        notify(f"Phase 2.5 Failed: {e}")
-        set_status("Phase 2.5 FAILED")
+        log_error(f"Phase 3 Failed: Could not read transcript: {e}")
+        notify(f"Phase 3 Failed: {e}")
+        set_status("Phase 3 FAILED")
         return
     
     if not transcript_text:
-        log_error("Phase 2.5 Failed: Empty transcript")
-        notify("Phase 2.5 Failed: Transcript is empty")
-        set_status("Phase 2.5 FAILED")
+        log_error("Phase 3 Failed: Empty transcript")
+        notify("Phase 3 Failed: Transcript is empty")
+        set_status("Phase 3 FAILED")
         return
     
     # Extract context
     game_title = env("GAME_TITLE", "Unknown Game")
-    set_status("Phase 2.5: Extracting context...")
-    log("Phase 2.5: Extracting context from transcript...")
-    notify("Phase 2.5: Extracting context...")
+    set_status("Phase 3: Extracting context...")
+    log("Phase 3: Extracting context from transcript...")
+    notify("Phase 3: Extracting context...")
     
     try:
         extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
     except Exception as e:
-        log_error(f"Phase 2.5 Failed: Context extraction error: {e}")
-        notify(f"Phase 2.5 Failed: API error - {e}")
-        set_status("Phase 2.5 FAILED")
+        log_error(f"Phase 3 Failed: Context extraction error: {e}")
+        notify(f"Phase 3 Failed: API error - {e}")
+        set_status("Phase 3 FAILED")
         return
     
     if not extracted:
-        log_error("Phase 2.5 Failed: Context extraction failed")
-        notify("Phase 2.5 Failed: Could not extract context (empty response)")
-        set_status("Phase 2.5 FAILED")
+        log_error("Phase 3 Failed: Context extraction failed")
+        notify("Phase 3 Failed: Could not extract context (empty response)")
+        set_status("Phase 3 FAILED")
         return
     
     # Context verification flow
     verified = load_verified_context(game_title)
     
     if not verified:
-        # First run - need confirmation
-        log(f"First run for {game_title} - requesting context confirmation...")
-        notify(f"🤖 Context Confirmation - {game_title}\n\nPlease review and approve context via Telegram inline buttons.")
-        
-        set_pending_context(game_title, extracted, {}, {
-            "has_significant_change": True,
-            "reason": "first_run",
-            "changes": {},
-            "resolved_context": extracted
-        })
-        
-        result = send_context_confirmation(game_title, extracted, {}, {
-            "has_significant_change": True,
-            "reason": "first_run",
-            "changes": {},
-            "resolved_context": extracted
-        })
-        
-        log("Waiting for context confirmation... Pipeline paused.")
-        set_status("Waiting for context confirmation...")
-        return
-        
+        # First run - auto-save and sync to MemPalace
+        save_verified_context(game_title, extracted)
+        log(f"First run for {game_title} - context auto-saved")
+        set_status("Phase 3: Context extracted")
+    
     else:
         # Check for significant changes
         comparison = compare_context_with_history(extracted, verified)
         
         if comparison.get("needs_confirmation"):
-            log(f"Context changes detected for {game_title} - requesting confirmation...")
-            notify(f"🤖 Context Changes Detected - {game_title}\n\nPlease review changes via Telegram.")
-            
-            set_pending_context(game_title, extracted, verified, comparison)
-            
-            result = send_context_confirmation(game_title, extracted, verified, comparison)
-            
-            log("Waiting for context confirmation... Pipeline paused.")
-            set_status("Waiting for context confirmation...")
-            return
+            save_verified_context(game_title, extracted)
+            log(f"Context changes detected for {game_title} - auto-saving...")
+            set_status("Phase 3: Context extracted")
         else:
             # No significant changes - use verified context
             log(f"Context verified (no significant changes)")
@@ -3331,10 +3552,10 @@ def phase_context():
     transcript_name = os.path.basename(json_file)
     _cs_update_context(extracted, transcript_name)
     log(f"Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs, {len(extracted.get('relationships', []))} rels")
-    notify(f"✅ Phase 2.5 Complete: Context extracted\n📝 {len(extracted.get('characters', []))} chars\n📍 {len(extracted.get('locations', []))} locs\n👥 {len(extracted.get('relationships', []))} rels")
-    set_status("Phase 2.5 Complete")
+    notify(f"✅ Phase 3 Complete: Context extracted\n📝 {len(extracted.get('characters', []))} chars\n📍 {len(extracted.get('locations', []))} locs\n👥 {len(extracted.get('relationships', []))} rels")
+    set_status("Phase 3 Complete")
 
-# ─── Phase 3: Scripts ─────────────────────────────────────────────────────────
+# ─── Phase 4: Scripts ─────────────────────────────────────────────────────────
 
 SCRIPT_PERSPECTIVES = [
     "Focus on the villain's motive — why did they do what they did?",
@@ -3353,52 +3574,52 @@ SCRIPT_VARIANTS = {
     "mystery_recap": {
         "style": "Mystery Recap",
         "voice_style": "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments. Build suspense through the story flow.",
-        "instruction": """Write a mystery recap in complete, natural sentences. NO poetic fragments or mysterious one-liners. Tell the story chronologically while hinting at secrets. Start with the hook, build the clues naturally, end with an open question. Keep it 150-250 words.""",
+        "instruction": """Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity in the first sentence. Tell the story chronologically while hinting at secrets. Include a pattern interrupt mid-way using 'but here's the thing' or 'what nobody realizes'. End by looping back to your opening and include a CTA like 'follow for more'. Target 75-150 words.""",
     },
     "breakdown": {
         "style": "Breakdown",
         "voice_style": "Speak confidently and authoritatively. Explain causes and effects clearly, like an expert sharing knowledge.",
-        "instruction": """Write an analytical breakdown. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Be authoritative and informative. Keep it 150-250 words.""",
+        "instruction": """Write an analytical breakdown. Start with a hook that states a surprising insight in the first sentence. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Include a pattern interrupt with 'here is why that matters' or 'but the real story is'. End with a takeaway and CTA. Target 75-150 words.""",
     },
     "timeline": {
         "style": "Timeline",
         "voice_style": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-        "instruction": """Write a chronological timeline. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. NO fragmented bullet points. Keep it 150-250 words.""",
+        "instruction": """Write a chronological timeline. Hook viewers immediately with a dramatic moment or outcome. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. Include a 'but then came' pattern interrupt. End with resolution and CTA. Target 75-150 words.""",
     },
     "lesson": {
         "style": "Moral/Lesson",
         "voice_style": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-        "instruction": """Write a reflective lesson. Explain what was learned and what could have been different. Use complete sentences that flow naturally. End with a thought-provoking question in sentence form. Keep it 150-250 words.""",
+        "instruction": """Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. Use complete sentences that flow naturally. Include a pattern interrupt with 'but the biggest lesson' or 'here is what nobody tells you'. End with a thought-provoking question and CTA. Target 75-150 words.""",
     },
     "narrative": {
         "style": "Narrative",
         "voice_style": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-        "instruction": """Write a first-person narrative as if you're telling a friend what happened. Use vivid but natural descriptions. Flow from one moment to the next. No bullet points or fragments. Keep it 150-250 words.""",
+        "instruction": """Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid but natural descriptions. Flow from one moment to the next. Include a pattern interrupt like 'but what happened next changed everything'. Loop the ending back to the hook and add a CTA. Target 75-150 words.""",
     },
     "news_report": {
         "style": "News Report",
         "voice_style": "Speak like a professional news reporter. Clear, factual, objective. Present information in order of importance.",
-        "instruction": """Write a professional news report. Lead with the key fact, add context in flowing paragraphs. Use objective, factual language. NO dramatic fragments. Keep it 150-250 words.""",
+        "instruction": """Write a professional news report. Lead with the key fact or breaking news in the first sentence - no introductions. Add context in flowing paragraphs. Use objective, factual language. Include a pattern interrupt with 'but what this means is' or 'the deeper story involves'. End with impact and CTA. Target 75-150 words.""",
     },
     "documentary": {
         "style": "Documentary",
         "voice_style": "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
-        "instruction": """Write a documentary-style narration. Add historical or psychological context naturally through flowing paragraphs. Inform and educate without being dry. Keep it 150-250 words.""",
+        "instruction": """Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context naturally through flowing paragraphs. Include a pattern interrupt with 'but what most miss' or 'here is what the cameras captured'. End with a lasting insight and CTA. Target 75-150 words.""",
     },
     "true_crime": {
         "style": "True Crime",
         "voice_style": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-        "instruction": """Write a true crime story. Build investigation and tension through natural sentences. Tell what was discovered and how. Flow from discovery to revelation. Keep it 150-250 words.""",
+        "instruction": """Write a true crime story. Hook with a shocking detail or question in the first sentence. Build investigation and tension through natural sentences. Include a pattern interrupt with 'but the twist came when' or 'here is where it gets darker'. End with revelation and CTA. Target 75-150 words.""",
     },
     "character_pov": {
         "style": "Character POV",
         "voice_style": "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
-        "instruction": """Write from the main character's perspective. Show internal thoughts and feelings in first person. Make it personal and intimate. Flow from emotion to emotion naturally. Keep it 150-250 words.""",
+        "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Include a pattern interrupt with 'but what I never told anyone was' or 'and then it hit me'. End with emotional payoff and CTA. Target 75-150 words.""",
     },
     "true_story": {
         "style": "True Story",
         "voice_style": "Speak like sharing an incredible story with a friend. Conversational, engaging, hook them early.",
-        "instruction": """Write like you're sharing an amazing true story with a friend. Start with a hook, build naturally, end with impact. Conversational flow throughout. NO poetic fragments. Keep it 150-250 words.""",
+        "instruction": """Write like sharing an amazing true story with a friend. Hook immediately with something incredible or unexpected. Build naturally with vivid details. Include a pattern interrupt with 'but here is the crazy part' or 'and that is when everything changed'. End with impact, loop back to the hook, and add CTA. Target 75-150 words.""",
     },
 }
 
@@ -3415,11 +3636,77 @@ TTS_STYLE_OPTIONS = [
     "Speak like sharing an incredible story with a friend. Conversational, engaging, hook them early.",
 ]
 
+
+def _get_variant_performance_text(variant_key):
+    """Get performance context text for a variant based on historical data."""
+    stats = _LEARNING_VARIANT_STATS
+    if not stats or variant_key not in stats:
+        return ""
+
+    data = stats[variant_key]
+    count = data.get('script_count', 0)
+    avg_views = data.get('avg_views', 0)
+    avg_eng = data.get('avg_engagement', 0)
+    avg_score = data.get('avg_score', 0)
+
+    if count < 1:
+        return ""
+
+    lines = [
+        "",
+        "PERFORMANCE CONTEXT (learned from YouTube data):",
+        f"- This script style ('{variant_key}') has been used {count} time(s)",
+        f"- Average engagement: {avg_eng:.1f}%, Average views: {avg_views:.0f}",
+        f"- Performance score: {avg_score:.1f}/100",
+    ]
+
+    optimal_range = _LEARNING_OPTIMIZED_PARAMS.get('optimal_duration_range', (30, 60))
+    if optimal_range:
+        lines.append(f"- Target clip duration: {optimal_range[0]}-{optimal_range[1]}s for best performance")
+
+    hook_weight = _LEARNING_OPTIMIZED_PARAMS.get('hook_strength_weight', 1.0)
+    if hook_weight and hook_weight != 1.0:
+        lines.append(f"- Hook strength weight: {hook_weight:.1f}x (higher = stronger hooks recommended)")
+
+    return "\n".join(lines) + "\n"
+
+
+def _get_mempalace_prompt_hints(game_title):
+    """Get MemPalace best prompts and game memory for injection."""
+    if not MEMPALACE_AVAILABLE or not game_title:
+        return ""
+
+    hints = []
+    try:
+        mp_manager = get_mempalace_manager()
+        if mp_manager:
+            best = mp_manager.get_best_prompts(game_title, top_n=3)
+            if best:
+                hints.append("\nMEMORY CONTEXT (from learned experience):")
+                for item in best[:2]:
+                    src = item.get('source', '')
+                    factuality = item.get('factuality', 0)
+                    engagement = item.get('engagement', 0)
+                    if src:
+                        hints.append(f"- Past successful prompt patterns detected for '{src}'")
+
+            memory = mp_manager.get_game_memory(game_title)
+            if memory.get('success') and memory.get('search_result'):
+                result = memory['search_result'][:300]
+                if result and len(result) > 20:
+                    hints.append(f"- Game memory: {result[:200]}...")
+
+    except Exception:
+        pass
+
+    return "\n".join(hints) + "\n" if hints else ""
+
+
 def _build_script_prompt(variant_key, perspective, game_title, transcript, context=None):
     """Build script prompt using Jinja2 templates (Phase 1) with fallback to legacy."""
     variant = SCRIPT_VARIANTS[variant_key]
     env = _get_prompt_env()
-    
+
     learned = get_learned_constraints(game_title=game_title, content_type="pipeline")
     learned_constraints_text = ""
     if learned.get("negative_constraints") or learned.get("positive_emphasis"):
@@ -3428,6 +3715,9 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
             learned_constraints_text += f"- {nc}\n"
         for pe in learned.get("positive_emphasis", []):
             learned_constraints_text += f"- {pe}\n"
+
+    perf_context = _get_variant_performance_text(variant_key)
+    mempalace_hints = _get_mempalace_prompt_hints(game_title)
 
     if env is not None:
         try:
@@ -3491,6 +3781,8 @@ TITLE STRATEGY: Create a compelling YouTube title that:
 
     return f"""You are an expert YouTube Shorts scriptwriter specializing in gaming content. {game_line}{context_info}
 {learned_constraints_text}
+{perf_context}
+{mempalace_hints}
 Style: {variant['style']}
 Perspective: {perspective}
 
@@ -3536,7 +3828,7 @@ Transcript:
 
 
 def _get_temperature(variant_key):
-    """Get adaptive temperature for content type (Phase 4) with learned optimization."""
+    """Get adaptive temperature for content type (Phase 5) with learned optimization."""
     base_temp = TEMPERATURE_BY_TYPE.get(variant_key, 0.7)
     
     # Try to get learned optimal temperature
@@ -3552,7 +3844,7 @@ def _get_temperature(variant_key):
 
 
 def _get_groq_model(variant_key):
-    """Get Groq model for content type (Phase 4)."""
+    """Get Groq model for content type (Phase 5)."""
     return GROQ_MODELS_BY_TYPE.get(variant_key, GROQ_MODEL)
 
 def _rate_limit():
@@ -3670,23 +3962,24 @@ def _extract_hour(json_file, start, end):
                 parts.append(t)
     return "\n".join(parts)
 
-def phase_scripts(json_file, duration, num_hours):
+def phase_scripts(json_file, duration, num_hours, video=None):
+    video_basename = os.path.splitext(os.path.basename(video))[0] if video else "script"
     if not json_file or not os.path.exists(json_file):
-        log_error("Phase 3 Failed: Transcript file not found")
-        notify("Phase 3 Failed: No transcript available")
-        set_status("Phase 3 FAILED")
+        log_error("Phase 4 Failed: Transcript file not found")
+        notify("Phase 4 Failed: No transcript available")
+        set_status("Phase 4 FAILED")
         raise RuntimeError("Transcript file not found")
 
     keys = get_gemini_keys()
     if not keys:
-        log_error("Phase 3 Failed: No API keys in keychain")
-        notify("Phase 3 Failed: No API keys configured")
-        set_status("Phase 3 FAILED")
+        log_error("Phase 4 Failed: No API keys in keychain")
+        notify("Phase 4 Failed: No API keys configured")
+        set_status("Phase 4 FAILED")
         raise RuntimeError("No API keys available")
 
     _init_round_robin(num_hours)
     
-    # Load and optimize context for script generation (Phase 3)
+    # Load and optimize context for script generation (Phase 4)
     ctx = _cs_load_context()
     ctx = summarize_context(ctx, max_per_category=10)
     log(f"   Context loaded: {len(ctx.get('characters', []))} chars, {len(ctx.get('locations', []))} locs, {len(ctx.get('key_terms', []))} terms")
@@ -3707,20 +4000,24 @@ def phase_scripts(json_file, duration, num_hours):
     else:
         validation_ctx = ctx
     
-    set_status("Phase 3: Generating scripts...")
-    log("Phase 3: Generating scripts (one per hour, Groq primary, Gemini fallback)...")
-    notify(f"Phase 3 Started: Generating {num_hours} scripts...")
+    set_status("Phase 4: Generating scripts...")
+    log("Phase 4: Generating scripts (one per hour, Groq primary, Gemini fallback)...")
+    notify(f"Phase 4 Started: Generating {num_hours} scripts...")
     delay = int(env("SCRIPT_DELAY", "300"))
 
     scripts_generated = 0
     for i in range(1, num_hours + 1):
+        pct = int(((i - 1) / num_hours) * 100)
+        set_progress(3, pct, f"Generating scripts ({i}/{num_hours})")
+        
         padded = f"{i:03d}"
         h_start = (i - 1) * 3600
         h_end   = min(i * 3600, duration)
-        out     = os.path.join(SCRIPTS_DIR, f"script_{padded}.txt")
+        out     = os.path.join(SCRIPTS_DIR, f"{video_basename}-Script{padded}.txt")
 
         if os.path.exists(out):
             log(f"   Skipping script {i} (exists)")
+            scripts_generated += 1
             continue
 
         try:
@@ -3735,7 +4032,7 @@ def phase_scripts(json_file, duration, num_hours):
             groq_model = _get_groq_model(variant_key)
             temperature = _get_temperature(variant_key)
 
-            # Phase 3: Optimize context relevance for this specific transcript
+            # Phase 4: Optimize context relevance for this specific transcript
             relevant_ctx = score_context_relevance(ctx, transcript_text, max_items=8)
             
             # NEW: Inject MemPalace memory into context
@@ -3751,7 +4048,7 @@ def phase_scripts(json_file, duration, num_hours):
                     except Exception as mp_err:
                         log(f"MemPalace: Memory injection failed - {mp_err}")
 
-            # Phase 4: Dynamic model selection + adaptive temperature
+            # Phase 5: Dynamic model selection + adaptive temperature
             # Phase 2: Multi-attempt generation with validation
             best_script = None
             best_metadata = None
@@ -3786,7 +4083,7 @@ def phase_scripts(json_file, duration, num_hours):
                 best_script = transcript_text
                 best_metadata = {"source": "raw_transcript"}
 
-            # Log quality metrics (Phase 5)
+            # Log quality metrics (Phase 6)
             if best_script and best_metadata.get("source") != "raw_transcript":
                 fact_check = validate_script_factuality(best_script, validation_ctx)
                 engagement = score_engagement(best_script)
@@ -3829,10 +4126,26 @@ def phase_scripts(json_file, duration, num_hours):
             wc = len(best_script.split())
             log(f"   Script {i}: {wc} words (source: {best_metadata.get('source', 'unknown')})")
             scripts_generated += 1
-            set_status(f"Phase 3: Script {i}/{num_hours} generated")
+            
+            # Store script in performance database for learning
+            if PERFORMANCE_DB_AVAILABLE and LEARNING_ENGINE_AVAILABLE:
+                try:
+                    features = extract_script_features(best_script, variant_key)
+                    script_id = store_script(
+                        video_name=video_basename,
+                        content_type=variant_key,
+                        script_text=best_script,
+                        features=features,
+                        variants=candidates if len(candidates) > 1 else []
+                    )
+                    log(f"Performance: Script stored (ID: {script_id[:8]}...)")
+                    _SCRIPT_ID_MAP[i] = script_id
+                except Exception as perf_err:
+                    log(f"Performance DB: Failed to store script - {perf_err}")
+            set_status(f"Phase 4: Script {i}/{num_hours} generated")
             notify(f"Script {i}/{num_hours} generated ({wc} words)")
 
-            # Update context with script summary (Phase 3)
+            # Update context with script summary (Phase 4)
             if best_script and wc > 50:
                 summary = f"Script {i}: {best_script[:100]}..."
                 _cs_update_context({"characters": [], "locations": [], "key_terms": [], "relationships": []}, f"script_{padded}", summary)
@@ -3845,15 +4158,15 @@ def phase_scripts(json_file, duration, num_hours):
             time.sleep(delay)
 
     if scripts_generated == 0:
-        log_error("Phase 3 Failed: No scripts were generated")
-        notify("Phase 3 Failed: No scripts generated")
-        set_status("Phase 3 FAILED")
+        log_error("Phase 4 Failed: No scripts were generated")
+        notify("Phase 4 Failed: No scripts generated")
+        set_status("Phase 4 FAILED")
         raise RuntimeError("No scripts generated")
 
-    set_status("Phase 3 Complete")
-    notify(f"Phase 3 Complete: {scripts_generated} scripts generated")
+    set_status("Phase 4 Complete")
+    notify(f"Phase 4 Complete: {scripts_generated} scripts generated")
 
-# ─── Phase 4: Clips ──────────────────────────────────────────────────────────
+# ─── Phase 5: Clips ──────────────────────────────────────────────────────────
 def _extract_scenes(json_file, h_start, h_end):
     scenes = []
     try:
@@ -3895,10 +4208,19 @@ def _extract_scenes(json_file, h_start, h_end):
             txt = " ".join(e["text"] for e in grp)
             drama = txt.count("?") * 2 + txt.count("!") * 2
             score = words + density * 10 + drama
+
+            optimal_range = _LEARNING_OPTIMIZED_PARAMS.get('optimal_duration_range', (30, 60))
+            if optimal_range:
+                opt_min, opt_max = optimal_range
+                if opt_min <= dur <= opt_max:
+                    score += 15
+                elif 20 <= dur < opt_min or opt_max < dur <= 90:
+                    score += 8
+
             scenes.append({
                 "start": max(grp[0]["start"] - 5, h_start),
                 "end": min(grp[-1]["end"] + 5, h_end),
-                "score": score, "text": txt[:200]
+                "score": score, "text": txt[:200], "duration": dur, "density": density
             })
 
         scenes.sort(key=lambda x: x["score"], reverse=True)
@@ -3907,33 +4229,43 @@ def _extract_scenes(json_file, h_start, h_end):
     max_clips = int(env("CLIPS_PER_HOUR", "5"))
     return scenes[:max_clips]
 
-def phase_clips(video, json_file, duration, num_hours):
+def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
     if not video or not os.path.exists(video):
-        log_error("Phase 4 Failed: Video file not found")
-        notify("Phase 4 Failed: Video file not found")
-        set_status("Phase 4 FAILED")
+        log_error("Phase 5 Failed: Video file not found")
+        notify("Phase 5 Failed: Video file not found")
+        set_status("Phase 5 FAILED")
         raise RuntimeError("Video file not found")
 
     if not json_file or not os.path.exists(json_file):
-        log_error("Phase 4 Failed: Transcript file not found")
-        notify("Phase 4 Failed: No transcript available")
-        set_status("Phase 4 FAILED")
+        log_error("Phase 5 Failed: Transcript file not found")
+        notify("Phase 5 Failed: No transcript available")
+        set_status("Phase 5 FAILED")
         raise RuntimeError("Transcript file not found")
 
-    set_status("Phase 4: Generating clips...")
-    log("Phase 4: Generating clips (scene-based)...")
-    notify("Phase 4 Started: Generating clips...")
+    set_status("Phase 5: Generating clips...")
+    log("Phase 5: Generating clips (scene-based)...")
+    notify("Phase 5 Started: Generating clips...")
     vaapi = os.path.exists("/dev/dri/renderD128")
     log(f"   Encoding method: {'VAAPI' if vaapi else 'CPU (libx264)'}")
 
     ffmpeg_check = run(["ffmpeg", "-version"], check=False)
     if ffmpeg_check.returncode != 0:
-        log_error("Phase 4 Failed: ffmpeg not available")
-        notify("Phase 4 Failed: ffmpeg not installed")
-        set_status("Phase 4 FAILED")
+        log_error("Phase 5 Failed: ffmpeg not available")
+        notify("Phase 5 Failed: ffmpeg not installed")
+        set_status("Phase 5 FAILED")
         raise RuntimeError("ffmpeg not available")
 
     clips_generated = 0
+    total_clips_estimate = 0
+    for i in range(1, num_hours + 1):
+        h_start = (i - 1) * 3600
+        h_end   = min(i * 3600, duration)
+        padded  = f"{i:03d}"
+
+        scenes = _extract_scenes(json_file, h_start, h_end)
+        total_clips_estimate += len(scenes)
+    
+    clip_counter = 0
     for i in range(1, num_hours + 1):
         h_start = (i - 1) * 3600
         h_end   = min(i * 3600, duration)
@@ -3943,12 +4275,28 @@ def phase_clips(video, json_file, duration, num_hours):
         if not scenes:
             log(f"   Hour {i}: No scenes found")
             continue
-
+        
+        video_basename = os.path.splitext(os.path.basename(video))[0]
+        
+        if AUDIO_ANALYSIS_AVAILABLE:
+            try:
+                scenes = enhance_scene_selection(scenes, video)
+                log(f"   Audio analysis: enhanced {len(scenes)} scenes")
+            except Exception as audio_err:
+                log(f"   Audio analysis skipped: {audio_err}")
+        
+        scenes.sort(key=lambda x: x.get('audio_virality_score', x.get('drama_score', 0)), reverse=True)
+        
         for idx, sc in enumerate(scenes, 1):
-            name = f"short_{padded}_{idx}.mp4"
+            clip_counter += 1
+            pct = int(((clip_counter - 1) / max(total_clips_estimate, 1)) * 100) if total_clips_estimate > 0 else 0
+            set_progress(4, pct, f"Generating clips ({clip_counter}/{total_clips_estimate})")
+            
+            name = f"{video_basename}-Short{idx}.mp4"
             out  = os.path.join(SHORTS_DIR, name)
             if os.path.exists(out) and os.path.getsize(out) > 0:
                 log(f"   Skipping {name} (exists)")
+                clips_generated += 1
                 continue
 
             try:
@@ -3981,6 +4329,39 @@ def phase_clips(video, json_file, duration, num_hours):
                 if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
                     log(f"   {name} created ({enc})")
                     clips_generated += 1
+                    
+                    # Store clip in performance database for learning
+                    if PERFORMANCE_DB_AVAILABLE and LEARNING_ENGINE_AVAILABLE:
+                        try:
+                            clip_features = {
+                                'duration': dur,
+                                'has_dialogue': '?' in sc.get('text', ''),
+                                'has_exclamation': '!' in sc.get('text', ''),
+                                'has_numbers': bool(sc.get('text', '').replace('.','').isdigit()),
+                                'density': sc.get('density', 0),
+                                'drama_score': sc.get('drama_score', 0),
+                                'word_count': sc.get('words', 0),
+                                'voice': rr_voice,
+                                'style': rr_style,
+                            }
+                            virality = calculate_virality_score(clip_features, learned_params=_LEARNING_OPTIMIZED_PARAMS)
+                            if script_id_map:
+                                linked_script_id = script_id_map.get(i)
+                            else:
+                                linked_script_id = None
+
+                            clip_id = store_clip(
+                                script_id=linked_script_id,
+                                source_file=video_basename,
+                                start_time=s,
+                                end_time=e,
+                                duration=dur,
+                                features=clip_features,
+                                virality_score=virality
+                            )
+                            log(f"Performance: Clip stored (score: {virality:.1f})")
+                        except Exception as perf_err:
+                            log(f"Performance DB: Failed to store clip - {perf_err}")
                 else:
                     err_msg = r.stderr[-200:] if r.stderr else "Unknown error"
                     log_error(f"   Failed {name}: {err_msg}")
@@ -3989,15 +4370,15 @@ def phase_clips(video, json_file, duration, num_hours):
                 continue
 
     if clips_generated == 0:
-        log_error("Phase 4 Failed: No clips were generated")
-        notify("Phase 4 Failed: No clips generated")
-        set_status("Phase 4 FAILED")
+        log_error("Phase 5 Failed: No clips were generated")
+        notify("Phase 5 Failed: No clips generated")
+        set_status("Phase 5 FAILED")
         raise RuntimeError("No clips generated")
 
-    set_status("Phase 4 Complete")
-    notify(f"Phase 4 Complete: {clips_generated} clips generated")
+    set_status("Phase 5 Complete")
+    notify(f"Phase 5 Complete: {clips_generated} clips generated")
 
-# ─── Phase 5: TTS ─────────────────────────────────────────────────────────────
+# ─── Phase 6: TTS ─────────────────────────────────────────────────────────────
 def _load_api_keys():
     """Load API keys from keychain (fallback to empty list)."""
     try:
@@ -4053,37 +4434,39 @@ def _strip_title(script_text):
         return "\n".join(lines[1:]).strip()
     return script_text.strip()
 
-def phase_tts(duration, num_hours):
+def phase_tts(duration, num_hours, video=None):
+    video_basename = os.path.splitext(os.path.basename(video))[0] if video else "tts"
     voice = env("TTS_VOICE", "Vindemiatrix")
     if not voice:
-        log_error("Phase 5 Failed: TTS_VOICE not configured")
-        notify("Phase 5 Failed: TTS voice not set")
-        set_status("Phase 5 FAILED")
+        log_error("Phase 6 Failed: TTS_VOICE not configured")
+        notify("Phase 6 Failed: TTS voice not set")
+        set_status("Phase 6 FAILED")
         raise RuntimeError("TTS_VOICE not configured")
 
     api_key = env("GEMINI_API_KEY")
     if not api_key:
-        log_error("Phase 5 Failed: GEMINI_API_KEY not configured")
-        notify("Phase 5 Failed: No API key configured")
-        set_status("Phase 5 FAILED")
+        log_error("Phase 6 Failed: GEMINI_API_KEY not configured")
+        notify("Phase 6 Failed: No API key configured")
+        set_status("Phase 6 FAILED")
         raise RuntimeError("GEMINI_API_KEY not configured")
 
-    # Initialize round-robin for TTS voices and styles (shuffled once per run)
-    # Already initialized in phase_scripts, just ensure it's ready
     if not _rr_voices:
         _init_round_robin(num_hours)
     
-    set_status("Phase 5: Generating TTS...")
-    log("Phase 5: Generating TTS...")
-    notify("Phase 5 Started: Generating TTS...")
+    set_status("Phase 6: Generating TTS...")
+    log("Phase 6: Generating TTS...")
+    notify("Phase 6 Started: Generating TTS...")
     delay = int(env("TTS_DELAY", "120"))
 
     tts_generated = 0
     for i in range(1, num_hours + 1):
+        pct = int(((i - 1) / num_hours) * 100)
+        set_progress(5, pct, f"Generating TTS ({i}/{num_hours})")
+        
         padded = f"{i:03d}"
-        wav = os.path.join(TTS_DIR, f"tts_{padded}.wav")
-        srt = os.path.join(TTS_DIR, f"tts_{padded}.srt")
-        script_file = os.path.join(SCRIPTS_DIR, f"script_{padded}.txt")
+        wav = os.path.join(TTS_DIR, f"{video_basename}-TTS{padded}.wav")
+        srt = os.path.join(TTS_DIR, f"{video_basename}-TTS{padded}.srt")
+        script_file = os.path.join(SCRIPTS_DIR, f"{video_basename}-Script{padded}.txt")
 
         if not os.path.exists(wav):
             if not os.path.exists(script_file):
@@ -4120,7 +4503,35 @@ def phase_tts(duration, num_hours):
                     os.remove(pcm)
                 log(f"   tts_{padded}.wav created")
                 tts_generated += 1
-                set_status(f"Phase 5: TTS {i}/{num_hours} generated")
+
+                if PERFORMANCE_DB_AVAILABLE:
+                    try:
+                        clip_pattern = f"{video_basename}-Short{padded}.mp4"
+                        import performance_database as pdb
+                        conn = pdb.get_db()
+                        cur = conn.cursor()
+                        cur.execute("""
+                            SELECT c.id, c.features FROM clips c
+                            WHERE c.source_file LIKE ?
+                            ORDER BY c.created_at DESC LIMIT 1
+                        """, (f"%{clip_pattern}%",))
+                        row = cur.fetchone()
+                        conn.close()
+                        if row:
+                            existing_features = json.loads(row['features'] or '{}') if row['features'] else {}
+                            existing_features['voice'] = rr_voice
+                            existing_features['style'] = rr_style
+                            import json as json_mod
+                            conn2 = pdb.get_db()
+                            cur2 = conn2.cursor()
+                            cur2.execute("UPDATE clips SET features = ? WHERE id = ?",
+                                        (json_mod.dumps(existing_features), row['id']))
+                            conn2.commit()
+                            conn2.close()
+                            log(f"   TTS learning: voice '{rr_voice}' recorded for clip")
+                    except Exception:
+                        pass
+                set_status(f"Phase 6: TTS {i}/{num_hours} generated")
                 notify(f"TTS {i}/{num_hours} generated")
             except Exception as e:
                 log_error(f"   Error generating TTS for script {i}: {e}")
@@ -4137,7 +4548,7 @@ def phase_tts(duration, num_hours):
                 srt_max_words = int(env("SRT_MAX_WORDS", "10"))
                 try:
                     from faster_whisper import WhisperModel
-                    model = WhisperModel("base", device="cpu", compute_type="int8")
+                    model = WhisperModel(env("WHISPER_MODEL", "large-v3"), device="cpu", compute_type="int8")
                     segments, _ = model.transcribe(wav, language="en", vad_filter=True)
                     with open(srt_out, "w") as f:
                         idx = 1
@@ -4172,18 +4583,18 @@ def phase_tts(duration, num_hours):
             time.sleep(delay)
 
     if tts_generated == 0:
-        log_error("Phase 5 Failed: No TTS files were generated")
-        notify("Phase 5 Failed: No TTS generated")
-        set_status("Phase 5 FAILED")
+        log_error("Phase 6 Failed: No TTS files were generated")
+        notify("Phase 6 Failed: No TTS generated")
+        set_status("Phase 6 FAILED")
         raise RuntimeError("No TTS generated")
 
-    set_status("Phase 5 Complete")
-    notify(f"Phase 5 Complete: {tts_generated} TTS files generated")
+    set_status("Phase 6 Complete")
+    notify(f"Phase 6 Complete: {tts_generated} TTS files generated")
 
 # ─── Find latest video ────────────────────────────────────────────────────────
 def find_video():
     for ext in ("*.webm", "*.mp4", "*.mkv"):
-        files = sorted(glob.glob(os.path.join(STREAMS_DIR, ext)),
+        files = sorted(glob.glob(os.path.join(MEDIA_DIR, ext)),
                        key=os.path.getmtime, reverse=True)
         if files:
             return files[0]
@@ -4209,36 +4620,32 @@ def run_local_recordings(recording_path):
             return True
         return False
 
-    # Create required directories
-    for d in (STREAMS_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, OUTPUT_DIR):
+    for d in (MEDIA_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, OUTPUT_DIR):
         os.makedirs(d, exist_ok=True)
 
-    # Check if recording path exists
+    _refresh_learning_state()
+
     if not os.path.exists(recording_path):
         log_error(f"Recording path not found: {recording_path}")
         notify(f"Error: Recording path not found: {recording_path}")
         return
 
-    # Find all video files in recording path
     video_extensions = (".mp4", ".mkv", ".webm", ".avi", ".mov")
     video_files = []
     for f in os.listdir(recording_path):
         if f.lower().endswith(video_extensions):
-            full_path = os.path.join(recording_path, f)
-            video_files.append(full_path)
+            video_files.append(os.path.join(recording_path, f))
 
     if not video_files:
         log_error(f"No video files found in {recording_path}")
         notify(f"No video files found in {recording_path}")
         return
 
-    # Sort by modification time (oldest first)
     video_files.sort(key=os.path.getmtime)
 
     log(f"Found {len(video_files)} local recording(s)")
     notify(f"Processing {len(video_files)} local recording(s)...")
 
-    # Process each video
     for i, video_file in enumerate(video_files, 1):
         if check_stop():
             return
@@ -4246,15 +4653,8 @@ def run_local_recordings(recording_path):
         video_name = os.path.basename(video_file)
         log(f"Processing video {i}/{len(video_files)}: {video_name}")
 
-        # Copy video to streams directory
-        dest_path = os.path.join(STREAMS_DIR, video_name)
-        if not os.path.exists(dest_path):
-            shutil.copy2(video_file, dest_path)
-            log(f"  Copied to streams/: {video_name}")
-
-        # Run the pipeline phases for this video
         try:
-            duration = video_info(dest_path)
+            duration = video_info(video_file)
             if duration <= 0:
                 log_error(f"Invalid video: {video_name}")
                 continue
@@ -4262,27 +4662,29 @@ def run_local_recordings(recording_path):
             num_hours = max(1, duration // 3600)
             log(f"Video: {duration}s = {num_hours} hour(s)")
 
-            # Phase 2: Transcribe
-            json_file = phase_transcribe(dest_path)
+            json_file = phase_transcribe(video_file)
             if check_stop(): return
 
-            # Phase 3: Scripts
-            if json_file:
-                phase_scripts(json_file, duration, num_hours)
-                if check_stop(): return
-
-            # Phase 4: Clips
-            if json_file:
-                phase_clips(dest_path, json_file, duration, num_hours)
-                if check_stop(): return
-
-            # Phase 5: TTS
-            phase_tts(duration, num_hours)
+            phase_context()
             if check_stop(): return
+
+            video_base = os.path.splitext(os.path.basename(video_file))[0]
+            json_file = os.path.join(TRANSCRIPTS_DIR, f"{video_base}.json")
+            if not os.path.exists(json_file):
+                json_file = None
+
+            if json_file:
+                phase_scripts(json_file, duration, num_hours, video=video_file)
+                if check_stop(): return
+
+                phase_clips(video_file, json_file, duration, num_hours, script_id_map=_SCRIPT_ID_MAP)
+                if check_stop(): return
+
+                phase_tts(duration, num_hours, video=video_file)
+                if check_stop(): return
 
             log(f"Video {i}/{len(video_files)} complete!")
 
-            # Delay between videos (300 seconds)
             if i < len(video_files):
                 log("Waiting 300 seconds before next video...")
                 time.sleep(300)
@@ -4296,7 +4698,7 @@ def run_local_recordings(recording_path):
     notify(f"Local recording pipeline complete! Processed {len(video_files)} video(s).")
 
 # ─── Pipeline orchestrator ────────────────────────────────────────────────────
-def run_pipeline(skip=None, phases=None):
+def run_pipeline(skip=None):
     global PIPELINE_STOP_REQUESTED
     PIPELINE_STOP_REQUESTED = False
 
@@ -4308,12 +4710,12 @@ def run_pipeline(skip=None, phases=None):
             return True
         return False
 
-    for d in (STREAMS_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, OUTPUT_DIR):
+    for d in (MEDIA_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, OUTPUT_DIR):
         os.makedirs(d, exist_ok=True)
 
+    _refresh_learning_state()
+
     skip = skip or set()
-    if phases:
-        skip = {1,2,3,4,5} - set(phases)
 
     if 1 not in skip:
         phase_download()
@@ -4321,7 +4723,7 @@ def run_pipeline(skip=None, phases=None):
 
     video = find_video()
     if not video:
-        log_error("No video found in streams/")
+        log_error("No video found in media/")
         return
     duration = video_info(video)
     log(f"Target: {os.path.basename(video)} ({duration}s)")
@@ -4329,9 +4731,20 @@ def run_pipeline(skip=None, phases=None):
     if 2 not in skip:
         json_file = phase_transcribe(video)
         if check_stop(): return
-        
-        # Extract context from transcript for Content Studio
+    else:
+        video_name = os.path.splitext(os.path.basename(video))[0]
+        json_file = os.path.join(TRANSCRIPTS_DIR, f"{video_name}.json")
+        if not os.path.exists(json_file):
+            existing = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.json"))
+            json_file = sorted(existing, key=os.path.getmtime, reverse=True)[0] if existing else None
+
+    if 3 not in skip:
+        phase_context()
+        if check_stop(): return
+    elif 2 in skip and json_file:
+        log("Phase 2 and 3 skipped, extracting context for scripts...")
         try:
+            import json
             with open(json_file) as f:
                 data = json.load(f)
             transcript_text = ""
@@ -4339,63 +4752,34 @@ def run_pipeline(skip=None, phases=None):
                 text = re.sub(r"<[^>]*>", "", seg.get("text", ""))
                 if text.strip():
                     transcript_text += text + " "
-            
             if transcript_text:
                 game_title = env("GAME_TITLE", "Unknown Game")
                 extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
-                
-                # Auto-save context (no confirmation needed - user can edit in Obsidian later)
                 if extracted:
-                    # Update context with extracted data
-                    transcript_name = os.path.basename(json_file)
-                    _cs_update_context(extracted, transcript_name)
-                    
-                    # Save to markdown files for Obsidian
+                    _cs_update_context(extracted, os.path.basename(json_file))
                     _cs_save_context(extracted)
-                    
-                    # Also save to verified context
                     save_verified_context(game_title, extracted)
-                    
-                    log(f"Context auto-extracted and saved: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
-                    notify(f"📚 Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
-                
-                # Mine to MemPalace for persistent memory
-                log(f"[DEBUG] MEMPALACE_AVAILABLE={MEMPALACE_AVAILABLE}, MEMORY_ENABLED={env('MEMORY_ENABLED', 'true')}")
-                if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
-                    try:
-                        mp_manager = get_mempalace_manager()
-                        if mp_manager and json_file:
-                            result = mp_manager.mine_transcript(json_file, game_title)
-                            if result.get("status") == "success":
-                                log(f"MemPalace: Mined transcript for {game_title}")
-                            else:
-                                log(f"MemPalace: Mining skipped - {result.get('error', 'Unknown error')}")
-                    except Exception as mp_err:
-                        log(f"MemPalace: Mining failed - {mp_err}")
+                    log(f"Context extracted: {len(extracted.get('characters', []))} chars")
         except Exception as e:
-            log(f"Context extraction skipped: {e}")
-    else:
-        json_file = sorted(glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.json")),
-                key=os.path.getmtime, reverse=True)[0] \
-           if glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.json")) else None
-
+            log(f"Warning: Could not extract context: {e}")
+    
     num_hours = max(1, duration // 3600)
     log(f"Video: {duration}s = {num_hours} hour(s)")
 
-    if 3 not in skip and json_file:
-        phase_scripts(json_file, duration, num_hours)
-        if check_stop(): return
-    elif 3 not in skip:
-        log_error("No transcript for script generation")
-
     if 4 not in skip and json_file:
-        phase_clips(video, json_file, duration, num_hours)
+        phase_scripts(json_file, duration, num_hours, video=video)
         if check_stop(): return
     elif 4 not in skip:
+        log_error("No transcript for script generation")
+
+    if 5 not in skip and json_file:
+        phase_clips(video, json_file, duration, num_hours, script_id_map=_SCRIPT_ID_MAP)
+        if check_stop(): return
+    elif 5 not in skip:
         log_error("No transcript for clip generation")
 
-    if 5 not in skip:
-        phase_tts(duration, num_hours)
+    if 6 not in skip:
+        phase_tts(duration, num_hours, video=video)
         if check_stop(): return
 
     log("Pipeline Complete!")
@@ -4409,7 +4793,7 @@ def run_pipeline(skip=None, phases=None):
 
     notify(f"""Pipeline Complete!
 
-Video: {os.path.basename(video)}
+Video: {os.path.basename(video) if video else "Unknown"}
 Duration: {fmt_dur(duration)}
 
 Created Files:
@@ -4467,44 +4851,6 @@ def process_cmd(text, chat_id):
                     run_local_recordings(recording_path)
                 except Exception as e:
                     tg_send(f"Local recording error: {e}")
-                finally:
-                    PIPELINE_RUNNING = False
-            threading.Thread(target=_run, daemon=True).start()
-
-    elif cmd in ("/run_phase", "/runphase"):
-        if not _check_configured():
-            tg_send("Not configured yet. Run onboarding first:\n  python3 shortsforge.py onboard")
-        elif not args:
-            tg_send("Usage: /run_phase 5 or /run_phase 2,3")
-        else:
-            phases = [int(p) for p in args.split(",")]
-            tg_send(f"Pipeline triggered! Phases: {phases}")
-            def _run():
-                global PIPELINE_RUNNING
-                PIPELINE_RUNNING = True
-                try:
-                    run_pipeline(phases=phases)
-                except Exception as e:
-                    tg_send(f"Pipeline error: {e}")
-                finally:
-                    PIPELINE_RUNNING = False
-            threading.Thread(target=_run, daemon=True).start()
-
-    elif cmd in ("/skip_phase", "/skipphase"):
-        if not _check_configured():
-            tg_send("Not configured yet. Run onboarding first:\n  python3 shortsforge.py onboard")
-        elif not args:
-            tg_send("Usage: /skip_phase 1 or /skip_phase 1,2")
-        else:
-            skip = {int(p) for p in args.split(",")}
-            tg_send(f"Pipeline triggered! Skipping: {skip}")
-            def _run():
-                global PIPELINE_RUNNING
-                PIPELINE_RUNNING = True
-                try:
-                    run_pipeline(skip=skip)
-                except Exception as e:
-                    tg_send(f"Pipeline error: {e}")
                 finally:
                     PIPELINE_RUNNING = False
             threading.Thread(target=_run, daemon=True).start()
@@ -4776,9 +5122,6 @@ Pipeline Phases:
 Commands:
 /run_pipeline    - Run full pipeline
 /run_local       - Run pipeline on local recording
-/run_phase 5    - Run specific phase(s)
-/run_phase 2,3  - Run phases 2 and 3
-/skip_phase 1,2 - Skip specific phases
 
 /set_voice Puck    - Change TTS voice
 /voices          - List available voices
@@ -5042,6 +5385,24 @@ WantedBy=default.target
     print(f"Style rotated to: {rotated_style[:50]}...")
 
     tg_send(f"Lambda Cut listener started (v{local_ver}).\nVoice: {rotated_voice}\nStyle: {rotated_style[:50]}...")
+
+    oauth_file = os.path.join(WORKSPACE, ".shortsforge", "youtube_oauth.json")
+    if os.path.exists(oauth_file):
+        print("[BACKGROUND] Syncing YouTube metrics...")
+        try:
+            from metrics_fetcher import get_recent_uploads
+            from performance_database import auto_match_and_fetch
+            recent = get_recent_uploads(days=30, max_results=50)
+            if recent:
+                result = auto_match_and_fetch(recent)
+                synced = result.get('matched_count', 0)
+                new_metrics = result.get('new_metrics', 0)
+                print(f"[BACKGROUND] YouTube sync: {synced} matched, {new_metrics} new metrics")
+                if synced > 0 or new_metrics > 0:
+                    tg_send(f"📊 YouTube sync complete: {synced} matched, {new_metrics} new metrics")
+        except Exception as sync_err:
+            print(f"[BACKGROUND] YouTube sync failed: {sync_err}")
+
     offset = 0
     if os.path.exists(OFFSET_FILE):
         try:
@@ -5129,64 +5490,15 @@ WantedBy=default.target
                                 tg_send("Pipeline stop requested. Finishing current phase...")
                             elif action_or_markup == "proceed_to_scripts":
                                 tg_answer_callback(cb_id, "✅ Proceeding to Phase 3...")
-                                tg_send("▶️ Continuing to Phase 3 (Script Generation)...")
+                                tg_send("▶️ Continuing to Phase 4 (Script Generation)...")
                                 def _run_p3():
                                     global PIPELINE_RUNNING; PIPELINE_RUNNING = True
                                     try: 
-                                        # Skip phases 1 and 2, run from phase 3
-                                        run_pipeline(phases=[3, 4, 5])
+                                        run_pipeline(skip={1, 2})
                                     except Exception as e: 
-                                        tg_send(f"Phase 3 error: {e}")
+                                        tg_send(f"Pipeline error: {e}")
                                     finally: PIPELINE_RUNNING = False
                                 threading.Thread(target=_run_p3, daemon=True).start()
-                            elif action_or_markup == "run_phase 1":
-                                tg_answer_callback(cb_id, "Running Phase 1...")
-                                def _run_p1():
-                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
-                                    try: run_pipeline(phases=[1])
-                                    except Exception as e: tg_send(f"Phase 1 error: {e}")
-                                    finally: PIPELINE_RUNNING = False
-                                threading.Thread(target=_run_p1, daemon=True).start()
-                            elif action_or_markup == "run_phase 2":
-                                tg_answer_callback(cb_id, "Running Phase 2...")
-                                def _run_p2():
-                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
-                                    try: run_pipeline(phases=[2])
-                                    except Exception as e: tg_send(f"Phase 2 error: {e}")
-                                    finally: PIPELINE_RUNNING = False
-                                threading.Thread(target=_run_p2, daemon=True).start()
-                            elif action_or_markup == "run_phase 2.5":
-                                tg_answer_callback(cb_id, "Running Phase 2.5 (Context Only)...")
-                                def _run_p25():
-                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
-                                    try: phase_context()
-                                    except Exception as e: tg_send(f"Phase 2.5 error: {e}")
-                                    finally: PIPELINE_RUNNING = False
-                                threading.Thread(target=_run_p25, daemon=True).start()
-                            elif action_or_markup == "run_phase 3":
-                                tg_answer_callback(cb_id, "Running Phase 3...")
-                                def _run_p3():
-                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
-                                    try: run_pipeline(phases=[3])
-                                    except Exception as e: tg_send(f"Phase 3 error: {e}")
-                                    finally: PIPELINE_RUNNING = False
-                                threading.Thread(target=_run_p3, daemon=True).start()
-                            elif action_or_markup == "run_phase 4":
-                                tg_answer_callback(cb_id, "Running Phase 4...")
-                                def _run_p4():
-                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
-                                    try: run_pipeline(phases=[4])
-                                    except Exception as e: tg_send(f"Phase 4 error: {e}")
-                                    finally: PIPELINE_RUNNING = False
-                                threading.Thread(target=_run_p4, daemon=True).start()
-                            elif action_or_markup == "run_phase 5":
-                                tg_answer_callback(cb_id, "Running Phase 5...")
-                                def _run_p5():
-                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
-                                    try: run_pipeline(phases=[5])
-                                    except Exception as e: tg_send(f"Phase 5 error: {e}")
-                                    finally: PIPELINE_RUNNING = False
-                                threading.Thread(target=_run_p5, daemon=True).start()
                             elif action_or_markup == "cs_do_import":
                                 tg_answer_callback(cb_id, "Importing...")
                                 count_t, count_s = _cs_import_data()
@@ -5679,11 +5991,17 @@ def main():
     p_run.add_argument("-index", type=int, help="Playlist index to download (default: 1)")
     p_run.add_argument("-skip-phase-1", action="store_true")
     p_run.add_argument("-skip-phase-2", action="store_true")
-    p_run.add_argument("-skip-phase-3", action="store_true")
     p_run.add_argument("-skip-phase-4", action="store_true")
     p_run.add_argument("-skip-phase-5", action="store_true")
+    p_run.add_argument("-skip-phase-6", action="store_true")
     p_run.add_argument("-skip-all", action="store_true")
 
+    p_local = sub.add_parser("run_local", help="Run pipeline on local recordings")
+    p_local.add_argument("path", type=str, nargs="?", help="Path to local recordings directory (default: media)")
+    
+    p_download = sub.add_parser("download", help="Download video from URL")
+    p_download.add_argument("-url", type=str, required=True, help="URL to download (video or playlist)")
+    
     sub.add_parser("listen", help="Start Telegram bot listener")
     
     p_stop = sub.add_parser("stop", help="Stop the listener")
@@ -5705,25 +6023,50 @@ def main():
 
         skip = set()
         if args.skip_all:
-            skip = {1,2,3,4,5}
+            skip = {1,2,3,4,5,6}
         else:
             if args.skip_phase_1: skip.add(1)
             if args.skip_phase_2: skip.add(2)
-            if args.skip_phase_3: skip.add(3)
-            if args.skip_phase_4: skip.add(4)
-            if args.skip_phase_5: skip.add(5)
-
-        phases = None
-        if args.phase:
-            phases = [int(p) for p in args.phase.split(",")]
+            if args.skip_phase_4: skip.add(3)
+            if args.skip_phase_5: skip.add(4)
+            if args.skip_phase_6: skip.add(5)
 
         playlist_index = None
         if args.index:
             playlist_index = str(args.index)
             update_env_var("PLAYLIST_INDEX", playlist_index)
 
-        run_pipeline(skip=skip, phases=phases)
+        run_pipeline(skip=skip)
 
+    elif args.command == "run_local":
+        if not _check_configured():
+            print("Configuration missing or incomplete.")
+            print(f"  .env: {ENV_FILE}")
+            print(f"  Run onboarding first:  python3 {__file__} onboard")
+            sys.exit(1)
+
+        path = args.path if args.path else MEDIA_DIR
+        if not os.path.exists(path):
+            print(f"Error: Path does not exist: {path}")
+            sys.exit(1)
+        
+        run_local_recordings(path)
+    
+    elif args.command == "download":
+        if not _check_configured():
+            print("Configuration missing or incomplete.")
+            print(f"  .env: {ENV_FILE}")
+            print(f"  Run onboarding first:  python3 {__file__} onboard")
+            sys.exit(1)
+        
+        url = args.url
+        if not url:
+            print("Error: No URL provided")
+            sys.exit(1)
+        
+        success = download_from_url(url)
+        sys.exit(0 if success else 1)
+    
     elif args.command == "listen":
         listen()
 

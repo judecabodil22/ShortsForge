@@ -104,6 +104,10 @@ def validate_script_factuality(script_text, context):
             flagged_entities.append(("location", loc))
             issues.append(f"Unknown location mentioned: {loc}")
 
+    # Validate key_terms - skip for now
+    # Note: Full NER-based validation is too complex for transcript ASR errors like "cypress" → "cyberpsycho"
+    # Those are better caught by manual user corrections or transcript post-processing
+
     # Calculate score
     total_entities = len(script_persons) + len(script_locations)
     if total_entities == 0:
@@ -124,14 +128,16 @@ def _is_known_entity(entity, known_list, threshold=80):
     if not known_list:
         return True  # No known entities to check against
 
+    entity_lower = str(entity).lower()
     for known in known_list:
-        if fuzz.ratio(entity.lower(), known.lower()) >= threshold:
+        known_str = str(known).lower()
+        if fuzz.ratio(entity_lower, known_str) >= threshold:
             return True
         # Also check partial match (entity might be a subset)
-        if fuzz.partial_ratio(entity.lower(), known.lower()) >= threshold:
+        if fuzz.partial_ratio(entity_lower, known_str) >= threshold:
             return True
         # Token set ratio for reordered names
-        if fuzz.token_set_ratio(entity.lower(), known.lower()) >= threshold:
+        if fuzz.token_set_ratio(entity_lower, known_str) >= threshold:
             return True
     return False
 
@@ -346,7 +352,7 @@ def score_context_relevance(context, transcript_text, max_items=8):
 
     def score_item(item):
         """Score an item by frequency and presence in transcript."""
-        item_lower = item.lower()
+        item_lower = str(item).lower()
         score = 0.0
 
         # Direct mention in transcript
@@ -657,59 +663,124 @@ def get_content_type_weaknesses(content_type):
     }
 
 
+def _analyze_successful_script_patterns():
+    """Analyze script content patterns from high-quality generations."""
+    metrics_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "generation_metrics.jsonl")
+    if not os.path.exists(metrics_file):
+        return {}
+
+    hook_phrases = []
+    title_patterns = []
+    cta_patterns = []
+    word_counts = []
+
+    try:
+        with open(metrics_file, "r") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    if record.get("factuality_score", 0) >= 0.8 and record.get("engagement_overall", 0) >= 0.6:
+                        wc = record.get("word_count", 0)
+                        if wc:
+                            word_counts.append(wc)
+                except:
+                    continue
+    except Exception:
+        pass
+
+    script_failures = os.path.join(os.path.dirname(os.path.dirname(__file__)), "generation_failures.jsonl")
+    if os.path.exists(script_failures):
+        try:
+            with open(script_failures, "r") as f:
+                for line in f:
+                    try:
+                        record = json.loads(line)
+                        if record.get("metrics", {}).get("factuality_score", 0) >= 0.8 and record.get("metrics", {}).get("engagement_overall", 0) >= 0.6:
+                            pass
+                    except:
+                        continue
+        except Exception:
+            pass
+
+    avg_word_count = sum(word_counts) / len(word_counts) if word_counts else 0
+
+    return {
+        "avg_word_count": avg_word_count,
+        "word_count_samples": len(word_counts),
+        "hook_phrases": hook_phrases[:5],
+        "title_patterns": title_patterns[:5],
+        "cta_patterns": cta_patterns[:5],
+    }
+
+
 def get_effective_prompts():
     """
     Find which prompt configurations work best.
-    
+
     Returns:
         dict: Effective prompt configurations by content type
     """
     storage_path = _get_failure_storage_path()
     if not os.path.exists(storage_path):
         return {"message": "No failure data to analyze"}
-    
-    # Load all records with high scores
+
     successful_configs = []
-    
+
     metrics_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "generation_metrics.jsonl")
     if not os.path.exists(metrics_file):
         return {"message": "No metrics data found"}
-    
+
     try:
         with open(metrics_file, "r") as f:
             for line in f:
                 try:
                     record = json.loads(line)
-                    # High quality scripts (factuality >= 0.8, engagement >= 0.6)
                     if record.get("factuality_score", 0) >= 0.8 and record.get("engagement_overall", 0) >= 0.6:
                         successful_configs.append({
                             "temperature": record.get("temperature", 0.7),
                             "model": record.get("model", "unknown"),
+                            "word_count": record.get("word_count", 0),
+                            "hook_strength": record.get("hook_strength", 0),
+                            "engagement_overall": record.get("engagement_overall", 0),
                         })
                 except:
                     continue
     except Exception:
         return {"error": "Failed to read metrics"}
-    
+
     if not successful_configs:
         return {"message": "Not enough high-quality samples to analyze"}
-    
-    # Group by content type approximation (we don't have that in metrics, so just show overall)
+
     temp_counts = {}
     model_counts = {}
-    
+    word_counts = []
+    hook_scores = []
+
     for config in successful_configs:
         temp = config["temperature"]
         model = config["model"]
-        
-        temp_key = f"temp_{round(temp * 10) / 10}"  # Round to nearest 0.1
+        wc = config.get("word_count", 0)
+        hs = config.get("hook_strength", 0)
+
+        if wc:
+            word_counts.append(wc)
+        if hs:
+            hook_scores.append(hs)
+
+        temp_key = f"temp_{round(temp * 10) / 10}"
         temp_counts[temp_key] = temp_counts.get(temp_key, 0) + 1
         model_counts[model] = model_counts.get(model, 0) + 1
-    
+
+    avg_wc = sum(word_counts) / len(word_counts) if word_counts else 0
+    avg_hook = sum(hook_scores) / len(hook_scores) if hook_scores else 0
+
     return {
         "successful_samples": len(successful_configs),
         "effective_temperatures": temp_counts,
         "effective_models": model_counts,
+        "avg_word_count": round(avg_wc),
+        "avg_hook_strength": round(avg_hook, 3),
+        "word_count_samples": len(word_counts),
     }
 
 
@@ -718,36 +789,24 @@ def get_effective_prompts():
 def get_learned_constraints(game_title="", content_type="pipeline"):
     """
     Generate learned constraints to inject into prompts.
-    
-    Args:
-        game_title: Optional game title for game-specific constraints
-        content_type: Content type (pipeline, theory, analysis, etc.)
-    
-    Returns:
-        dict with:
-            - negative_constraints: List of things to avoid
-            - positive_emphasis: List of things to focus on
-            - recommended_temp: Optimal temperature
-            - source: Explanation of where constraints came from
+
+    Uses both FAILURE data (negative constraints - what to avoid)
+    and SUCCESS data (positive emphasis - what to replicate).
     """
-    analysis = analyze_recent_failures(window_hours=168)  # Last week
-    
+    analysis = analyze_recent_failures(window_hours=168)
+
     negative_constraints = []
     positive_emphasis = []
-    
-    # Generate negative constraints from recent failures
+
     if analysis.get("count", 0) > 0:
-        # Character hallucinations to avoid
         char_hall = analysis.get("character_hallucinations", {})
         if char_hall:
-            # Only include if appears 2+ times
             repeated_chars = [char for char, count in char_hall.items() if count >= 2]
             if repeated_chars:
                 negative_constraints.append(
                     f"AVOID mentioning these characters (hallucinated in recent scripts): {', '.join(repeated_chars)}"
                 )
-        
-        # Location errors to avoid
+
         loc_errors = analysis.get("location_errors", {})
         if loc_errors:
             repeated_locs = [loc for loc, count in loc_errors.items() if count >= 2]
@@ -755,11 +814,9 @@ def get_learned_constraints(game_title="", content_type="pipeline"):
                 negative_constraints.append(
                     f"IGNORE these entities if spaCy marks them as locations (false positives): {', '.join(repeated_locs)}"
                 )
-    
-    # Generate positive emphasis from high-performing scripts
+
     effective = get_effective_prompts()
     if effective.get("successful_samples", 0) >= 3:
-        # Find most common high-performing temperature
         temps = effective.get("effective_temperatures", {})
         if temps:
             best_temp = max(temps.keys(), key=lambda k: temps[k])
@@ -767,7 +824,20 @@ def get_learned_constraints(game_title="", content_type="pipeline"):
             positive_emphasis.append(
                 f"Use temperature around {recommended_temp} (proven effective in {temps[best_temp]} high-quality scripts)"
             )
-    
+
+        avg_wc = effective.get("avg_word_count", 0)
+        wc_samples = effective.get("word_count_samples", 0)
+        if avg_wc and wc_samples >= 3:
+            positive_emphasis.append(
+                f"Target word count: {int(avg_wc)} words (average of {wc_samples} successful scripts)"
+            )
+
+        avg_hook = effective.get("avg_hook_strength", 0)
+        if avg_hook >= 0.5:
+            positive_emphasis.append(
+                f"Use strong hooks - successful scripts averaged {avg_hook:.1%} hook strength"
+            )
+
     return {
         "negative_constraints": negative_constraints,
         "positive_emphasis": positive_emphasis,

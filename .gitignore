@@ -7,6 +7,9 @@
 gemini_keys.txt
 workflows/.env
 workflows/gemini_keys.txt
+client_secret.json
+.shortsforge/youtube_oauth.json
+.shortsforge/web_settings.json
 
 # Python
 __pycache__/
@@ -49,6 +52,15 @@ generation_metrics.jsonl
 .vscode/
 .idea/
 
+# Application data
+.shortsforge/
+*.db
+*.db-journal
+
 # OS files
 .DS_Store
 Thumbs.db
+
+# Node.js
+node_modules/
+frontend/node_modules/

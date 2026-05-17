@@ -22,8 +22,9 @@ ShortsForge is an automated pipeline that transforms long-form YouTube game stre
 8. [Content Studio](#content-studio)
 9. [Project Structure](#project-structure)
 10. [Tech Stack](#tech-stack)
-11. [Troubleshooting](#troubleshooting)
-12. [License](#license)
+11. [Security](#security)
+12. [Troubleshooting](#troubleshooting)
+13. [License](#license)
 
 ---
 
@@ -390,6 +391,42 @@ python workflows/shortsforge.py debug
 # Check pipeline status
 python workflows/shortsforge.py status
 ```
+
+---
+
+## Security
+
+ShortsForge includes several security features to protect your API keys and system:
+
+### API Key Storage
+
+- **Keychain (Recommended)**: On desktop systems with a GUI, API keys are stored securely in your system's keychain
+- **Environment Variables**: For headless/server deployments, use `.env` file
+
+### Web Interface Security
+
+The web backend includes:
+- **API Key Authentication**: Sensitive endpoints require `X-API-Key` header
+- **Rate Limiting**: Prevents API abuse
+- **Security Headers**: X-Frame-Options, X-XSS-Protection, HSTS
+
+### Best Practices
+
+1. **Never commit secrets**: `.env` and `client_secret.json` are gitignored
+2. **Use HTTPS**: In production, run behind a reverse proxy with TLS
+3. **Restrict access**: Use firewall rules to limit who can access the web interface
+4. **Rotate keys**: Periodically rotate your API keys
+5. **Review SECURITY.md**: See [SECURITY.md](./SECURITY.md) for full security details
+
+### Protected Endpoints
+
+The following endpoints require API key authentication:
+- `/api/config` - Update configuration
+- `/api/system/cleanup` - Cleanup files
+- `/api/system/restart-listener` - Restart listener
+- `/api/context/import` - Import context
+- `/api/context/clear` - Clear context
+- `/api/pipeline/download` - Download from URL
 
 ---
 

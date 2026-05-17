@@ -4,6 +4,84 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.0.1 — 2026-05-17
+### Security
+- **API Key Authentication**: Added API key verification to sensitive endpoints
+  - Protected endpoints: `/api/config`, `/api/system/cleanup`, `/api/system/restart-listener`, `/api/context/import`, `/api/context/clear`, `/api/pipeline/download`
+  - Auto-generated API key stored in `~/.shortsforge/api_key`
+  - Use `X-API-Key` header for authenticated requests
+- **Rate Limiting**: Added rate limiting to prevent API abuse
+  - Pipeline endpoints: 5/minute (run), 10/minute (stop)
+  - Config/system endpoints: 2-5/minute
+  - Metrics sync: 1/minute
+- **Security Headers**: Added security middleware
+  - X-Content-Type-Options: nosniff
+  - X-Frame-Options: DENY
+  - X-XSS-Protection: 1; mode=block
+  - Strict-Transport-Security (HSTS)
+  - Referrer-Policy
+- **Input Sanitization**: Added input validation and path sanitization
+  - Sanitize user inputs to prevent injection attacks
+  - Validate URL schemes for download endpoint
+  - Path traversal prevention
+- **.gitignore**: Added security files to gitignore
+  - `client_secret.json`
+  - `.shortsforge/youtube_oauth.json`
+  - `.shortsforge/web_settings.json`
+
+### Added
+- **FastAPI Backend** (`backend/`): New web API server
+  - REST API endpoints for pipeline control
+  - Metrics, scripts, learnings, context endpoints
+  - Configuration management endpoints
+  - System control endpoints (cleanup, restart-listener)
+- **React Web Interface** (`frontend/`): New web UI
+  - Cyberpunk-themed dashboard
+  - Real-time pipeline status via WebSocket
+  - Metrics visualization with charts
+  - Context graph visualization
+  - Content Studio web interface
+- **WebSocket Support**: Real-time updates for all connected clients
+- **Performance Database**: Enhanced SQLite-based metrics storage
+  - Video performance tracking
+  - Script feature extraction
+  - TTS learning data
+  - Thompson sampling for content selection
+- **Learning Engine**: ML-based virality prediction
+  - Content type performance analysis
+  - Feature extraction from scripts
+  - 70/30 explore/exploit content selection
+- **Context Manager V2**: Enhanced context system
+  - Graph-based context visualization
+  - Character, location, term, relationship tracking
+  - Segment reference linking
+- **Script Validation**: Enhanced script quality validation
+  - Hook, body, call-to-action scoring
+  - Content type pattern detection
+- **SECURITY.md**: New security policy documentation
+
+### Changed
+- **CORS**: Tightened to specific localhost origins
+- **API Responses**: Consistent JSON response format
+
+### Technical
+- Python dependencies updated with security packages (slowapi, python-dotenv)
+- Frontend: React 18.2.0, Vite 5.1.0, TypeScript, Tailwind CSS, Radix UI, Zustand, Framer Motion, Recharts
+
+---
+
+## 2.0.1 — 2026-04-12
+### Fixed
+- **run_local CLI**: Added `-phase` argument support to run specific phases
+- **Local pipeline processing**: Process videos directly from media/ without copying to streams/
+- **UI Status display**: Now reads from /tmp/pipeline_status file for actual pipeline state
+- **Progress bar**: Shows real-time phase progress based on status file
+
+### Changed
+- Phase buttons for local source now use `run_local` command instead of `run`
+
+---
+
 ## 2.0.0 — 2026-04-12
 ### Added
 - **Desktop Application (PyQt6)**: Full native desktop UI
