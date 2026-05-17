@@ -97,6 +97,8 @@ export const updateContextItem = (game: string, itemType: string, itemId: string
   fetchAPI<any>(`/api/context/${game}/${itemType}/${itemId}`, { method: 'PUT', body: data })
 export const deleteContextItem = (game: string, itemType: string, itemId: string) => 
   fetchAPI<any>(`/api/context/${game}/${itemType}/${itemId}`, { method: 'DELETE' })
+export const deleteGame = (game: string) => 
+  fetchAPI<any>(`/api/context/${game}`, { method: 'DELETE' })
 
 // TTS API
 export const getTTSVoices = () => fetchAPI<any>('/api/tts/voices')

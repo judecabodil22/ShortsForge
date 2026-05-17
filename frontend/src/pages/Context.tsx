@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
-import { getGames, getGameContext, updateContextItem, deleteContextItem, importContext, clearContext } from '@/lib/api'
+import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, deleteGame } from '@/lib/api'
 
 const TYPE_CONFIG = {
   character: { icon: Users, color: 'text-cyber-cyan', bg: 'bg-cyber-cyan/20' },
@@ -56,23 +56,26 @@ export default function Context() {
       queryClient.invalidateQueries({ queryKey: ['context', selectedGame] })
       setEditingItem(null)
     },
-  })
-
-  const importMutation = useMutation({
-    mutationFn: (game: string) => importContext(game),
-    onSuccess: (data) => {
-      if (data.error) alert(`Error: ${data.error}`)
-      else alert(`Imported: ${JSON.stringify(data.stats)}`)
-      queryClient.invalidateQueries({ queryKey: ['context', selectedGame] })
-    }
-  })
-
+})
+  
   const clearMutation = useMutation({
     mutationFn: (game: string) => clearContext(game),
     onSuccess: (data) => {
       if (data.error) alert(`Error: ${data.error}`)
       else alert('Context and memory cleared.')
       queryClient.invalidateQueries({ queryKey: ['context', selectedGame] })
+    }
+  })
+
+  const deleteGameMutation = useMutation({
+    mutationFn: (game: string) => deleteGame(game),
+    onSuccess: (data) => {
+      if (data.error) alert(`Error: ${data.error}`)
+      else {
+        alert(`Game "${data.game}" deleted successfully.`)
+        setSelectedGame('')
+        queryClient.invalidateQueries({ queryKey: ['games'] })
+      }
     }
   })
 
@@ -148,17 +151,23 @@ export default function Context() {
               <option key={game} value={game}>{game}</option>
             ))}
           </select>
-          <motion.button 
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="cyber-button flex items-center gap-2 text-cyber-cyan border-cyber-cyan/30"
-            disabled={!selectedGame || importMutation.isPending}
-            onClick={() => selectedGame && importMutation.mutate(selectedGame)}
-            title="Import from Obsidian"
-          >
-            <BookOpen className="w-4 h-4" />
-            {importMutation.isPending ? 'Importing...' : 'Import Obsidian'}
-          </motion.button>
+          {selectedGame && (
+            <motion.button 
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              className="cyber-button flex items-center gap-2 text-cyber-red border-cyber-red/50"
+              disabled={deleteGameMutation.isPending}
+              onClick={() => {
+                if (selectedGame && window.confirm(`Are you sure you want to DELETE the entire game "${selectedGame}"? This will remove all context data and cannot be undone.`)) {
+                  deleteGameMutation.mutate(selectedGame)
+                }
+              }}
+              title="Delete Game Context"
+            >
+              <Trash2 className="w-4 h-4" />
+              {deleteGameMutation.isPending ? 'Deleting...' : 'Delete Game'}
+            </motion.button>
+          )}
           <motion.button 
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}

@@ -446,7 +446,8 @@ def env(key, default=""):
         keychain_value = get_service_password(keychain_key)
         if keychain_value:
             return keychain_value
-    return ENV.get(key, default)
+    val = ENV.get(key, default)
+    return val if val != "" else default
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 def log(msg):
@@ -1627,7 +1628,7 @@ Transcripts:
 
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 512}
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
     }).encode()
     
     key = keys[0]
@@ -2835,10 +2836,10 @@ def _detect_corrections(old_ctx, new_ctx):
     corrections["removed_terms"] = list(old_terms - new_terms)
     corrections["added_terms"] = list(new_terms - old_terms)
     
-    old_rels = set(old_ctx.get("relationships", []))
-    new_rels = set(new_ctx.get("relationships", []))
-    corrections["removed_relationships"] = list(old_rels - new_rels)
-    corrections["added_relationships"] = list(new_rels - old_rels)
+    old_rels_list = old_ctx.get("relationships", [])
+    new_rels_list = new_ctx.get("relationships", [])
+    corrections["removed_relationships"] = [r for r in old_rels_list if r not in new_rels_list]
+    corrections["added_relationships"] = [r for r in new_rels_list if r not in old_rels_list]
     
     return corrections
 
@@ -2974,7 +2975,7 @@ Transcript excerpt:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.3,
-            "maxOutputTokens": 512,
+            "maxOutputTokens": 2048,
             "response_mime_type": "application/json"
         }
     }).encode()
@@ -4336,13 +4337,13 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                             clip_features = {
                                 'duration': dur,
                                 'has_dialogue': '?' in sc.get('text', ''),
-                                'has_exclamation': '!' in sc.get('text', ''),
+                                ''has_exclamation': '!' in sc.get('text', ''),
                                 'has_numbers': bool(sc.get('text', '').replace('.','').isdigit()),
                                 'density': sc.get('density', 0),
                                 'drama_score': sc.get('drama_score', 0),
                                 'word_count': sc.get('words', 0),
-                                'voice': rr_voice,
-                                'style': rr_style,
+                                'voice': 'selected_in_tts_phase',
+                                'style': 'selected_in_tts_phase',
                             }
                             virality = calculate_virality_score(clip_features, learned_params=_LEARNING_OPTIMIZED_PARAMS)
                             if script_id_map:

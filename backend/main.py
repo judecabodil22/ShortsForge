@@ -338,7 +338,7 @@ def run_pipeline_async(source: str = "youtube"):
 
         # Poll status file while process runs
         last_status = ""
-        while pipeline_process.poll() is None:
+        while pipeline_process is not None and pipeline_process.poll() is None:
             # Read status from file
             status_text = read_status_file()
 
@@ -366,6 +366,9 @@ def run_pipeline_async(source: str = "youtube"):
             pipeline_status["error"] = status_text
             pipeline_status["current_phase"] = "Error"
             pipeline_status["progress"] = 0
+        elif pipeline_process is None:
+            pipeline_status["current_phase"] = "Stopped"
+            pipeline_status["message"] = "Pipeline stopped by user"
         elif pipeline_process.returncode == 0:
             pipeline_status["current_phase"] = "Complete"
             pipeline_status["progress"] = 100
@@ -997,6 +1000,29 @@ async def clear_context(request: Request, req: ImportRequest, _: bool = Depends(
         from workflows.context_manager import clear_all_context_for_game
         result = clear_all_context_for_game(game)
         return {"status": "cleared", "result": result}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.delete("/api/context/{game}")
+@limiter.limit("5/minute")
+async def delete_game_context(request: Request, game: str, _: bool = Depends(verify_api_key)):
+    """Delete entire game context - requires API key"""
+    from workflows.context_manager import clear_all_context_for_game
+    
+    # Sanitize game name
+    game = sanitize_input(game, max_length=100)
+    
+    try:
+        # Clear all context for the game
+        result = clear_all_context_for_game(game)
+        
+        # Also delete the game directory if it exists
+        context_dir = os.path.join(WORKSPACE, "Context", game)
+        if os.path.exists(context_dir):
+            import shutil
+            shutil.rmtree(context_dir)
+        
+        return {"status": "deleted", "game": game, "result": result}
     except Exception as e:
         return {"error": str(e)}
 
