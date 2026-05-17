@@ -572,10 +572,39 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
     
     scripts = get_all_scripts()
     script_map = {}
+    
+    # Also load script titles from files - map by filename (including Script001/002)
+    script_file_titles = {}
+    scripts_dir = os.path.expanduser("~/ShortsForge/scripts")
+    if os.path.exists(scripts_dir):
+        for fname in os.listdir(scripts_dir):
+            if fname.endswith(".txt"):
+                fpath = os.path.join(scripts_dir, fname)
+                try:
+                    with open(fpath, "r") as f:
+                        content = f.read()
+                    # Extract TITLE: line
+                    match = re.search(r'^TITLE:\s*(.+)$', content, re.MULTILINE)
+                    if match:
+                        title = match.group(1).strip()
+                        # Use full filename (e.g., "The Strength of Faith-Script001") as key
+                        key = os.path.splitext(fname)[0].lower()
+                        script_file_titles[key] = title.lower()
+                except:
+                    pass
+    
+    # Build script map - include actual TITLE from each script file
     for script in scripts:
         video_name = script.get('video_name', '')
+        script_id = script.get('id', '')
         if video_name:
             script_map[video_name.lower()] = script
+            # Also map by the actual TITLE from the script file - try both Script001 and Script002 variants
+            for suffix in ['-script001', '-script002', '-script003', '-script004', '-script005']:
+                file_key = video_name.lower() + suffix
+                if file_key in script_file_titles:
+                    actual_title = script_file_titles[file_key]
+                    script_map[actual_title] = script
     
     existing_learning_keys = set()
     conn = get_db()
