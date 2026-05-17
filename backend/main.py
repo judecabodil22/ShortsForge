@@ -193,9 +193,9 @@ async def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 @app.get("/api/auth/key")
-async def get_api_key_info():
-    """Get API key status (not the key itself for security)"""
-    return {"configured": True}
+async def get_api_key():
+    """Get API key for frontend authentication"""
+    return {"api_key": API_KEY}
 
 
 @app.get("/api/status")
