@@ -4,16 +4,16 @@
 
 @layer base {
   :root {
-    --cyber-black: #0d1117;
-    --cyber-dark: #161b22;
-    --cyber-card: #21262d;
-    --cyber-border: #30363d;
-    --cyber-cyan: #58a6ff;
-    --cyber-magenta: #bc8cff;
-    --cyber-yellow: #d29922;
-    --cyber-green: #3fb950;
-    --cyber-orange: #db6d28;
-    --cyber-red: #f85149;
+    --cyber-black: #09090b;
+    --cyber-dark: #18181b;
+    --cyber-card: #27272a;
+    --cyber-border: #3f3f46;
+    --cyber-cyan: #22d3ee;
+    --cyber-magenta: #e879f9;
+    --cyber-yellow: #facc15;
+    --cyber-green: #4ade80;
+    --cyber-orange: #fb923c;
+    --cyber-red: #f87171;
   }
 
   * {
@@ -21,11 +21,9 @@
   }
 
   body {
-    @apply bg-cyber-black text-gray-300 font-mono;
-    min-height: 100vh;
+    @apply bg-cyber-black text-zinc-200 font-mono;
   }
 
-  /* Custom scrollbar */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -44,6 +42,7 @@
 @layer components {
   .cyber-card {
     @apply bg-cyber-card border border-cyber-border rounded-lg p-4;
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.05);
   }
 
   .cyber-card-hover {
@@ -51,39 +50,38 @@
   }
 
   .cyber-card-hover:hover {
-    @apply border-cyber-cyan/40;
+    @apply border-cyber-cyan/50;
+    box-shadow: 0 0 15px rgba(34, 211, 238, 0.15);
   }
 
   .cyber-button {
     @apply px-4 py-2 rounded font-medium transition-all duration-200;
-    @apply bg-cyber-dark border border-cyber-border text-gray-300;
+    @apply bg-cyber-card border border-cyber-border text-zinc-200;
   }
 
   .cyber-button:hover {
-    @apply border-cyber-cyan/60 text-cyber-cyan;
+    @apply border-cyber-cyan text-cyber-cyan;
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.3);
   }
 
   .cyber-button-primary {
-    @apply cyber-button bg-cyber-cyan/10 border-cyber-cyan/40 text-cyber-cyan;
+    @apply cyber-button bg-cyber-cyan/10 border-cyber-cyan/30 text-cyber-cyan;
   }
 
   .cyber-button-primary:hover {
     @apply bg-cyber-cyan/20 border-cyber-cyan;
+    box-shadow: 0 0 20px rgba(34, 211, 238, 0.4);
   }
 
   .cyber-input {
     @apply w-full px-3 py-2 rounded bg-cyber-dark border border-cyber-border;
-    @apply text-gray-200 placeholder-gray-500;
-    @apply focus:outline-none focus:border-cyber-cyan/40 focus:ring-1 focus:ring-cyber-cyan/20;
-  }
-
-  .cyber-glow {
-    box-shadow: 0 0 5px currentColor;
+    @apply text-zinc-200 placeholder-zinc-500;
+    @apply focus:outline-none focus:border-cyber-cyan/50 focus:ring-1 focus:ring-cyber-cyan/30;
   }
 
   .nav-item {
     @apply flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200;
-    @apply text-gray-400 hover:text-cyber-cyan hover:bg-cyber-card/50;
+    @apply text-zinc-400 hover:text-cyber-cyan hover:bg-cyber-card/50;
   }
 
   .nav-item-active {
