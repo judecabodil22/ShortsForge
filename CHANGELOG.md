@@ -4,6 +4,38 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.0.2 — 2026-05-19
+### Added
+- **Graph Visual Settings Panel**: New settings panel accessible via gear icon
+  - Link Distance (30-500): Control how far nodes are pulled together by edges
+  - Link Strength (0-1): Control edge pull force
+  - Repulsion (-1000 to -50): Control node separation force
+  - Collision Radius (1-100): Minimum distance between nodes
+  - Reset to Default button
+- **Zoom-Based Label Visibility**: Node labels only appear when zoomed in past 0.7x threshold
+  - Reduces clutter when zoomed out for better overview
+  - Labels appear automatically when zooming in
+
+### Changed
+- **Knowledge Graph Visualization**:
+  - Added direct entity-to-entity edges (magenta lines) for relationships
+  - Entities sharing a relationship are now directly connected
+  - Relationship nodes made smaller to reduce visual clutter
+  - Updated default spacing for better node distribution
+  - New toggle buttons for implicit and direct edge visibility
+  - Enhanced edge count display (explicit + direct + implicit)
+- **Graph Data Backend**:
+  - `backend/main.py` now generates direct edges between entities
+  - Entity pairs tracked via relationship parsing (↔ format)
+  - Added `is_direct` flag to edge data
+
+### Technical
+- Frontend: Added zoom tracking state for label visibility
+- Frontend: Added `zoomLevel` state and `onZoom` callback
+- Graph settings applied via d3 force simulation
+
+---
+
 ## 2.0.1 — 2026-05-17
 ### Security
 - **API Key Authentication**: Added API key verification to sensitive endpoints

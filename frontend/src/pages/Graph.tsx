@@ -2,15 +2,16 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import ForceGraph2D from 'react-force-graph-2d'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Network, ZoomIn, ZoomOut, Maximize2, RefreshCw, Pencil, Trash2, X, Save } from 'lucide-react'
+import { Network, ZoomIn, ZoomOut, Maximize2, RefreshCw, Pencil, Trash2, X, Save, Settings } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
-import { getGames, getGraphData, updateContextItem, deleteContextItem } from '@/lib/api'
+import { getGames, getGraphData, getSegmentRefs, updateContextItem, deleteContextItem } from '@/lib/api'
 
 const NODE_COLORS = {
   character: '#00fff5',  // cyan
   location: '#00ff88',   // green
   term: '#f0ff00',       // yellow
   relationship: '#ff00ff', // magenta
+  game: '#ffd700',       // gold
 }
 
 interface NodeData {
@@ -34,14 +35,23 @@ interface NodeData {
 export default function Graph() {
   const containerRef = useRef<HTMLDivElement>(null)
   const fgRef = useRef<any>(null)
-  const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
-  
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [selectedGame, setSelectedGame] = useState<string>('')
   const [selectedNode, setSelectedNode] = useState<NodeData | null>(null)
   const [hoverNode, setHoverNode] = useState<NodeData | null>(null)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editForm, setEditForm] = useState({ label: '', description: '' })
-
+  const [showImplicitEdges, setShowImplicitEdges] = useState(true)
+  const [showDirectEdges, setShowDirectEdges] = useState(true)
+  const [showSettings, setShowSettings] = useState(false)
+  const [zoomLevel, setZoomLevel] = useState(1)
+  const [graphSettings, setGraphSettings] = useState({
+    linkDistance: 150,
+    linkStrength: 0.5,
+    chargeStrength: -300,
+    collisionRadius: 20,
+  })
+  
   const { data: games } = useQuery({
     queryKey: ['games'],
     queryFn: getGames,
@@ -55,71 +65,95 @@ export default function Graph() {
 
   const { data: segmentRefs } = useQuery({
     queryKey: ['segmentRefs', selectedGame],
-    queryFn: () => fetch(`/api/context/${encodeURIComponent(selectedGame)}/segments`).then(r => r.json()),
+    queryFn: () => getSegmentRefs(selectedGame),
     enabled: !!selectedGame,
   })
-
+  
+  // Auto-select franchise on mount
   useEffect(() => {
-    if (games?.games?.length > 0 && !selectedGame) {
-      setSelectedGame(games.games[0])
+    if (selectedGame) return // Already selected
+    if (!games?.games?.length) return // No games loaded
+    
+    const series = games.games.find((g: any) => g.is_series)
+    if (series) {
+      setSelectedGame(series.name)
+    } else if (games.games.length > 0) {
+      setSelectedGame(games.games[0].name)
     }
   }, [games])
-
-  useEffect(() => {
+  
+  const updateDimensions = useCallback(() => {
     if (containerRef.current) {
-      setDimensions({
-        width: containerRef.current.clientWidth,
-        height: containerRef.current.clientHeight || 600
-      })
+      const width = containerRef.current.clientWidth
+      const height = containerRef.current.clientHeight || 600
+      setDimensions({ width, height })
     }
-    
-    const handleResize = () => {
-      if (containerRef.current) {
-        setDimensions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight || 600
-        })
-      }
-    }
-    
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
   }, [])
+  
+  useEffect(() => {
+    const timer = setTimeout(updateDimensions, 100)
+    return () => clearTimeout(timer)
+  }, [updateDimensions])
+  
+  useEffect(() => {
+    window.addEventListener('resize', updateDimensions)
+    return () => window.removeEventListener('resize', updateDimensions)
+  }, [updateDimensions])
+
+  const applyGraphSettings = useCallback(() => {
+    if (!fgRef.current) return
+    const d3 = fgRef.current.d3
+    if (d3) {
+      d3.force('link').distance(graphSettings.linkDistance).strength(graphSettings.linkStrength)
+      d3.force('charge').strength(graphSettings.chargeStrength)
+      d3.force('collision').radius(graphSettings.collisionRadius)
+      fgRef.current.d3ReheatGraph()
+    }
+  }, [graphSettings])
 
   const graphData = useMemo(() => {
-    if (!rawGraphData?.nodes) return { nodes: [], links: [] }
+    if (!rawGraphData?.nodes) return { nodes: [], links: [], implicitCount: 0, directCount: 0 }
 
     const nodesMap = new Map<string, NodeData>()
     const nodes = rawGraphData.nodes.map((n: any) => {
-      const node = { ...n.data, val: 1, neighbors: [], links: [] }
+      const node = { ...n.data, val: n.data.type === 'game' ? 8 : 1, neighbors: [], links: [] }
+      // Make relationship nodes smaller
+      if (node.type === 'relationship') node.val = 0.5
       nodesMap.set(node.id, node)
       return node
     })
 
+    let implicitCount = 0
+    let directCount = 0
     const links = rawGraphData.edges.map((e: any) => {
       const source = e.data.source
       const target = e.data.target
-      
+      const isImplicit = e.data.implicit === true
+      const isDirect = e.data.is_direct === true
+
       const sNode = nodesMap.get(source)
       const tNode = nodesMap.get(target)
-      
+
       if (sNode && tNode) {
         sNode.neighbors?.push(target)
         tNode.neighbors?.push(source)
-        const link = { source, target, label: e.data.label }
+        const link = { source, target, label: e.data.label, implicit: isImplicit, type: e.data.type, is_direct: isDirect }
         sNode.links?.push(link)
         tNode.links?.push(link)
       }
-      
-      return { source, target, label: e.data.label }
+
+      if (isImplicit) implicitCount++
+      if (isDirect) directCount++
+
+      return { source, target, label: e.data.label, implicit: isImplicit, type: e.data.type, is_direct: isDirect }
     })
-    
+
     // Scale node size based on degree
     nodes.forEach((n: NodeData) => {
        n.val = Math.min(10, 2 + (n.neighbors?.length || 0) * 0.5)
     })
 
-    return { nodes, links }
+    return { nodes, links, implicitCount, directCount }
   }, [rawGraphData])
 
   const highlightNodes = useMemo(() => {
@@ -154,12 +188,14 @@ export default function Graph() {
   }, [])
 
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    if (node.x == null || node.y == null || node.val == null) return
+
     const isHighlight = highlightNodes.size === 0 || highlightNodes.has(node.id)
     const isSelected = selectedNode?.id === node.id
-    
+
     const color = NODE_COLORS[node.type as keyof typeof NODE_COLORS] || '#666'
     const opacity = isHighlight ? 1 : 0.2
-    
+
     // Draw outer glow if selected
     if (isSelected) {
       ctx.beginPath()
@@ -173,40 +209,60 @@ export default function Graph() {
     ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
     ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
     ctx.fill()
-    
+
     // Draw Node Border
     ctx.lineWidth = isSelected ? 0.8 : 0.2
     ctx.strokeStyle = isSelected ? '#fff' : '#111'
     ctx.stroke()
 
-    // Draw Label
-    if (isHighlight) {
+    // Draw Label (only show when zoomed in enough)
+    const labelThreshold = 0.7
+    if (isHighlight && globalScale >= labelThreshold) {
       const fontSize = 12 / globalScale
       ctx.font = `${isSelected ? 'bold ' : ''}${fontSize}px Inter, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`
-      ctx.fillText(node.label, node.x, node.y + node.val + (fontSize * 1.2))
+      ctx.fillText(node.label ?? '', node.x, node.y + node.val + (fontSize * 1.2))
     }
-  }, [highlightNodes, selectedNode])
+  }, [highlightNodes, selectedNode, zoomLevel])
   
   const paintLink = useCallback((link: any, ctx: CanvasRenderingContext2D) => {
+    if (link.source?.x == null || link.source?.y == null || link.target?.x == null || link.target?.y == null) return
+
+    // Filter implicit edges if toggle is off
+    if (link.implicit && !showImplicitEdges) return
+    if (link.is_direct && !showDirectEdges) return
+
     const isHighlight = highlightLinks.size === 0 || highlightLinks.has(link)
-    
+    const isImplicit = link.implicit === true
+    const isDirect = link.is_direct === true
+
     ctx.beginPath()
     ctx.moveTo(link.source.x, link.source.y)
     ctx.lineTo(link.target.x, link.target.y)
-    
-    if (isHighlight && highlightLinks.size > 0) {
+
+    if (isImplicit) {
+      ctx.setLineDash([4, 4])
+      ctx.lineWidth = 0.5
+      ctx.strokeStyle = isHighlight ? 'rgba(100, 100, 255, 0.8)' : 'rgba(100, 100, 255, 0.2)'
+    } else if (isDirect) {
+      ctx.setLineDash([])
+      ctx.lineWidth = isHighlight ? 2 : 1
+      ctx.strokeStyle = isHighlight ? '#ff00ff' : 'rgba(255, 0, 255, 0.5)'
+    } else if (isHighlight && highlightLinks.size > 0) {
+      ctx.setLineDash([])
       ctx.lineWidth = 1.5
       ctx.strokeStyle = '#00fff5'
     } else {
+      ctx.setLineDash([])
       ctx.lineWidth = 0.5
       ctx.strokeStyle = isHighlight ? 'rgba(74, 74, 106, 0.8)' : 'rgba(74, 74, 106, 0.1)'
     }
-    
+
     ctx.stroke()
-  }, [highlightLinks])
+    ctx.setLineDash([])
+  }, [highlightLinks, showImplicitEdges])
 
   const updateMutation = useMutation({
     mutationFn: ({ itemType, itemId, data }: { itemType: string; itemId: string; data: any }) =>
@@ -216,6 +272,7 @@ export default function Graph() {
       setShowEditModal(false)
       setSelectedNode(null)
     },
+    onError: (error: Error) => alert(`Failed to update: ${error.message}`)
   })
 
   const deleteMutation = useMutation({
@@ -245,10 +302,13 @@ export default function Graph() {
           <select
             value={selectedGame}
             onChange={(e) => setSelectedGame(e.target.value)}
-            className="cyber-input w-48"
+            className="cyber-input w-56"
           >
-            {(games?.games || []).map((game: string) => (
-              <option key={game} value={game}>{game}</option>
+            <option value="">Select Franchise</option>
+            {((games?.games || []) as any[]).map((game) => (
+              <option key={game.name} value={game.name}>
+                {game.is_series ? '📁 ' : ''}{game.display_name}
+              </option>
             ))}
           </select>
           <button onClick={() => refetch()} className="cyber-button">
@@ -264,6 +324,31 @@ export default function Graph() {
             <span className="text-sm text-gray-400 capitalize">{type}</span>
           </div>
         ))}
+        <div className="w-px h-4 bg-gray-600" />
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-0.5 bg-gray-400" />
+          <span className="text-sm text-gray-400">explicit</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-0.5 border-t-2 border-dashed border-blue-400" />
+          <span className="text-sm text-gray-400">implicit</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-0.5 bg-cyber-magenta" />
+          <span className="text-sm text-gray-400">direct</span>
+        </div>
+        <button
+          onClick={() => setShowImplicitEdges(!showImplicitEdges)}
+          className={`cyber-button text-xs px-3 py-1 ${showImplicitEdges ? 'bg-cyber-cyan/20 text-cyber-cyan' : ''}`}
+        >
+          {showImplicitEdges ? 'Hide' : 'Show'} Implicit
+        </button>
+        <button
+          onClick={() => setShowDirectEdges(!showDirectEdges)}
+          className={`cyber-button text-xs px-3 py-1 ${showDirectEdges ? 'bg-cyber-magenta/20 text-cyber-magenta' : ''}`}
+        >
+          {showDirectEdges ? 'Hide' : 'Show'} Direct
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -278,7 +363,101 @@ export default function Graph() {
             <button onClick={handleFit} className="cyber-button p-2 bg-cyber-dark/80 backdrop-blur">
               <Maximize2 className="w-4 h-4" />
             </button>
+            <button onClick={() => setShowSettings(!showSettings)} className={`cyber-button p-2 bg-cyber-dark/80 backdrop-blur ${showSettings ? 'text-cyber-cyan' : ''}`}>
+              <Settings className="w-4 h-4" />
+            </button>
           </div>
+
+          {showSettings && (
+            <div className="absolute top-4 left-4 z-10 bg-cyber-dark/95 backdrop-blur border border-cyber-border rounded-lg p-4 w-64">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-white">Graph Settings</span>
+                <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-gray-400 flex justify-between">
+                    <span>Link Distance</span>
+                    <span className="text-cyber-cyan">{graphSettings.linkDistance}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="30"
+                    max="500"
+                    value={graphSettings.linkDistance}
+                    onChange={(e) => {
+                      setGraphSettings(s => ({ ...s, linkDistance: Number(e.target.value) }))
+                      applyGraphSettings()
+                    }}
+                    className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 flex justify-between">
+                    <span>Link Strength</span>
+                    <span className="text-cyber-cyan">{graphSettings.linkStrength.toFixed(2)}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={graphSettings.linkStrength}
+                    onChange={(e) => {
+                      setGraphSettings(s => ({ ...s, linkStrength: Number(e.target.value) }))
+                      applyGraphSettings()
+                    }}
+                    className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 flex justify-between">
+                    <span>Repulsion</span>
+                    <span className="text-cyber-cyan">{graphSettings.chargeStrength}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="-1000"
+                    max="-50"
+                    value={graphSettings.chargeStrength}
+                    onChange={(e) => {
+                      setGraphSettings(s => ({ ...s, chargeStrength: Number(e.target.value) }))
+                      applyGraphSettings()
+                    }}
+                    className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 flex justify-between">
+                    <span>Collision</span>
+                    <span className="text-cyber-cyan">{graphSettings.collisionRadius}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="100"
+                    value={graphSettings.collisionRadius}
+                    onChange={(e) => {
+                      setGraphSettings(s => ({ ...s, collisionRadius: Number(e.target.value) }))
+                      applyGraphSettings()
+                    }}
+                    className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    setGraphSettings({ linkDistance: 150, linkStrength: 0.5, chargeStrength: -300, collisionRadius: 20 })
+                    applyGraphSettings()
+                  }}
+                  className="w-full cyber-button text-xs py-1 mt-2"
+                >
+                  Reset to Default
+                </button>
+              </div>
+            </div>
+          )}
 
           <div ref={containerRef} className="w-full h-[600px] bg-[#0A0A0F] rounded-lg">
             {graphData.nodes.length > 0 && dimensions.width > 0 && (
@@ -289,26 +468,31 @@ export default function Graph() {
                 graphData={graphData}
                 nodeCanvasObject={paintNode}
                 nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
+                  if (node.x == null || node.y == null || node.val == null) return
                   ctx.fillStyle = color
                   ctx.beginPath()
-                  ctx.arc(node.x, node.y, Math.max(15, node.val + 10), 0, 2 * Math.PI, false)
+                  ctx.arc(node.x, node.y, Math.max(15, (node.val ?? 0) + 10), 0, 2 * Math.PI, false)
                   ctx.fill()
                 }}
                 linkCanvasObject={paintLink}
                 onNodeClick={handleNodeClick}
                 onBackgroundClick={() => setSelectedNode(null)}
                 onNodeHover={(node: any) => setHoverNode(node || null)}
+                onZoom={({ k }) => setZoomLevel(k)}
                 d3AlphaDecay={0.05}
                 d3VelocityDecay={0.3}
                 cooldownTicks={100}
-                onEngineStop={() => fgRef.current?.zoomToFit(400, 50)}
+                onEngineStop={() => {
+                  applyGraphSettings()
+                  fgRef.current?.zoomToFit(400, 50)
+                }}
               />
             )}
           </div>
 
           <div className="absolute bottom-4 left-4 z-10 flex gap-4 text-xs text-gray-400 bg-cyber-dark/80 backdrop-blur px-3 py-1.5 rounded-full border border-cyber-border/50">
             <span>Nodes: {graphData.nodes.length}</span>
-            <span>Edges: {graphData.links.length}</span>
+            <span>Edges: {graphData.links.length - graphData.implicitCount - graphData.directCount} explicit + {graphData.directCount} direct + {graphData.implicitCount} implicit</span>
           </div>
         </Card>
 

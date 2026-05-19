@@ -1,15 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save } from 'lucide-react'
+import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save, Gamepad2, Database, Layers } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
-import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, deleteGame } from '@/lib/api'
+import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, createGameContext, getStatus } from '@/lib/api'
 
 const TYPE_CONFIG = {
   character: { icon: Users, color: 'text-cyber-cyan', bg: 'bg-cyber-cyan/20' },
   location: { icon: MapPin, color: 'text-cyber-green', bg: 'bg-cyber-green/20' },
   term: { icon: BookOpen, color: 'text-cyber-yellow', bg: 'bg-cyber-yellow/20' },
   relationship: { icon: Link2, color: 'text-cyber-magenta', bg: 'bg-cyber-magenta/20' },
+  game: { icon: Gamepad2, color: 'text-cyber-yellow', bg: 'bg-cyber-yellow/20' },
 }
 
 interface ContextItem {
@@ -21,82 +22,107 @@ interface ContextItem {
   metadata?: Record<string, any>
 }
 
+interface GameEntry {
+  name: string
+  is_series: boolean
+  display_name: string
+  children: string[]
+}
+
 export default function Context() {
   const queryClient = useQueryClient()
-  const [selectedGame, setSelectedGame] = useState<string>('')
+  const [selectedFranchise, setSelectedFranchise] = useState<string>('')
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'character' | 'location' | 'term' | 'relationship'>('all')
   const [editingItem, setEditingItem] = useState<ContextItem | null>(null)
   const [editForm, setEditForm] = useState({ name: '', description: '', category: '' })
+  
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [createGameName, setCreateGameName] = useState('')
 
+  // Get status to find auto-detected franchise
+  const { data: status } = useQuery({
+    queryKey: ['status'],
+    queryFn: getStatus,
+  })
+
+  // Auto-select franchise on mount
   const { data: games } = useQuery({
     queryKey: ['games'],
     queryFn: getGames,
   })
 
+  useEffect(() => {
+    if (selectedFranchise) return // Already selected, don't override
+    if (!games?.games?.length) return // No games loaded
+    
+    // Find first series or first game
+    const series = games.games.find((g: GameEntry) => g.is_series)
+    if (series) {
+      setSelectedFranchise(series.name)
+    } else if (games.games.length > 0) {
+      setSelectedFranchise((games.games[0] as GameEntry).name)
+    }
+  }, [games])
+
+  // Also check if PARENT_FRANCHISE is set and auto-select it
+  useEffect(() => {
+    if (selectedFranchise) return // Already selected from games effect
+    if (!status?.parent_franchise) return // No parent franchise
+    
+    setSelectedFranchise(status.parent_franchise)
+  }, [status])
+
   const { data: context } = useQuery({
-    queryKey: ['context', selectedGame],
-    queryFn: () => getGameContext(selectedGame),
-    enabled: !!selectedGame,
+    queryKey: ['context', selectedFranchise],
+    queryFn: () => getGameContext(selectedFranchise),
+    enabled: !!selectedFranchise,
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ itemType, itemId, data }: { itemType: string; itemId: string; data: any }) =>
-      updateContextItem(selectedGame, itemType, itemId, data),
+      updateContextItem(selectedFranchise, itemType, itemId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['context', selectedGame] })
+      queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
       setEditingItem(null)
     },
+    onError: (error: Error) => alert(`Failed to update: ${error.message}`)
   })
 
   const deleteMutation = useMutation({
     mutationFn: ({ itemType, itemId }: { itemType: string; itemId: string }) =>
-      deleteContextItem(selectedGame, itemType, itemId),
+      deleteContextItem(selectedFranchise, itemType, itemId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['context', selectedGame] })
+      queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
       setEditingItem(null)
     },
-})
+    onError: (error: Error) => alert(`Failed to delete: ${error.message}`)
+  })
   
   const clearMutation = useMutation({
     mutationFn: (game: string) => clearContext(game),
     onSuccess: (data) => {
       if (data.error) alert(`Error: ${data.error}`)
       else alert('Context and memory cleared.')
-      queryClient.invalidateQueries({ queryKey: ['context', selectedGame] })
-    }
+      queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
+    },
+    onError: (error: Error) => alert(`Failed to clear context: ${error.message}`)
   })
 
-  const deleteGameMutation = useMutation({
-    mutationFn: (game: string) => deleteGame(game),
+  const createGameMutation = useMutation({
+    mutationFn: (game: string) => createGameContext(game),
     onSuccess: (data) => {
       if (data.error) alert(`Error: ${data.error}`)
       else {
-        alert(`Game "${data.game}" deleted successfully.`)
-        setSelectedGame('')
+        alert(`Franchise "${data.game}" created successfully.`)
+        setSelectedFranchise(data.game)
+        setShowCreateModal(false)
+        setCreateGameName('')
         queryClient.invalidateQueries({ queryKey: ['games'] })
       }
-    }
+    },
+    onError: (error: Error) => alert(`Failed to create franchise: ${error.message}`)
   })
-
-  const items = context ? [
-    ...(context.characters || []),
-    ...(context.locations || []),
-    ...(context.terms || []),
-    ...(context.relationships || []),
-  ] : []
-
-  const filteredItems = items.filter((item: ContextItem) => 
-    item.name?.toLowerCase().includes(search.toLowerCase()) &&
-    (activeTab === 'all' || item.type === activeTab)
-  )
-
-  const counts = {
-    character: context?.characters?.length || 0,
-    location: context?.locations?.length || 0,
-    term: context?.terms?.length || 0,
-    relationship: context?.relationships?.length || 0,
-  }
 
   const handleEdit = (item: ContextItem) => {
     setEditingItem(item)
@@ -130,6 +156,58 @@ export default function Context() {
     }
   }
 
+  // Get selected franchise info for display
+  const selectedFranchiseInfo = (games?.games || []).find((g: GameEntry) => g.name === selectedFranchise)
+
+  // Build items from context data
+  const items: ContextItem[] = [
+    ...((context?.characters || []) as any[]).map((c: any) => ({
+      id: c.id || c.name,
+      name: c.name || c,
+      type: 'character',
+      description: c.description,
+      category: c.category,
+      metadata: c.metadata
+    })),
+    ...((context?.locations || []) as any[]).map((l: any) => ({
+      id: l.id || l.name,
+      name: l.name || l,
+      type: 'location',
+      description: l.description,
+      category: l.category,
+      metadata: l.metadata
+    })),
+    ...((context?.terms || []) as any[]).map((t: any) => ({
+      id: t.id || t.name,
+      name: t.name || t,
+      type: 'term',
+      description: t.description,
+      category: t.category,
+      metadata: t.metadata
+    })),
+    ...((context?.relationships || []) as any[]).map((r: any) => ({
+      id: r.id || `${r.from}-${r.to}`,
+      name: `${r.from} → ${r.to}`,
+      type: 'relationship',
+      description: r.relationship,
+      category: r.relationship,
+      metadata: r.metadata
+    })),
+  ]
+
+  const counts = {
+    character: items.filter(i => i.type === 'character').length,
+    location: items.filter(i => i.type === 'location').length,
+    term: items.filter(i => i.type === 'term').length,
+    relationship: items.filter(i => i.type === 'relationship').length,
+  }
+
+  const filteredItems = items.filter(item => {
+    if (activeTab !== 'all' && item.type !== activeTab) return false
+    if (search && !item.name.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -137,64 +215,79 @@ export default function Context() {
           <h1 className="text-3xl font-display font-bold text-white">
             <span className="text-cyber-cyan">CONTEXT</span> EDITOR
           </h1>
-          <p className="text-gray-400 mt-1">Manage game context entities</p>
+          <p className="text-gray-400 mt-1">
+            {selectedFranchiseInfo?.is_series 
+              ? `Franchise context for ${selectedFranchiseInfo.display_name}`
+              : 'Manage game context entities'}
+          </p>
         </div>
 
         <div className="flex gap-3">
           <select
-            value={selectedGame}
-            onChange={(e) => setSelectedGame(e.target.value)}
-            className="cyber-input w-48"
+            value={selectedFranchise}
+            onChange={(e) => setSelectedFranchise(e.target.value)}
+            className="cyber-input w-56"
           >
-            <option value="">Select Game</option>
-            {(games?.games || []).map((game: string) => (
-              <option key={game} value={game}>{game}</option>
+            <option value="">Select Franchise</option>
+            {((games?.games || []) as GameEntry[]).map((game) => (
+              <option key={game.name} value={game.name}>
+                {game.is_series ? '📁 ' : ''}{game.display_name}
+              </option>
             ))}
           </select>
-          {selectedGame && (
+          
+          {selectedFranchise && (
             <motion.button 
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               className="cyber-button flex items-center gap-2 text-cyber-red border-cyber-red/50"
-              disabled={deleteGameMutation.isPending}
+              disabled={clearMutation.isPending}
               onClick={() => {
-                if (selectedGame && window.confirm(`Are you sure you want to DELETE the entire game "${selectedGame}"? This will remove all context data and cannot be undone.`)) {
-                  deleteGameMutation.mutate(selectedGame)
+                if (window.confirm(`Are you sure you want to CLEAR ALL context for this franchise? This cannot be undone.`)) {
+                  clearMutation.mutate(selectedFranchise)
                 }
               }}
-              title="Delete Game Context"
+              title="Clear Franchise Context"
             >
               <Trash2 className="w-4 h-4" />
-              {deleteGameMutation.isPending ? 'Deleting...' : 'Delete Game'}
+              Clear All
             </motion.button>
           )}
+          
           <motion.button 
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            className="cyber-button flex items-center gap-2 text-cyber-red border-cyber-red/30"
-            disabled={!selectedGame || clearMutation.isPending}
-            onClick={() => {
-              if (selectedGame && window.confirm(`Are you sure you want to clear ALL context for ${selectedGame}? This cannot be undone.`)) {
-                clearMutation.mutate(selectedGame)
-              }
-            }}
-            title="Clear Context & Memory"
-          >
-            <Trash2 className="w-4 h-4" />
-            Clear Context
-          </motion.button>
-          <motion.button 
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="cyber-button-primary flex items-center gap-2"
+            className="cyber-button flex items-center gap-2"
+            onClick={() => setShowCreateModal(true)}
           >
             <Plus className="w-4 h-4" />
-            Add Entity
+            New Franchise
           </motion.button>
         </div>
       </div>
 
-      {selectedGame ? (
+      {/* Franchise Info Banner */}
+      {selectedFranchiseInfo?.is_series && selectedFranchiseInfo.children?.length > 0 && (
+        <Card className="bg-cyber-dark/50 border-cyber-cyan/20">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-cyber-cyan/20 flex items-center justify-center">
+              <Layers className="w-5 h-5 text-cyber-cyan" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-400">Franchise contains:</p>
+              <div className="flex gap-2 mt-1">
+                {selectedFranchiseInfo.children.map((child: string) => (
+                  <span key={child} className="px-2 py-1 text-xs bg-cyber-cyan/10 text-cyber-cyan rounded">
+                    {child}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {selectedFranchise ? (
         <>
           {/* Tabs and Counts */}
           <div className="flex items-center gap-4">
@@ -264,10 +357,7 @@ export default function Context() {
                       </p>
                     )}
 
-                    <div className="mt-4 flex items-center justify-between">
-                      <span className="text-xs text-gray-500">
-                        Verified: {item.metadata?.validation_count > 0 ? '✓' : '—'}
-                      </span>
+                    <div className="mt-4 flex items-center justify-end">
                       <button 
                         className="text-xs text-cyber-cyan hover:underline flex items-center gap-1"
                         onClick={(e) => {
@@ -287,14 +377,16 @@ export default function Context() {
 
           {filteredItems.length === 0 && (
             <div className="text-center py-12 text-gray-500">
-              <p>No entities found</p>
+              <Database className="w-12 h-12 mb-4 opacity-30" />
+              <p>No entities found in this franchise</p>
+              <p className="text-sm mt-2">Run the pipeline to extract context from videos</p>
             </div>
           )}
         </>
       ) : (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
-          <Users className="w-12 h-12 mb-4 opacity-30" />
-          <p>Select a game to view and manage its context</p>
+          <Database className="w-12 h-12 mb-4 opacity-30" />
+          <p>Select a franchise to view its shared context</p>
         </div>
       )}
 
@@ -335,20 +427,7 @@ export default function Context() {
                     className="cyber-input w-full"
                   />
                 </div>
-                
-                {editingItem.type === 'relationship' && (
-                  <div>
-                    <label className="text-sm text-gray-400 mb-2 block">Category</label>
-                    <input
-                      type="text"
-                      value={editForm.category}
-                      onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
-                      className="cyber-input w-full"
-                      placeholder="e.g., family, enemy, ally"
-                    />
-                  </div>
-                )}
-                
+
                 <div>
                   <label className="text-sm text-gray-400 mb-2 block">Description</label>
                   <textarea
@@ -357,39 +436,116 @@ export default function Context() {
                     className="cyber-input w-full h-24 resize-none"
                   />
                 </div>
+
+                <div>
+                  <label className="text-sm text-gray-400 mb-2 block">Category</label>
+                  <input
+                    type="text"
+                    value={editForm.category}
+                    onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                    className="cyber-input w-full"
+                    placeholder="e.g., ally, location, theme"
+                  />
+                </div>
               </div>
 
-              <div className="mt-6 flex gap-3">
-                <motion.button 
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="cyber-button flex-1 flex items-center justify-center gap-2"
-                  onClick={() => setEditingItem(null)}
+              <div className="flex justify-between mt-6">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleDelete}
+                  className="px-4 py-2 text-cyber-red hover:bg-cyber-red/10 rounded-lg"
+                >
+                  Delete
+                </motion.button>
+                <div className="flex gap-2">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setEditingItem(null)}
+                    className="cyber-button"
+                  >
+                    Cancel
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleSave}
+                    className="cyber-button-primary flex items-center gap-2"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Create Franchise Modal */}
+      <AnimatePresence>
+        {showCreateModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+            onClick={() => setShowCreateModal(false)}
+          >
+            <motion.div 
+              initial={{ scale: 0.9 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.9 }}
+              className="bg-cyber-card border border-cyber-border rounded-lg p-6 w-full max-w-md"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-xl font-display font-semibold text-white flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-cyber-cyan" />
+                  Create New Franchise
+                </h3>
+                <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm text-gray-400 mb-2 block">Franchise/Series Name</label>
+                  <input
+                    type="text"
+                    value={createGameName}
+                    onChange={(e) => setCreateGameName(e.target.value)}
+                    className="cyber-input w-full"
+                    placeholder="e.g., tomb_raider_series"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Use underscores for spaces, e.g., "tomb_raider_series"</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 mt-6">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setShowCreateModal(false)}
+                  className="cyber-button"
                 >
                   Cancel
                 </motion.button>
-                <motion.button 
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="cyber-button-primary flex-1 flex items-center justify-center gap-2"
-                  onClick={handleSave}
-                  disabled={updateMutation.isPending}
-                >
-                  <Save className="w-4 h-4" />
-                  {updateMutation.isPending ? 'Saving...' : 'Save'}
-                </motion.button>
-              </div>
-
-              <div className="mt-3">
-                <motion.button 
+                <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  className="w-full cyber-button text-cyber-red flex items-center justify-center gap-2"
-                  onClick={handleDelete}
-                  disabled={deleteMutation.isPending}
+                  onClick={() => {
+                    if (createGameName.trim()) {
+                      createGameMutation.mutate(createGameName.trim())
+                    }
+                  }}
+                  disabled={!createGameName.trim() || createGameMutation.isPending}
+                  className="cyber-button-primary flex items-center gap-2"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  {deleteMutation.isPending ? 'Deleting...' : 'Delete Item'}
+                  <Plus className="w-4 h-4" />
+                  Create
                 </motion.button>
               </div>
             </motion.div>

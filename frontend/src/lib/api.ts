@@ -1,4 +1,4 @@
-const API_BASE = ''
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const API_KEY_STORAGE_KEY = 'shortsforge_api_key'
 
@@ -65,7 +65,7 @@ async function fetchAPI<T>(endpoint: string, options: FetchOptions = {}): Promis
 }
 
 // Status API
-export const getStatus = () => fetchAPI<{ pipeline: any; oauth_configured: boolean; workspace: string }>('/api/status')
+export const getStatus = () => fetchAPI<{ pipeline: any; oauth_configured: boolean; workspace: string; game_title: string; parent_franchise: string }>('/api/status')
 export const getHealth = () => fetchAPI<{ status: string }>('/api/health')
 
 // Pipeline API
@@ -112,21 +112,59 @@ export const restartListener = () => fetchAPI<any>('/api/system/restart-listener
 export const downloadFromUrl = (url: string) => fetchAPI<any>('/api/pipeline/download', { method: 'POST', body: { url } })
 export const getLogs = (lines: number = 100) => fetchAPI<any>(`/api/logs?lines=${lines}`)
 export const importContext = (game: string) => fetchAPI<any>('/api/context/import', { method: 'POST', body: { game } })
+export const createGameContext = (game: string) => fetchAPI<any>('/api/context/create_game', { method: 'POST', body: { game } })
+export const mergeContext = (target_game: string, source_game: string) => fetchAPI<any>('/api/context/merge', { method: 'POST', body: { target_game, source_game } })
 export const clearContext = (game: string) => fetchAPI<any>('/api/context/clear', { method: 'POST', body: { game } })
+export const getSegmentRefs = (game: string) => fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/segments`)
 
 // WebSocket connection
-export function createWebSocketConnection(onMessage: (data: any) => void) {
+let wsInstance: WebSocket | null = null
+let reconnectAttempts = 0
+const MAX_RECONNECT_ATTEMPTS = 5
+
+export function createWebSocketConnection(onMessage: (data: any) => void, onError?: (error: Event) => void) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
-  
+  wsInstance = ws
+
   ws.onmessage = (event) => {
-    const data = JSON.parse(event.data)
-    onMessage(data)
+    try {
+      const data = JSON.parse(event.data)
+      onMessage(data)
+    } catch (e) {
+      console.error('WebSocket JSON parse error:', e)
+    }
   }
-  
+
   ws.onclose = () => {
     console.log('WebSocket disconnected')
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      reconnectAttempts++
+      console.log(`WebSocket reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`)
+      // Close old connection before reconnecting
+      if (wsInstance && wsInstance.readyState === WebSocket.OPEN) {
+        wsInstance.close()
+      }
+      setTimeout(() => {
+        const newWs = createWebSocketConnection(onMessage, onError)
+        if (newWs) {
+          wsInstance = newWs
+        }
+      }, 2000 * reconnectAttempts)
+    }
   }
-  
+
+  ws.onerror = (error) => {
+    console.error('WebSocket error:', error)
+    if (onError) onError(error)
+  }
+
   return ws
+}
+
+export function closeWebSocket() {
+  if (wsInstance) {
+    wsInstance.close()
+    wsInstance = null
+  }
 }

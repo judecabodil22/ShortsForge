@@ -11,7 +11,7 @@ import time
 import secrets
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from pathlib import Path
 from functools import wraps
 
@@ -37,12 +37,13 @@ from workflows.performance_database import (
 from workflows.metrics_fetcher import get_recent_uploads, is_oauth_configured
 from workflows.learning_engine import extract_script_features, get_virality_predictor
 from workflows.context_manager_v2 import ContextManagerV2, get_context_manager
+from workflows.context_manager import SERIES_MAPPING
 
 # ============================================================================
 # SECURITY CONFIGURATION
 # ============================================================================
 
-SECRET_KEY_FILE = os.path.expanduser("~/ShortsForge/.shortsforge/api_key")
+SECRET_KEY_FILE = "/home/alph4r1us/ShortsForge/.shortsforge/api_key"
 
 def load_or_create_api_key():
     """Load existing API key or create a new one"""
@@ -139,7 +140,7 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except:
+            except Exception:
                 pass
 
 manager = ConnectionManager()
@@ -150,7 +151,8 @@ pipeline_status = {
     "current_phase": None,
     "progress": 0,
     "message": "Idle",
-    "last_run": None
+    "last_run": None,
+    "error": None
 }
 
 # Pipeline settings storage
@@ -162,8 +164,9 @@ def load_pipeline_settings():
         if os.path.exists(SETTINGS_FILE):
             with open(SETTINGS_FILE, "r") as f:
                 return json.load(f)
-    except:
-        pass
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to load settings: {e}")
     return {
         "phases": [
             {"id": "p1", "name": "Download", "enabled": True, "video_source": "youtube"},
@@ -180,8 +183,9 @@ def save_pipeline_settings(settings):
         os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f)
-    except:
-        pass
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to save settings: {e}")
 
 
 # ============================================================================
@@ -201,10 +205,24 @@ async def get_api_key():
 @app.get("/api/status")
 async def get_status():
     """Get overall system status"""
+    env_file = os.path.join(WORKSPACE, ".env")
+    game_title = "Not set"
+    parent_franchise = ""
+    if os.path.exists(env_file):
+        with open(env_file, "r") as f:
+            for line in f:
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    if k == "GAME_TITLE":
+                        game_title = v.strip('"\'')
+                    elif k == "PARENT_FRANCHISE":
+                        parent_franchise = v.strip('"\'')
     return {
         "pipeline": pipeline_status,
         "oauth_configured": is_oauth_configured(),
-        "workspace": WORKSPACE
+        "workspace": WORKSPACE,
+        "game_title": game_title,
+        "parent_franchise": parent_franchise
     }
 
 
@@ -214,8 +232,6 @@ async def get_status():
 
 import subprocess
 import threading
-import asyncio
-import re
 
 pipeline_process = None
 
@@ -252,8 +268,9 @@ def read_status_file():
         if os.path.exists(STATUS_FILE):
             with open(STATUS_FILE, "r") as f:
                 return f.read().strip()
-    except:
-        pass
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to read status file: {e}")
     return ""
 
 def parse_status(status_text):
@@ -294,14 +311,14 @@ def run_pipeline_async(source: str = "youtube"):
     try:
         if os.path.exists(PIPELINE_LOG):
             os.remove(PIPELINE_LOG)
-    except:
+    except Exception:
         pass
     
     # Clear status file before starting
     try:
         if os.path.exists(STATUS_FILE):
             os.remove(STATUS_FILE)
-    except:
+    except Exception:
         pass
     
     if source == "local":
@@ -367,8 +384,13 @@ def run_pipeline_async(source: str = "youtube"):
             pipeline_status["current_phase"] = "Error"
             pipeline_status["progress"] = 0
         elif pipeline_process is None:
-            pipeline_status["current_phase"] = "Stopped"
-            pipeline_status["message"] = "Pipeline stopped by user"
+            # Distinguish between never run and stopped/finished
+            if not status_text:
+                pipeline_status["current_phase"] = "Idle"
+                pipeline_status["message"] = "Ready to run"
+            else:
+                pipeline_status["current_phase"] = "Stopped"
+                pipeline_status["message"] = "Pipeline stopped by user"
         elif pipeline_process.returncode == 0:
             pipeline_status["current_phase"] = "Complete"
             pipeline_status["progress"] = 100
@@ -387,11 +409,22 @@ def run_pipeline_async(source: str = "youtube"):
     finally:
         pipeline_status["running"] = False
         pipeline_process = None
+        
+        # Auto-sync YouTube metrics after pipeline completes
+        try:
+            from workflows.metrics_fetcher import get_recent_uploads
+            from workflows.performance_database import auto_match_and_fetch
+            videos = get_recent_uploads(days=7, max_results=50)
+            result = auto_match_and_fetch(videos)
+            print(f"[METRICS] Auto-sync completed: {result.get('new_metrics', 0)} metrics updated")
+        except Exception as e:
+            print(f"[METRICS] Auto-sync failed: {e}")
+        
         # Ensure log file is closed
         if log_file:
             try:
                 log_file.close()
-            except:
+            except Exception:
                 pass
 
 
@@ -421,7 +454,7 @@ async def stop_pipeline(request: Request, _: bool = Depends(verify_api_key)):
         pipeline_process.terminate()
         try:
             pipeline_process.wait(timeout=5)
-        except:
+        except Exception:
             pipeline_process.kill()
         pipeline_process = None
     
@@ -539,7 +572,7 @@ async def get_script(script_id: str):
     if isinstance(features, str):
         try:
             features = json.loads(features)
-        except:
+        except Exception:
             features = {}
     
     return {
@@ -603,10 +636,13 @@ async def get_learning_weights():
 
 @app.get("/api/context/games")
 async def get_games():
-    """Get all game contexts"""
+    """Get all game contexts with franchise structure.
+
+    Returns franchise keys with their child games listed.
+    """
     cm = get_context_manager()
     games = cm.get_games()
-    
+
     # Also check for games in the Context directory
     context_dir = os.path.join(WORKSPACE, "Context")
     if os.path.exists(context_dir):
@@ -614,22 +650,367 @@ async def get_games():
             if os.path.isdir(os.path.join(context_dir, item)) and not item.startswith("."):
                 if item not in games:
                     games.append(item)
-    
-    return {"games": games}
+
+    # Build franchise structure
+    # Reverse SERIES_MAPPING: series_name -> [game_keys]
+    series_to_games = {}
+    for game_key, series_name in SERIES_MAPPING.items():
+        if series_name not in series_to_games:
+            series_to_games[series_name] = []
+        series_to_games[series_name].append(game_key)
+
+    # Also scan Context directory for franchise keys
+    verified_file = os.path.join(context_dir, "verified_context.json")
+    if os.path.exists(verified_file):
+        try:
+            with open(verified_file, "r") as f:
+                all_context = json.load(f)
+            # Check for keys that look like franchise keys (series names from mapping)
+            for key in all_context.keys():
+                if key not in series_to_games:
+                    # Check if this key has a 'games' array indicating it's a franchise
+                    ctx_data = all_context[key].get("context", {})
+                    if isinstance(ctx_data, dict) and "games" in ctx_data:
+                        games_list = ctx_data.get("games", [])
+                        if games_list:
+                            series_to_games[key] = [g.lower().replace(" ", "_") for g in games_list]
+        except Exception:
+            pass
+
+    # Build response with franchise structure
+    result = []
+    seen_franchises = set()
+
+    for game in games:
+        game_lower = game.lower().replace(" ", "_")
+        if game_lower in series_to_games:
+            # This is a franchise or belongs to one
+            series_name = series_to_games[game_lower] if game_lower in series_to_games else game
+            if isinstance(series_name, list):
+                # It's a franchise key
+                series_key = game_lower
+                child_games = series_name
+                if series_key not in seen_franchises:
+                    result.append({
+                        "name": series_key,
+                        "is_series": True,
+                        "display_name": " ".join(series_key.split("_")).title(),
+                        "children": [g.replace("_", " ").title() for g in child_games]
+                    })
+                    seen_franchises.add(series_key)
+        else:
+            # Check if this game belongs to a known series
+            series_name = SERIES_MAPPING.get(game_lower)
+            if series_name and series_name in seen_franchises:
+                continue  # Skip, already added as franchise
+            # Regular game (no franchise)
+            result.append({
+                "name": game,
+                "is_series": False,
+                "display_name": game.replace("_", " ").title(),
+                "children": []
+            })
+
+    return {"games": result}
 
 
 @app.get("/api/context/{game}")
 async def get_game_context(game: str):
-    """Get all context items for a game"""
-    # Sanitize game name
-    game = sanitize_input(game, max_length=100)
+    """Get all context items for a game or franchise.
+
+    If game is a franchise key, returns franchise context.
+    If game is a child game of a franchise, returns the FRANCHISE context (not individual game).
+    """
+    game_title = sanitize_input(game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
     cm = get_context_manager()
+
+    # Check if this is a franchise key or child game
+    is_franchise = game_key in SERIES_MAPPING.values()
+    series_name = None
+
+    if not is_franchise:
+        series_name = SERIES_MAPPING.get(game_key)
+        if series_name:
+            # This is a child game - redirect to franchise context
+            game_key = series_name
+
+    # Now load context for game_key (which may be franchise)
+    verified_file = os.path.join(WORKSPACE, "Context", "verified_context.json")
+    all_context = {}
+    if os.path.exists(verified_file):
+        try:
+            with open(verified_file, "r") as f:
+                all_context = json.load(f)
+        except Exception:
+            pass
+
+    context_data = all_context.get(game_key, {}).get("context", {})
+
+    # If this is a franchise, also merge in context from child games
+    if is_franchise or series_name:
+        child_contexts = []
+        for child_key, series_val in SERIES_MAPPING.items():
+            if series_val == game_key:
+                child_ctx = all_context.get(child_key, {}).get("context", {})
+                if child_ctx:
+                    child_contexts.append(child_ctx)
+
+        # Merge child contexts into franchise context
+        merged = {
+            "characters": set(),
+            "locations": set(),
+            "key_terms": set(),
+            "relationships": []
+        }
+
+        def add_to_set(target_set, items, name_key="name"):
+            for item in items:
+                if isinstance(item, dict):
+                    target_set.add(item.get(name_key, ""))
+                elif isinstance(item, str):
+                    target_set.add(item)
+                else:
+                    target_set.add(str(item))
+
+        if context_data:
+            add_to_set(merged["characters"], context_data.get("characters", []))
+            add_to_set(merged["locations"], context_data.get("locations", []))
+            add_to_set(merged["key_terms"], context_data.get("key_terms", []))
+            for rel in context_data.get("relationships", []):
+                if isinstance(rel, dict):
+                    merged["relationships"].append(rel)
+
+        for child_ctx in child_contexts:
+            add_to_set(merged["characters"], child_ctx.get("characters", []))
+            add_to_set(merged["locations"], child_ctx.get("locations", []))
+            add_to_set(merged["key_terms"], child_ctx.get("key_terms", []))
+            for rel in child_ctx.get("relationships", []):
+                if isinstance(rel, dict):
+                    is_dup = any(
+                        r.get("from") == rel.get("from") and r.get("to") == rel.get("to")
+                        for r in merged["relationships"]
+                    )
+                    if not is_dup:
+                        merged["relationships"].append(rel)
+
+        context_data = {
+            "characters": [{"name": c} for c in sorted(merged["characters"])],
+            "locations": [{"name": l} for l in sorted(merged["locations"])],
+            "key_terms": [{"name": t} for t in sorted(merged["key_terms"])],
+            "relationships": merged["relationships"]
+        }
+
+    return {
+        "characters": context_data.get("characters", []),
+        "locations": context_data.get("locations", []),
+        "terms": context_data.get("key_terms", []),
+        "relationships": context_data.get("relationships", []),
+        "games": context_data.get("games", []),
+        "is_franchise": is_franchise or series_name is not None,
+        "franchise_name": game_key if (is_franchise or series_name) else None
+    }
+
+
+def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
+    """Analyze transcripts for entity co-occurrence to generate implicit graph edges.
+    
+    Returns dict with:
+    - edges: list of implicit edges with {source_id, target_id, type, weight, label}
+    - entity_segments: {entity_name: [segment_indices]} for reference
+    """
+    import re
+    from collections import defaultdict
+    
+    # Get entities from context manager
+    cm = get_context_manager()
+    entities = {
+        'character': [],
+        'location': [],
+        'term': []
+    }
+    
+    for etype in entities:
+        for item in cm.get_context_items(game_key, etype):
+            entities[etype].append({
+                'id': item.id,
+                'name': item.name.lower(),
+                'original': item.name,
+                'type': etype
+            })
+    
+    # Build entity name to ID map (include variations)
+    name_to_id = {}
+    for etype, items in entities.items():
+        for item in items:
+            name_to_id[item['name']] = item['id']
+            # Also add lowercase version
+            name_to_id[item['name'].lower()] = item['id']
+    
+    # Find and parse transcript files
+    transcripts_dir = os.path.join(WORKSPACE, "transcripts")
+    if not os.path.exists(transcripts_dir):
+        return {"edges": [], "entity_segments": {}}
+    
+    # Find transcripts related to this game/franchise
+    transcript_files = []
+    for fname in os.listdir(transcripts_dir):
+        if fname.endswith('.json'):
+            transcript_files.append(os.path.join(transcripts_dir, fname))
+    
+    if not transcript_files:
+        return {"edges": [], "entity_segments": {}}
+    
+    # Entity patterns for matching (case-insensitive)
+    entity_patterns = {}
+    for etype, items in entities.items():
+        for item in items:
+            entity_patterns[item['name']] = {
+                'id': item['id'],
+                'type': etype,
+                'original': item['original']
+            }
+            # Also add lowercase
+            entity_patterns[item['name'].lower()] = entity_patterns[item['name']]
+    
+    # Co-occurrence tracking
+    cooccurrence = defaultdict(int)  # (name1, name2) -> count
+    entity_segments = defaultdict(set)  # name -> set of segment indices
+    entity_contexts = defaultdict(list)  # name -> list of {segment_idx, nearby_entities}
+    
+    # Process each transcript
+    for tfile in transcript_files:
+        try:
+            with open(tfile, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            segments = data.get('segments', [])
+            
+            # Process each segment
+            for seg_idx, segment in enumerate(segments):
+                text = segment.get('text', '')
+                if not text:
+                    continue
+                
+                text_lower = text.lower()
+                
+                # Find all entities mentioned in this segment
+                mentioned = []
+                for entity_name in entity_patterns:
+                    # Use word boundary matching
+                    pattern = r'\b' + re.escape(entity_name) + r'\b'
+                    if re.search(pattern, text_lower):
+                        mentioned.append(entity_name)
+                        entity_segments[entity_name].add(seg_idx)
+                
+                # Record co-occurrences (entities in same segment)
+                for i, name1 in enumerate(mentioned):
+                    for name2 in mentioned[i+1:]:
+                        # Store sorted pair to avoid duplicates
+                        pair = tuple(sorted([name1, name2]))
+                        cooccurrence[pair] += 1
+                        
+                        # Also track which other entities were nearby
+                        for other in mentioned:
+                            if other != name1:
+                                entity_contexts[name1].append({
+                                    'segment': seg_idx,
+                                    'nearby': other,
+                                    'text_preview': text[:100]
+                                })
+        except Exception as e:
+            print(f"Error processing transcript {tfile}: {e}")
+            continue
+    
+    # Generate implicit edges from co-occurrences
+    implicit_edges = []
+    edge_id = 0
+    
+    # Threshold: at least 2 co-occurrences to create an edge
+    min_cooccurrence = 2
+    
+    for (name1, name2), count in cooccurrence.items():
+        if count >= min_cooccurrence:
+            id1 = name_to_id.get(name1)
+            id2 = name_to_id.get(name2)
+            
+            if id1 and id2 and id1 != id2:
+                # Determine edge type based on entity types
+                type1 = entity_patterns.get(name1, {}).get('type', 'unknown')
+                type2 = entity_patterns.get(name2, {}).get('type', 'unknown')
+                
+                # Edge type logic
+                if type1 == 'character' and type2 == 'location':
+                    edge_type = 'located_at'
+                    edge_label = f"found in {entity_patterns.get(name2, {}).get('original', name2)}"
+                elif type2 == 'character' and type1 == 'location':
+                    edge_type = 'located_at'
+                    edge_label = f"visited by {entity_patterns.get(name1, {}).get('original', name1)}"
+                elif type1 == 'term' or type2 == 'term':
+                    edge_type = 'related_to'
+                    edge_label = f"connected ({count}x)"
+                else:
+                    edge_type = 'co_occurs'
+                    edge_label = f"mentioned together ({count}x)"
+                
+                implicit_edges.append({
+                    'source': id1,
+                    'target': id2,
+                    'type': edge_type,
+                    'weight': count,
+                    'label': edge_label,
+                    'implicit': True
+                })
+                edge_id += 1
+    
+    # Also create edges between entities that share many contexts
+    # (entities frequently mentioned in same segments)
+    shared_contexts = defaultdict(int)
+    for name, contexts in entity_contexts.items():
+        nearby_counts = defaultdict(int)
+        for ctx in contexts:
+            nearby_counts[ctx['nearby']] += 1
+        
+        for other_name, cnt in nearby_counts.items():
+            if cnt >= 3:  # At least 3 shared contexts
+                pair = tuple(sorted([name, other_name]))
+                if pair not in cooccurrence or cooccurrence[pair] < cnt:
+                    shared_contexts[pair] = cnt
+    
+    # Add shared context edges
+    for (name1, name2), count in shared_contexts.items():
+        if count >= 3:
+            id1 = name_to_id.get(name1)
+            id2 = name_to_id.get(name2)
+            
+            if id1 and id2 and id1 != id2:
+                # Check if edge already exists
+                exists = any(
+                    (e['source'] == id1 and e['target'] == id2) or
+                    (e['source'] == id2 and e['target'] == id1)
+                    for e in implicit_edges
+                )
+                
+                if not exists:
+                    type1 = entity_patterns.get(name1, {}).get('type', 'unknown')
+                    type2 = entity_patterns.get(name2, {}).get('type', 'unknown')
+                    
+                    edge_type = 'mentioned_with' if 'character' in [type1, type2] else 'contextually_linked'
+                    
+                    implicit_edges.append({
+                        'source': id1,
+                        'target': id2,
+                        'type': edge_type,
+                        'weight': count,
+                        'label': f"frequently together ({count}x)",
+                        'implicit': True
+                    })
     
     return {
-        "characters": [item.to_dict() for item in cm.get_context_items(game, "character")],
-        "locations": [item.to_dict() for item in cm.get_context_items(game, "location")],
-        "terms": [item.to_dict() for item in cm.get_context_items(game, "term")],
-        "relationships": [item.to_dict() for item in cm.get_context_items(game, "relationship")]
+        "edges": implicit_edges,
+        "entity_segments": {k: list(v) for k, v in entity_segments.items()},
+        "total_transcripts": len(transcript_files),
+        "total_cooccurrences": sum(cooccurrence.values())
     }
 
 
@@ -637,7 +1018,8 @@ async def get_game_context(game: str):
 async def get_graph_data(game: str):
     """Get graph data in Cytoscape.js format"""
     # Sanitize game name
-    game = sanitize_input(game, max_length=100)
+    game_title = sanitize_input(game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
     cm = get_context_manager()
     
     nodes = []
@@ -645,7 +1027,7 @@ async def get_graph_data(game: str):
     node_id_map = {}
     
     # Add nodes for characters (cyan)
-    for item in cm.get_context_items(game, "character"):
+    for item in cm.get_context_items(game_key, "character"):
         nodes.append({
             "data": {
                 "id": item.id,
@@ -657,7 +1039,7 @@ async def get_graph_data(game: str):
         node_id_map[item.name.lower()] = item.id
     
     # Add nodes for locations (green)
-    for item in cm.get_context_items(game, "location"):
+    for item in cm.get_context_items(game_key, "location"):
         nodes.append({
             "data": {
                 "id": item.id,
@@ -669,7 +1051,7 @@ async def get_graph_data(game: str):
         node_id_map[item.name.lower()] = item.id
     
     # Add nodes for terms (yellow)
-    for item in cm.get_context_items(game, "term"):
+    for item in cm.get_context_items(game_key, "term"):
         nodes.append({
             "data": {
                 "id": item.id,
@@ -680,9 +1062,23 @@ async def get_graph_data(game: str):
         })
         node_id_map[item.name.lower()] = item.id
     
+    # Add nodes for games (gold)
+    for item in cm.get_context_items(game_key, "game"):
+        nodes.append({
+            "data": {
+                "id": item.id,
+                "label": item.name,
+                "type": "game",
+                "description": item.description
+            }
+        })
+        node_id_map[item.name.lower()] = item.id
+    
     # Add nodes for relationships (magenta) and edges
     rel_id = 0
-    for item in cm.get_context_items(game, "relationship"):
+    entity_pairs = []  # Track direct connections between entities
+    
+    for item in cm.get_context_items(game_key, "relationship"):
         # Relationship as a node
         nodes.append({
             "data": {
@@ -706,6 +1102,10 @@ async def get_graph_data(game: str):
                     mentioned_entities.append(node_id_map[from_name])
                 if to_name in node_id_map:
                     mentioned_entities.append(node_id_map[to_name])
+                
+                # Track direct entity-to-entity connection
+                if from_name in node_id_map and to_name in node_id_map:
+                    entity_pairs.append((node_id_map[from_name], node_id_map[to_name], item.category))
         else:
             # Extract entities from natural language text
             for name_lower, ent_id in node_id_map.items():
@@ -730,6 +1130,45 @@ async def get_graph_data(game: str):
                 }
             })
             rel_id += 1
+    
+    # Add direct edges between entities that share relationships
+    added_pairs = set()
+    for source_id, target_id, category in entity_pairs:
+        pair_key = tuple(sorted([source_id, target_id]))
+        if pair_key not in added_pairs:
+            edges.append({
+                "data": {
+                    "id": f"direct_{source_id[:8]}_{target_id[:8]}",
+                    "source": source_id,
+                    "target": target_id,
+                    "label": category,
+                    "type": "related_to",
+                    "implicit": False,
+                    "is_direct": True
+                }
+            })
+            added_pairs.add(pair_key)
+    
+    # Generate implicit edges from transcript co-occurrence analysis
+    try:
+        cooccurrence_data = analyze_transcript_cooccurrence(game_key)
+        implicit_edges_data = cooccurrence_data.get("edges", [])
+        
+        # Add implicit edges to the graph
+        for ie in implicit_edges_data:
+            edges.append({
+                "data": {
+                    "id": f"implicit_{ie['source']}_{ie['target']}",
+                    "source": ie["source"],
+                    "target": ie["target"],
+                    "label": ie.get("label", ""),
+                    "type": ie.get("type", "co_occurs"),
+                    "implicit": True,
+                    "weight": ie.get("weight", 1)
+                }
+            })
+    except Exception as e:
+        print(f"Error generating implicit edges: {e}")
     
     return {"nodes": nodes, "edges": edges}
 
@@ -758,10 +1197,11 @@ async def get_segment_references(game: str):
 async def update_context_item(request: Request, game: str, item_type: str, item_id: str, data: dict, _: bool = Depends(verify_api_key)):
     """Update a context item"""
     # Sanitize inputs
-    game = sanitize_input(game, max_length=100)
+    game_title = sanitize_input(game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
     item_id = sanitize_input(item_id, max_length=100)
     from workflows.context_manager_v2 import update_item
-    result = update_item(game, item_id, **data)
+    result = update_item(game_key, item_id, **data)
     if result:
         return {"status": "updated", "item": result.to_dict()}
     return {"error": "Item not found"}, 404
@@ -772,10 +1212,11 @@ async def update_context_item(request: Request, game: str, item_type: str, item_
 async def delete_context_item(request: Request, game: str, item_type: str, item_id: str, _: bool = Depends(verify_api_key)):
     """Delete a context item"""
     # Sanitize inputs
-    game = sanitize_input(game, max_length=100)
+    game_title = sanitize_input(game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
     item_id = sanitize_input(item_id, max_length=100)
     from workflows.context_manager_v2 import delete_item
-    result = delete_item(game, item_id)
+    result = delete_item(game_key, item_id)
     if result:
         return {"status": "deleted"}
     return {"error": "Item not found"}, 404
@@ -810,7 +1251,7 @@ from pydantic import BaseModel
 @app.get("/api/config")
 async def get_config():
     env_file = os.path.join(WORKSPACE, ".env")
-    config = {"GAME_TITLE": "", "TTS_VOICE": "", "CLIPS_PER_HOUR": ""}
+    config = {"GAME_TITLE": "", "TTS_VOICE": "", "CLIPS_PER_HOUR": "", "PARENT_FRANCHISE": ""}
     if os.path.exists(env_file):
         with open(env_file, "r") as f:
             for line in f:
@@ -824,6 +1265,7 @@ class ConfigUpdate(BaseModel):
     GAME_TITLE: Optional[str] = None
     TTS_VOICE: Optional[str] = None
     CLIPS_PER_HOUR: Optional[str] = None
+    PARENT_FRANCHISE: Optional[str] = None
 
 @app.post("/api/config")
 @limiter.limit("5/minute")
@@ -951,8 +1393,9 @@ class ImportRequest(BaseModel):
 async def import_context(request: Request, req: ImportRequest, _: bool = Depends(verify_api_key)):
     """Import context - requires API key"""
     # Sanitize game name
-    game = sanitize_input(req.game, max_length=100)
-    ctx_dir = os.path.join(WORKSPACE, "Context", game)
+    game_title = sanitize_input(req.game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
+    ctx_dir = os.path.join(WORKSPACE, "Context", game_key)
     if not os.path.exists(ctx_dir):
         return {"error": "Game folder not found"}
         
@@ -984,21 +1427,105 @@ async def import_context(request: Request, req: ImportRequest, _: bool = Depends
     if context["characters"] or context["locations"]:
         try:
             from workflows.context_manager import save_verified_context
-            save_verified_context(game, context)
+            save_verified_context(game_key, context)
+            
+            # Update memory
+            cm = get_context_manager()
+            if game_key in cm.contexts:
+                # This ensures the new context items are loaded from file the next time
+                del cm.contexts[game_key]
+                
             return {"status": "imported", "stats": {k: len(v) for k,v in context.items()}}
         except Exception as e:
             return {"error": str(e)}
     return {"status": "no data"}
+
+class CreateGameRequest(BaseModel):
+    game: str
+
+@app.post("/api/context/create_game")
+@limiter.limit("3/minute")
+async def create_game(request: Request, req: CreateGameRequest, _: bool = Depends(verify_api_key)):
+    """Create a blank franchise or game context"""
+    game_title = sanitize_input(req.game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
+    cm = get_context_manager()
+    cm.contexts[game_key] = {"character": [], "location": [], "term": [], "relationship": []}
+    cm.save_context(game_key)
+    
+    # Auto-set PARENT_FRANCHISE in .env if this is the first franchise
+    if game_key in SERIES_MAPPING.values():
+        env_file = os.path.join(WORKSPACE, ".env")
+        parent_franchise = os.environ.get("PARENT_FRANCHISE", "")
+        if not parent_franchise:
+            # Set PARENT_FRANCHISE to this franchise
+            lines = []
+            if os.path.exists(env_file):
+                with open(env_file, "r") as f:
+                    lines = f.readlines()
+            
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith("PARENT_FRANCHISE="):
+                    lines[i] = f"PARENT_FRANCHISE={game_key}\n"
+                    found = True
+                    break
+            
+            if not found:
+                lines.append(f"PARENT_FRANCHISE={game_key}\n")
+            
+            with open(env_file, "w") as f:
+                f.writelines(lines)
+    
+    return {"status": "created", "game": game_key}
+
+class MergeContextRequest(BaseModel):
+    target_game: str
+    source_game: str
+
+@app.post("/api/context/merge")
+@limiter.limit("3/minute")
+async def merge_context(request: Request, req: MergeContextRequest, _: bool = Depends(verify_api_key)):
+    """Merge context from source_game to target_game"""
+    target_title = sanitize_input(req.target_game, max_length=100)
+    target_key = target_title.lower().replace(" ", "_").strip()
+    source_title = sanitize_input(req.source_game, max_length=100)
+    source_key = source_title.lower().replace(" ", "_").strip()
+    
+    cm = get_context_manager()
+    if source_key not in cm.contexts:
+        return {"error": "Source game context not found"}
+        
+    source_items = cm.export_items(source_key)
+    if not source_items:
+        return {"error": "Source context is empty"}
+        
+    # Import into target
+    result = cm.import_items(target_key, source_items)
+    
+    # Check if this source_title already exists as a game
+    existing_games = [item.name.lower() for item in cm.get_context_items(target_key, "game")]
+    if source_title.lower() not in existing_games:
+        cm.create_item(target_key, "game", name=source_title, source="merge")
+        
+    return {"status": "merged", "result": result}
 
 @app.post("/api/context/clear")
 @limiter.limit("2/minute")
 async def clear_context(request: Request, req: ImportRequest, _: bool = Depends(verify_api_key)):
     """Clear context - requires API key"""
     # Sanitize game name
-    game = sanitize_input(req.game, max_length=100)
+    game_title = sanitize_input(req.game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
     try:
         from workflows.context_manager import clear_all_context_for_game
-        result = clear_all_context_for_game(game)
+        result = clear_all_context_for_game(game_key)
+        
+        # Clear from memory so it's not rewritten
+        cm = get_context_manager()
+        if game_key in cm.contexts:
+            del cm.contexts[game_key]
+            
         return {"status": "cleared", "result": result}
     except Exception as e:
         return {"error": str(e)}
@@ -1010,19 +1537,25 @@ async def delete_game_context(request: Request, game: str, _: bool = Depends(ver
     from workflows.context_manager import clear_all_context_for_game
     
     # Sanitize game name
-    game = sanitize_input(game, max_length=100)
+    game_title = sanitize_input(game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
     
     try:
         # Clear all context for the game
-        result = clear_all_context_for_game(game)
+        result = clear_all_context_for_game(game_key)
+        
+        # Clear from memory so it doesn't reappear
+        cm = get_context_manager()
+        if game_key in cm.contexts:
+            del cm.contexts[game_key]
         
         # Also delete the game directory if it exists
-        context_dir = os.path.join(WORKSPACE, "Context", game)
+        context_dir = os.path.join(WORKSPACE, "Context", game_key)
         if os.path.exists(context_dir):
             import shutil
             shutil.rmtree(context_dir)
         
-        return {"status": "deleted", "game": game, "result": result}
+        return {"status": "deleted", "game": game_key, "result": result}
     except Exception as e:
         return {"error": str(e)}
 

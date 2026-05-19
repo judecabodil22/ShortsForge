@@ -34,6 +34,9 @@ export default function Dashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['status'] })
     },
+    onError: (error: Error) => {
+      alert(`Failed to run pipeline: ${error.message}`)
+    },
   })
 
   const stopMutation = useMutation({
@@ -41,12 +44,18 @@ export default function Dashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['status'] })
     },
+    onError: (error: Error) => {
+      alert(`Failed to stop pipeline: ${error.message}`)
+    },
   })
 
   const syncMutation = useMutation({
     mutationFn: syncMetrics,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['metrics-summary'] })
+    },
+    onError: (error: Error) => {
+      alert(`Failed to sync metrics: ${error.message}`)
     },
   })
 
@@ -58,10 +67,10 @@ export default function Dashboard() {
   })
 
   useEffect(() => {
-    if (showLogs && logsEndRef.current) {
+    if (showLogs && logsEndRef.current && logsData?.logs?.length) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [logsData, showLogs])
+  }, [showLogs])
 
   const baseline = metrics?.baseline || {}
 
@@ -227,6 +236,22 @@ export default function Dashboard() {
                 {status?.oauth_configured ? 'Connected' : 'Not Configured'}
               </span>
             </div>
+
+            <div className="flex items-center justify-between p-3 bg-cyber-dark rounded-lg">
+              <span className="text-gray-400">Game Title</span>
+              <span className="text-cyber-cyan text-sm font-medium">
+                {status?.game_title || 'Not set'}
+              </span>
+            </div>
+
+            {status?.parent_franchise && status?.parent_franchise !== status?.game_title && (
+              <div className="flex items-center justify-between p-3 bg-cyber-dark rounded-lg">
+                <span className="text-gray-400">Series</span>
+                <span className="text-cyber-magenta text-sm font-medium">
+                  {status?.parent_franchise}
+                </span>
+              </div>
+            )}
 
             {/* Video Source Toggle */}
             <div className="flex items-center gap-2 p-3 bg-cyber-dark rounded-lg">

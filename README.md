@@ -95,8 +95,10 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 - **Cyberpunk Dashboard**: React-based UI with real-time updates
 - **Pipeline Control**: Start/stop/monitor pipeline from browser
 - **Metrics Visualization**: Charts showing video performance
-- **Context Graph**: Visual representation of game context
+- **Context Graph**: Interactive knowledge graph with adjustable layout
 - **WebSocket Support**: Live updates without refresh
+- **Graph Visual Settings**: Configurable link distance, repulsion, collision for easy viewing
+- **Zoom-Based Labels**: Node labels appear only when zoomed in for clarity
 
 ### Learning Engine
 
@@ -405,8 +407,25 @@ Open `http://localhost:8000` in your browser.
 - **Pipeline Control**: Start, stop, configure pipeline
 - **Metrics**: Video performance charts
 - **Scripts**: View generated scripts
-- **Context**: Game context graph visualization
+- **Context**: Interactive knowledge graph visualization
 - **Settings**: Configuration management
+
+### Knowledge Graph
+
+The Context page features an interactive force-directed graph:
+
+- **Node Types**: Characters (cyan), Locations (green), Key Terms (yellow), Relationships (magenta), Games (gold)
+- **Edge Types**:
+  - **Explicit** (solid gray): Direct connections from relationships
+  - **Direct** (magenta): Entity-to-entity connections from shared relationships
+  - **Implicit** (dashed blue): Co-occurrence connections from transcripts
+- **Visual Settings**: Click the gear icon to adjust:
+  - **Link Distance**: How far nodes are pulled together (30-500)
+  - **Link Strength**: Edge pull force (0-1)
+  - **Repulsion**: Node separation force (-1000 to -50)
+  - **Collision Radius**: Minimum node distance (1-100)
+- **Zoom Labels**: Labels only appear when zoomed in past 0.7x for clarity
+- **Interactive**: Click nodes for details, drag to rearrange, zoom to explore
 
 ### API Endpoints
 
@@ -738,7 +757,7 @@ pytest
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
 
-Current version: **2.0.1**
+Current version: **2.0.2**
 
 ---
 
