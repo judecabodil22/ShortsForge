@@ -44,12 +44,13 @@ export default function Graph() {
   const [showImplicitEdges, setShowImplicitEdges] = useState(true)
   const [showDirectEdges, setShowDirectEdges] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
-  const [zoomLevel, setZoomLevel] = useState(1)
   const [graphSettings, setGraphSettings] = useState({
-    linkDistance: 150,
-    linkStrength: 0.5,
-    chargeStrength: -300,
-    collisionRadius: 20,
+    linkDistance: 250,
+    linkStrength: 1,
+    chargeStrength: -500,
+    collisionRadius: 60,
+    centerStrength: 0.5,
+    velocityDecay: 0.6,
   })
   
   const { data: games } = useQuery({
@@ -100,16 +101,18 @@ export default function Graph() {
     return () => window.removeEventListener('resize', updateDimensions)
   }, [updateDimensions])
 
-  const applyGraphSettings = useCallback(() => {
+  const applyGraphSettings = useCallback((settings: typeof graphSettings) => {
     if (!fgRef.current) return
     const d3 = fgRef.current.d3
     if (d3) {
-      d3.force('link').distance(graphSettings.linkDistance).strength(graphSettings.linkStrength)
-      d3.force('charge').strength(graphSettings.chargeStrength)
-      d3.force('collision').radius(graphSettings.collisionRadius)
+      d3.force('link').distance(settings.linkDistance).strength(settings.linkStrength)
+      d3.force('charge').strength(settings.chargeStrength)
+      d3.force('collision').radius(settings.collisionRadius)
+      d3.force('center').strength(settings.centerStrength)
+      d3.velocityDecay(settings.velocityDecay)
       fgRef.current.d3ReheatGraph()
     }
-  }, [graphSettings])
+  }, [])
 
   const graphData = useMemo(() => {
     if (!rawGraphData?.nodes) return { nodes: [], links: [], implicitCount: 0, directCount: 0 }
@@ -215,17 +218,18 @@ export default function Graph() {
     ctx.strokeStyle = isSelected ? '#fff' : '#111'
     ctx.stroke()
 
-    // Draw Label (only show when zoomed in enough)
-    const labelThreshold = 0.7
-    if (isHighlight && globalScale >= labelThreshold) {
+    // Draw Label (only show on hover/select for focused nodes)
+    const showLabel = (isSelected || (isHighlight && hoverNode))
+    
+    if (showLabel) {
       const fontSize = 12 / globalScale
       ctx.font = `${isSelected ? 'bold ' : ''}${fontSize}px Inter, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`
+      ctx.fillStyle = `rgba(255, 255, 255, ${isSelected ? 1 : 0.9})`
       ctx.fillText(node.label ?? '', node.x, node.y + node.val + (fontSize * 1.2))
     }
-  }, [highlightNodes, selectedNode, zoomLevel])
+  }, [highlightNodes, selectedNode, hoverNode])
   
   const paintLink = useCallback((link: any, ctx: CanvasRenderingContext2D) => {
     if (link.source?.x == null || link.source?.y == null || link.target?.x == null || link.target?.y == null) return
@@ -384,47 +388,88 @@ export default function Graph() {
                   </label>
                   <input
                     type="range"
-                    min="30"
+                    min="50"
                     max="500"
                     value={graphSettings.linkDistance}
                     onChange={(e) => {
-                      setGraphSettings(s => ({ ...s, linkDistance: Number(e.target.value) }))
-                      applyGraphSettings()
+                      const newSettings = { ...graphSettings, linkDistance: Number(e.target.value) }
+                      setGraphSettings(newSettings)
+                      applyGraphSettings(newSettings)
                     }}
                     className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
                   />
                 </div>
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
-                    <span>Link Strength</span>
-                    <span className="text-cyber-cyan">{graphSettings.linkStrength.toFixed(2)}</span>
+                    <span>Link Force</span>
+                    <span className="text-cyber-cyan">{graphSettings.linkStrength.toFixed(1)}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={graphSettings.linkStrength}
+                    onChange={(e) => {
+                      const newSettings = { ...graphSettings, linkStrength: Number(e.target.value) }
+                      setGraphSettings(newSettings)
+                      applyGraphSettings(newSettings)
+                    }}
+                    className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 flex justify-between">
+                    <span>Repel Force</span>
+                    <span className="text-cyber-cyan">{graphSettings.chargeStrength}</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="-2000"
+                    max="-50"
+                    value={graphSettings.chargeStrength}
+                    onChange={(e) => {
+                      const newSettings = { ...graphSettings, chargeStrength: Number(e.target.value) }
+                      setGraphSettings(newSettings)
+                      applyGraphSettings(newSettings)
+                    }}
+                    className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 flex justify-between">
+                    <span>Center Force</span>
+                    <span className="text-cyber-cyan">{graphSettings.centerStrength.toFixed(2)}</span>
                   </label>
                   <input
                     type="range"
                     min="0"
                     max="1"
                     step="0.05"
-                    value={graphSettings.linkStrength}
+                    value={graphSettings.centerStrength}
                     onChange={(e) => {
-                      setGraphSettings(s => ({ ...s, linkStrength: Number(e.target.value) }))
-                      applyGraphSettings()
+                      const newSettings = { ...graphSettings, centerStrength: Number(e.target.value) }
+                      setGraphSettings(newSettings)
+                      applyGraphSettings(newSettings)
                     }}
                     className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
                   />
                 </div>
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
-                    <span>Repulsion</span>
-                    <span className="text-cyber-cyan">{graphSettings.chargeStrength}</span>
+                    <span>Velocity Decay</span>
+                    <span className="text-cyber-cyan">{graphSettings.velocityDecay.toFixed(1)}</span>
                   </label>
                   <input
                     type="range"
-                    min="-1000"
-                    max="-50"
-                    value={graphSettings.chargeStrength}
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={graphSettings.velocityDecay}
                     onChange={(e) => {
-                      setGraphSettings(s => ({ ...s, chargeStrength: Number(e.target.value) }))
-                      applyGraphSettings()
+                      const newSettings = { ...graphSettings, velocityDecay: Number(e.target.value) }
+                      setGraphSettings(newSettings)
+                      applyGraphSettings(newSettings)
                     }}
                     className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
                   />
@@ -437,19 +482,21 @@ export default function Graph() {
                   <input
                     type="range"
                     min="1"
-                    max="100"
+                    max="150"
                     value={graphSettings.collisionRadius}
                     onChange={(e) => {
-                      setGraphSettings(s => ({ ...s, collisionRadius: Number(e.target.value) }))
-                      applyGraphSettings()
+                      const newSettings = { ...graphSettings, collisionRadius: Number(e.target.value) }
+                      setGraphSettings(newSettings)
+                      applyGraphSettings(newSettings)
                     }}
                     className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
                   />
                 </div>
                 <button
                   onClick={() => {
-                    setGraphSettings({ linkDistance: 150, linkStrength: 0.5, chargeStrength: -300, collisionRadius: 20 })
-                    applyGraphSettings()
+                    const defaultSettings = { linkDistance: 250, linkStrength: 1, chargeStrength: -500, collisionRadius: 60, centerStrength: 0.5, velocityDecay: 0.6 }
+                    setGraphSettings(defaultSettings)
+                    applyGraphSettings(defaultSettings)
                   }}
                   className="w-full cyber-button text-xs py-1 mt-2"
                 >
@@ -478,12 +525,11 @@ export default function Graph() {
                 onNodeClick={handleNodeClick}
                 onBackgroundClick={() => setSelectedNode(null)}
                 onNodeHover={(node: any) => setHoverNode(node || null)}
-                onZoom={({ k }) => setZoomLevel(k)}
                 d3AlphaDecay={0.05}
-                d3VelocityDecay={0.3}
+                d3VelocityDecay={graphSettings.velocityDecay}
                 cooldownTicks={100}
                 onEngineStop={() => {
-                  applyGraphSettings()
+                  applyGraphSettings(graphSettings)
                   fgRef.current?.zoomToFit(400, 50)
                 }}
               />

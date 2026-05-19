@@ -7,23 +7,23 @@ All notable changes to this project are documented here.
 ## 2.0.2 — 2026-05-19
 ### Added
 - **Graph Visual Settings Panel**: New settings panel accessible via gear icon
-  - Link Distance (30-500): Control how far nodes are pulled together by edges
+  - Link Distance (50-1000): Control how far nodes are pulled together by edges
   - Link Strength (0-1): Control edge pull force
-  - Repulsion (-1000 to -50): Control node separation force
-  - Collision Radius (1-100): Minimum distance between nodes
+  - Repulsion (-2000 to -50): Control node separation force
+  - Collision Radius (1-150): Minimum distance between nodes
   - Reset to Default button
-- **Zoom-Based Label Visibility**: Node labels only appear when zoomed in past 0.7x threshold
-  - Reduces clutter when zoomed out for better overview
-  - Labels appear automatically when zooming in
+- **Hover-Based Label Visibility**: Node labels only appear on hover or when selected
+  - Reduces clutter for better overview
+  - Labels show for hovered node and all visible nodes
 
 ### Changed
 - **Knowledge Graph Visualization**:
   - Added direct entity-to-entity edges (magenta lines) for relationships
   - Entities sharing a relationship are now directly connected
   - Relationship nodes made smaller to reduce visual clutter
-  - Updated default spacing for better node distribution
+  - Updated default settings for better node distribution
   - New toggle buttons for implicit and direct edge visibility
-  - Enhanced edge count display (explicit + direct + implicit)
+  - Updated edge count display (explicit + direct + implicit)
 - **Graph Data Backend**:
   - `backend/main.py` now generates direct edges between entities
   - Entity pairs tracked via relationship parsing (↔ format)
