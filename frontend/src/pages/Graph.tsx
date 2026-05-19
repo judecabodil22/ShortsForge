@@ -18,12 +18,15 @@ interface NodeData {
   id: string
   label: string
   type: string
+  category?: string
   description?: string
   val?: number
   x?: number
   y?: number
   neighbors?: string[]
   links?: any[]
+  aliases?: string[]
+  tags?: string[]
 }
 
 // interface LinkData {
@@ -119,8 +122,18 @@ export default function Graph() {
 
     const nodesMap = new Map<string, NodeData>()
     const nodes = rawGraphData.nodes.map((n: any) => {
-      const node = { ...n.data, val: n.data.type === 'game' ? 8 : 1, neighbors: [], links: [] }
-      // Make relationship nodes smaller
+      const node: NodeData = {
+        id: n.data.id,
+        label: n.data.label,
+        type: n.data.type,
+        category: n.data.category,
+        description: n.data.description,
+        val: n.data.type === 'game' ? 8 : 1,
+        neighbors: [],
+        links: [],
+        aliases: n.data.aliases || [],
+        tags: n.data.tags || [],
+      }
       if (node.type === 'relationship') node.val = 0.5
       nodesMap.set(node.id, node)
       return node
@@ -557,53 +570,129 @@ export default function Graph() {
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-4"
               >
-                <div className="flex items-center gap-3">
-                  <div 
-                    className="w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold"
-                    style={{ 
+                <div className="flex items-start gap-3">
+                  <div
+                    className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0"
+                    style={{
                       backgroundColor: `${NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS]}20`,
                       color: NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS]
                     }}
                   >
                     {selectedNode.label?.[0]?.toUpperCase()}
                   </div>
-                  <div>
-                    <p className="font-medium text-white">{selectedNode.label}</p>
-                    <p className="text-xs text-gray-400 capitalize">{selectedNode.type}</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-white text-lg truncate">{selectedNode.label}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="px-2 py-0.5 bg-cyber-dark/80 rounded text-xs capitalize" style={{ color: NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS] }}>
+                        {selectedNode.type}
+                      </span>
+                      {selectedNode.category && (
+                        <span className="px-2 py-0.5 bg-cyber-dark/80 rounded text-xs text-gray-400">
+                          {selectedNode.category}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="p-3 bg-cyber-dark rounded-lg text-center">
+                    <p className="text-2xl font-bold text-cyber-cyan">{selectedNode.neighbors?.length || 0}</p>
+                    <p className="text-xs text-gray-400">Connections</p>
+                  </div>
+                  <div className="p-3 bg-cyber-dark rounded-lg text-center">
+                    <p className="text-2xl font-bold text-cyber-magenta">{selectedNode.links?.length || 0}</p>
+                    <p className="text-xs text-gray-400">Relationships</p>
                   </div>
                 </div>
 
                 {selectedNode.description && (
                   <div className="p-3 bg-cyber-dark rounded-lg">
-                    <p className="text-sm text-gray-300">{selectedNode.description}</p>
+                    <p className="text-xs text-gray-400 mb-1">Description</p>
+                    <p className="text-sm text-gray-200">{selectedNode.description}</p>
+                  </div>
+                )}
+
+                {(selectedNode as any).aliases?.length > 0 && (
+                  <div className="p-3 bg-cyber-dark rounded-lg">
+                    <p className="text-xs text-gray-400 mb-2">Aliases</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(selectedNode as any).aliases.map((alias: string, idx: number) => (
+                        <span key={idx} className="px-2 py-0.5 bg-cyber-border/50 rounded text-xs text-gray-300">
+                          {alias}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(selectedNode as any).tags?.length > 0 && (
+                  <div className="p-3 bg-cyber-dark rounded-lg">
+                    <p className="text-xs text-gray-400 mb-2">Tags</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(selectedNode as any).tags.map((tag: string, idx: number) => (
+                        <span key={idx} className="px-2 py-0.5 bg-cyber-cyan/20 text-cyber-cyan rounded text-xs">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedNode.neighbors && selectedNode.neighbors.length > 0 && (
+                  <div className="p-3 bg-cyber-dark rounded-lg">
+                    <p className="text-xs text-gray-400 mb-2">Connected To</p>
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {selectedNode.neighbors.slice(0, 10).map((neighborId: string) => {
+                        const neighborNode = graphData.nodes.find((n: any) => n.id === neighborId)
+                        return neighborNode ? (
+                          <div key={neighborId} className="flex items-center gap-2">
+                            <div
+                              className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
+                              style={{
+                                backgroundColor: `${NODE_COLORS[neighborNode.type as keyof typeof NODE_COLORS]}40`,
+                                color: NODE_COLORS[neighborNode.type as keyof typeof NODE_COLORS]
+                              }}
+                            >
+                              {neighborNode.label?.[0]?.toUpperCase()}
+                            </div>
+                            <span className="text-sm text-gray-300 truncate">{neighborNode.label}</span>
+                            <span className="text-xs text-gray-500 capitalize">{neighborNode.type}</span>
+                          </div>
+                        ) : null
+                      })}
+                      {selectedNode.neighbors.length > 10 && (
+                        <p className="text-xs text-gray-500">+{selectedNode.neighbors.length - 10} more</p>
+                      )}
+                    </div>
                   </div>
                 )}
 
                 {segmentRefs?.references && Object.keys(segmentRefs.references).length > 0 && (
                   <div className="p-3 bg-cyber-dark rounded-lg">
                     <p className="text-xs text-gray-400 mb-2">Source Transcripts</p>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
                       {Object.entries(segmentRefs.references).flatMap(([_transcript, nodes]: [string, any]) =>
-                        nodes.filter((n: any) => n.node.toLowerCase() === selectedNode.label?.toLowerCase() || 
+                        nodes.filter((n: any) => n.node.toLowerCase() === selectedNode.label?.toLowerCase() ||
                           selectedNode.label?.toLowerCase().includes(n.node.toLowerCase())).map((n: any, idx: number) => (
-                          <span key={idx} className="px-2 py-1 bg-cyber-cyan/20 text-cyber-cyan text-xs rounded">
-                            {n.transcript}
-                          </span>
-                        ))
+                            <span key={idx} className="px-2 py-1 bg-cyber-cyan/20 text-cyber-cyan text-xs rounded">
+                              {n.transcript}
+                            </span>
+                          ))
                       )}
                     </div>
                   </div>
                 )}
 
                 <div className="space-y-2">
-                  <button 
+                  <button
                     className="cyber-button w-full text-sm flex items-center justify-center gap-2"
                     onClick={() => setShowEditModal(true)}
                   >
                     <Pencil className="w-4 h-4" />
                     Edit Node
                   </button>
-                  <button 
+                  <button
                     className="cyber-button w-full text-sm text-cyber-red flex items-center justify-center gap-2"
                     onClick={() => {
                       if (confirm(`Are you sure you want to delete "${selectedNode.label}"?`)) {

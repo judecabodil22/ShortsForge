@@ -7,12 +7,20 @@ All notable changes to this project are documented here.
 ## 2.0.2 — 2026-05-19
 ### Added
 - **Graph Visual Settings Panel**: New settings panel accessible via gear icon
-  - Link Distance (50-1000): Control how far nodes are pulled together by edges
-  - Link Strength (0-1): Control edge pull force
-  - Repulsion (-2000 to -50): Control node separation force
+  - Link Distance (50-500): Control how far nodes are pulled together by edges
+  - Link Force (0-2): Control edge pull force
+  - Repel Force (-2000 to -50): Control node separation force
   - Collision Radius (1-150): Minimum distance between nodes
+  - Center Force (0-1): How compact the graph is
+  - Velocity Decay (0-1): Simulation smoothness
   - Reset to Default button
 - **Hover-Based Label Visibility**: Node labels only appear on hover or when selected
+- **Enhanced Node Details Panel**:
+  - Connection and relationship count stats
+  - Connected nodes list with icons and types
+  - Aliases and tags display
+  - Category badges
+  - Scrollable lists for better overflow handling
   - Reduces clutter for better overview
   - Labels show for hovered node and all visible nodes
 

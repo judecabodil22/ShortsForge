@@ -8,6 +8,7 @@ import Scripts from '@/pages/Scripts'
 import Metrics from '@/pages/Metrics'
 import Context from '@/pages/Context'
 import Settings from '@/pages/Settings'
+import Pipeline from '@/pages/Pipeline'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +40,7 @@ function AppRoutes() {
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/context" element={<Context />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/pipeline" element={<Pipeline />} />
         </Routes>
       </motion.div>
     </AnimatePresence>
