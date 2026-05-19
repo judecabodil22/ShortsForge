@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.0.3 — 2026-05-19
+### Added
+- **Enhanced Node Details Panel**:
+  - Connection and relationship count stats
+  - Connected nodes list with icons and types
+  - Aliases and tags display
+  - Category badges
+  - Scrollable lists for better overflow handling
+
+### Changed
+- **Modernized Color Palette**: Updated cyberpunk theme for better eye comfort
+  - Softer neon colors (GitHub-inspired muted palette)
+  - Removed harsh glow effects and scanlines
+  - Darker, easier-to-read backgrounds
+  - Subtle hover states instead of aggressive glows
+  - Graph node colors updated to muted tones
+
+---
+
 ## 2.0.2 — 2026-05-19
 ### Added
 - **Graph Visual Settings Panel**: New settings panel accessible via gear icon
@@ -15,27 +34,15 @@ All notable changes to this project are documented here.
   - Velocity Decay (0-1): Simulation smoothness
   - Reset to Default button
 - **Hover-Based Label Visibility**: Node labels only appear on hover or when selected
-- **Enhanced Node Details Panel**:
-  - Connection and relationship count stats
-  - Connected nodes list with icons and types
-  - Aliases and tags display
-  - Category badges
-  - Scrollable lists for better overflow handling
-  - Reduces clutter for better overview
-  - Labels show for hovered node and all visible nodes
 
 ### Changed
 - **Knowledge Graph Visualization**:
-  - Added direct entity-to-entity edges (magenta lines) for relationships
+  - Added direct entity-to-entity edges for relationships
   - Entities sharing a relationship are now directly connected
   - Relationship nodes made smaller to reduce visual clutter
   - Updated default settings for better node distribution
   - New toggle buttons for implicit and direct edge visibility
-  - Updated edge count display (explicit + direct + implicit)
-- **Graph Data Backend**:
-  - `backend/main.py` now generates direct edges between entities
-  - Entity pairs tracked via relationship parsing (↔ format)
-  - Added `is_direct` flag to edge data
+- **Graph Data Backend**: Added direct edges between entities
 
 ### Technical
 - Frontend: Added zoom tracking state for label visibility

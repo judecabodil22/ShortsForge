@@ -7,11 +7,11 @@ import { Card } from '@/components/ui/Card'
 import { getGames, getGraphData, getSegmentRefs, updateContextItem, deleteContextItem } from '@/lib/api'
 
 const NODE_COLORS = {
-  character: '#00fff5',  // cyan
-  location: '#00ff88',   // green
-  term: '#f0ff00',       // yellow
-  relationship: '#ff00ff', // magenta
-  game: '#ffd700',       // gold
+  character: '#58a6ff',  // blue
+  location: '#3fb950',   // green
+  term: '#d29922',       // amber
+  relationship: '#bc8cff', // purple
+  game: '#db6d28',       // orange
 }
 
 interface NodeData {
@@ -262,19 +262,19 @@ export default function Graph() {
     if (isImplicit) {
       ctx.setLineDash([4, 4])
       ctx.lineWidth = 0.5
-      ctx.strokeStyle = isHighlight ? 'rgba(100, 100, 255, 0.8)' : 'rgba(100, 100, 255, 0.2)'
+      ctx.strokeStyle = isHighlight ? 'rgba(100, 120, 180, 0.8)' : 'rgba(100, 120, 180, 0.2)'
     } else if (isDirect) {
       ctx.setLineDash([])
       ctx.lineWidth = isHighlight ? 2 : 1
-      ctx.strokeStyle = isHighlight ? '#ff00ff' : 'rgba(255, 0, 255, 0.5)'
+      ctx.strokeStyle = isHighlight ? '#bc8cff' : 'rgba(188, 140, 255, 0.4)'
     } else if (isHighlight && highlightLinks.size > 0) {
       ctx.setLineDash([])
       ctx.lineWidth = 1.5
-      ctx.strokeStyle = '#00fff5'
+      ctx.strokeStyle = '#58a6ff'
     } else {
       ctx.setLineDash([])
       ctx.lineWidth = 0.5
-      ctx.strokeStyle = isHighlight ? 'rgba(74, 74, 106, 0.8)' : 'rgba(74, 74, 106, 0.1)'
+      ctx.strokeStyle = isHighlight ? 'rgba(80, 80, 100, 0.6)' : 'rgba(80, 80, 100, 0.15)'
     }
 
     ctx.stroke()
@@ -519,7 +519,7 @@ export default function Graph() {
             </div>
           )}
 
-          <div ref={containerRef} className="w-full h-[600px] bg-[#0A0A0F] rounded-lg">
+          <div ref={containerRef} className="w-full h-[600px] bg-[#0d1117] rounded-lg">
             {graphData.nodes.length > 0 && dimensions.width > 0 && (
               <ForceGraph2D
                 ref={fgRef}
