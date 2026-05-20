@@ -11,7 +11,7 @@ import time
 import secrets
 import re
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, Tuple
 from pathlib import Path
 from functools import wraps
 
@@ -37,7 +37,13 @@ from workflows.performance_database import (
 from workflows.metrics_fetcher import get_recent_uploads, is_oauth_configured
 from workflows.learning_engine import extract_script_features, get_virality_predictor
 from workflows.context_manager_v2 import ContextManagerV2, get_context_manager
-from workflows.context_manager import SERIES_MAPPING
+from workflows.context_manager import (
+    SERIES_MAPPING,
+    get_mempalace_text_chunks,
+    get_context_sources_summary,
+    load_implicit_relationships,
+    save_implicit_relationships,
+)
 
 # ============================================================================
 # SECURITY CONFIGURATION
@@ -878,56 +884,55 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
     entity_segments = defaultdict(set)  # name -> set of segment indices
     entity_contexts = defaultdict(list)  # name -> list of {segment_idx, nearby_entities}
     
-    # Process each transcript
+    def _process_text_segment(text: str, seg_idx: int):
+        if not text:
+            return
+        text_lower = text.lower()
+        mentioned = []
+        for entity_name in entity_patterns:
+            pattern = r'\b' + re.escape(entity_name) + r'\b'
+            if re.search(pattern, text_lower):
+                mentioned.append(entity_name)
+                entity_segments[entity_name].add(seg_idx)
+        for i, name1 in enumerate(mentioned):
+            for name2 in mentioned[i + 1:]:
+                pair = tuple(sorted([name1, name2]))
+                cooccurrence[pair] += 1
+                for other in mentioned:
+                    if other != name1:
+                        entity_contexts[name1].append({
+                            'segment': seg_idx,
+                            'nearby': other,
+                            'text_preview': text[:100],
+                        })
+
+    # Process each transcript JSON on disk
+    seg_offset = 0
     for tfile in transcript_files:
         try:
             with open(tfile, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
-            segments = data.get('segments', [])
-            
-            # Process each segment
-            for seg_idx, segment in enumerate(segments):
-                text = segment.get('text', '')
-                if not text:
-                    continue
-                
-                text_lower = text.lower()
-                
-                # Find all entities mentioned in this segment
-                mentioned = []
-                for entity_name in entity_patterns:
-                    # Use word boundary matching
-                    pattern = r'\b' + re.escape(entity_name) + r'\b'
-                    if re.search(pattern, text_lower):
-                        mentioned.append(entity_name)
-                        entity_segments[entity_name].add(seg_idx)
-                
-                # Record co-occurrences (entities in same segment)
-                for i, name1 in enumerate(mentioned):
-                    for name2 in mentioned[i+1:]:
-                        # Store sorted pair to avoid duplicates
-                        pair = tuple(sorted([name1, name2]))
-                        cooccurrence[pair] += 1
-                        
-                        # Also track which other entities were nearby
-                        for other in mentioned:
-                            if other != name1:
-                                entity_contexts[name1].append({
-                                    'segment': seg_idx,
-                                    'nearby': other,
-                                    'text_preview': text[:100]
-                                })
+            for seg_idx, segment in enumerate(data.get('segments', [])):
+                _process_text_segment(segment.get('text', ''), seg_offset + seg_idx)
+            seg_offset += len(data.get('segments', []))
         except Exception as e:
             print(f"Error processing transcript {tfile}: {e}")
             continue
+
+    # MemPalace: split narrative chunks into sentence-like segments for co-occurrence
+    mempalace_chunks = get_mempalace_text_chunks(game_key)
+    for chunk_idx, chunk in enumerate(mempalace_chunks):
+        for part_idx, part in enumerate(re.split(r'[.!?\n]+', chunk)):
+            part = part.strip()
+            if len(part) > 20:
+                _process_text_segment(part, seg_offset + chunk_idx * 1000 + part_idx)
     
     # Generate implicit edges from co-occurrences
     implicit_edges = []
     edge_id = 0
     
     # Threshold: at least 2 co-occurrences to create an edge
-    min_cooccurrence = 2
+    min_cooccurrence = 1
     
     for (name1, name2), count in cooccurrence.items():
         if count >= min_cooccurrence:
@@ -1014,163 +1019,220 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
     }
 
 
+def _normalize_entity_name(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").lower().strip())
+
+
+def _resolve_graph_game_key(game_key: str) -> str:
+    """Map child game keys to franchise context when applicable."""
+    if game_key in SERIES_MAPPING:
+        return SERIES_MAPPING[game_key]
+    return game_key
+
+
+def _register_graph_node(item, nodes: list, node_id_map: dict, alias_map: dict) -> None:
+    """Register an entity node and all name aliases for edge resolution."""
+    norm = _normalize_entity_name(item.name)
+    nodes.append({
+        "data": {
+            "id": item.id,
+            "label": item.name,
+            "type": item.type,
+            "description": item.description,
+            "category": getattr(item, "category", "") or "",
+        }
+    })
+    node_id_map[norm] = item.id
+    for alias in getattr(item, "aliases", []) or []:
+        alias_norm = _normalize_entity_name(alias if isinstance(alias, str) else str(alias))
+        if alias_norm:
+            alias_map[alias_norm] = item.id
+
+
+def _resolve_entity_id(name: str, node_id_map: dict, alias_map: dict) -> Optional[str]:
+    """Resolve a context name to a graph node id."""
+    norm = _normalize_entity_name(name)
+    if not norm:
+        return None
+    if norm in node_id_map:
+        return node_id_map[norm]
+    if norm in alias_map:
+        return alias_map[norm]
+    # Substring match for minor spelling differences (longest keys first)
+    for key, ent_id in sorted(node_id_map.items(), key=lambda kv: -len(kv[0])):
+        if len(norm) >= 3 and len(key) >= 3 and (norm in key or key in norm):
+            return ent_id
+    return None
+
+
+def _parse_relationship_endpoints(item) -> Tuple[Optional[str], Optional[str], str]:
+    """Extract from/to entity names and relationship label from a context item."""
+    meta = getattr(item, "metadata", None) or {}
+    from_name = (meta.get("from") or "").strip()
+    to_name = (meta.get("to") or "").strip()
+    rel_label = (meta.get("relationship") or item.category or "").strip()
+
+    if from_name and to_name:
+        return from_name, to_name, rel_label
+
+    name = item.name or ""
+    if "↔" in name:
+        parts = name.split("↔", 1)
+        if len(parts) == 2:
+            return parts[0].strip(), parts[1].strip(), rel_label or "related"
+
+    return None, None, rel_label
+
+
+def _iter_context_relationships(game_key: str, cm) -> list:
+    """Yield relationship dicts from manager items and verified_context.json."""
+    seen: set[str] = set()
+    for item in cm.get_context_items(game_key, "relationship"):
+        from_n, to_n, label = _parse_relationship_endpoints(item)
+        if from_n and to_n:
+            key = f"{_normalize_entity_name(from_n)}|{_normalize_entity_name(to_n)}|{label}"
+            if key not in seen:
+                seen.add(key)
+                yield {"from": from_n, "to": to_n, "relationship": label}
+
+    verified_file = os.path.join(WORKSPACE, "Context", "verified_context.json")
+    if os.path.exists(verified_file):
+        try:
+            with open(verified_file, "r") as f:
+                all_ctx = json.load(f)
+            rels = all_ctx.get(game_key, {}).get("context", {}).get("relationships", [])
+            for rel in rels:
+                if not isinstance(rel, dict):
+                    continue
+                from_n = (rel.get("from") or "").strip()
+                to_n = (rel.get("to") or "").strip()
+                if not from_n or not to_n:
+                    continue
+                label = (rel.get("relationship") or rel.get("type") or "related").strip()
+                key = f"{_normalize_entity_name(from_n)}|{_normalize_entity_name(to_n)}|{label}"
+                if key not in seen:
+                    seen.add(key)
+                    yield {"from": from_n, "to": to_n, "relationship": label}
+        except Exception:
+            pass
+
+
 @app.get("/api/context/{game}/graph")
 async def get_graph_data(game: str):
     """Get graph data in Cytoscape.js format"""
-    # Sanitize game name
     game_title = sanitize_input(game, max_length=100)
-    game_key = game_title.lower().replace(" ", "_").strip()
+    game_key = _resolve_graph_game_key(game_title.lower().replace(" ", "_").strip())
     cm = get_context_manager()
-    
+    cm.load_all_contexts()
+
     nodes = []
     edges = []
-    node_id_map = {}
-    
-    # Add nodes for characters (cyan)
-    for item in cm.get_context_items(game_key, "character"):
-        nodes.append({
-            "data": {
-                "id": item.id,
-                "label": item.name,
-                "type": "character",
-                "description": item.description
-            }
-        })
-        node_id_map[item.name.lower()] = item.id
-    
-    # Add nodes for locations (green)
-    for item in cm.get_context_items(game_key, "location"):
-        nodes.append({
-            "data": {
-                "id": item.id,
-                "label": item.name,
-                "type": "location",
-                "description": item.description
-            }
-        })
-        node_id_map[item.name.lower()] = item.id
-    
-    # Add nodes for terms (yellow)
-    for item in cm.get_context_items(game_key, "term"):
-        nodes.append({
-            "data": {
-                "id": item.id,
-                "label": item.name,
-                "type": "term",
-                "description": item.description
-            }
-        })
-        node_id_map[item.name.lower()] = item.id
-    
-    # Add nodes for games (gold)
-    for item in cm.get_context_items(game_key, "game"):
-        nodes.append({
-            "data": {
-                "id": item.id,
-                "label": item.name,
-                "type": "game",
-                "description": item.description
-            }
-        })
-        node_id_map[item.name.lower()] = item.id
-    
-    # Add nodes for relationships (magenta) and edges
-    rel_id = 0
-    entity_pairs = []  # Track direct connections between entities
-    
-    for item in cm.get_context_items(game_key, "relationship"):
-        # Relationship as a node
-        nodes.append({
-            "data": {
-                "id": item.id,
-                "label": item.name,
-                "type": "relationship",
-                "category": item.category
-            }
-        })
-        
-        # Try to connect to characters involved
-        mentioned_entities = []
-        rel_text = item.name.lower()
-        
-        if "↔" in item.name:
-            parts = item.name.split(" ↔ ")
-            if len(parts) == 2:
-                from_name = parts[0].strip().lower()
-                to_name = parts[1].strip().lower()
-                if from_name in node_id_map:
-                    mentioned_entities.append(node_id_map[from_name])
-                if to_name in node_id_map:
-                    mentioned_entities.append(node_id_map[to_name])
-                
-                # Track direct entity-to-entity connection
-                if from_name in node_id_map and to_name in node_id_map:
-                    entity_pairs.append((node_id_map[from_name], node_id_map[to_name], item.category))
-        else:
-            # Extract entities from natural language text
-            for name_lower, ent_id in node_id_map.items():
-                if len(name_lower) < 2:
-                    if name_lower == rel_text:
-                        mentioned_entities.append(ent_id)
-                    continue
-                    
-                # Use word boundary to match exactly
-                pattern = r'\b' + re.escape(name_lower) + r'\b'
-                if re.search(pattern, rel_text):
-                    mentioned_entities.append(ent_id)
-        
-        # Connect the relationship node to all mentioned entities
-        for ent_id in set(mentioned_entities):
-            edges.append({
-                "data": {
-                    "id": f"e{rel_id}",
-                    "source": item.id,
-                    "target": ent_id,
-                    "label": item.category or "involves"
-                }
-            })
-            rel_id += 1
-    
-    # Add direct edges between entities that share relationships
-    added_pairs = set()
-    for source_id, target_id, category in entity_pairs:
+    node_id_map: dict[str, str] = {}
+    alias_map: dict[str, str] = {}
+    valid_node_ids: set[str] = set()
+
+    for item_type in ("character", "location", "term", "game"):
+        for item in cm.get_context_items(game_key, item_type):
+            _register_graph_node(item, nodes, node_id_map, alias_map)
+            valid_node_ids.add(item.id)
+
+    # Direct entity-to-entity edges from verified context relationships
+    context_rel_count = 0
+    added_pairs: set[tuple[str, str]] = set()
+    for rel in _iter_context_relationships(game_key, cm):
+        source_id = _resolve_entity_id(rel["from"], node_id_map, alias_map)
+        target_id = _resolve_entity_id(rel["to"], node_id_map, alias_map)
+        if not source_id or not target_id or source_id == target_id:
+            continue
         pair_key = tuple(sorted([source_id, target_id]))
-        if pair_key not in added_pairs:
-            edges.append({
-                "data": {
-                    "id": f"direct_{source_id[:8]}_{target_id[:8]}",
-                    "source": source_id,
-                    "target": target_id,
-                    "label": category,
-                    "type": "related_to",
-                    "implicit": False,
-                    "is_direct": True
-                }
-            })
-            added_pairs.add(pair_key)
-    
-    # Generate implicit edges from transcript co-occurrence analysis
+        if pair_key in added_pairs:
+            continue
+        added_pairs.add(pair_key)
+        context_rel_count += 1
+        edges.append({
+            "data": {
+                "id": f"ctx_{source_id[:8]}_{target_id[:8]}_{context_rel_count}",
+                "source": source_id,
+                "target": target_id,
+                "label": rel.get("relationship") or "related",
+                "type": "context_relationship",
+                "implicit": False,
+                "is_direct": True,
+                "is_context": True,
+            }
+        })
+
+    # Generate implicit edges - first try stored, then compute from transcripts
     try:
-        cooccurrence_data = analyze_transcript_cooccurrence(game_key)
-        implicit_edges_data = cooccurrence_data.get("edges", [])
+        # First try to load from stored implicit_relationships
+        stored_implicit = load_implicit_relationships(game_key)
         
-        # Add implicit edges to the graph
-        for ie in implicit_edges_data:
-            edges.append({
-                "data": {
-                    "id": f"implicit_{ie['source']}_{ie['target']}",
-                    "source": ie["source"],
-                    "target": ie["target"],
-                    "label": ie.get("label", ""),
-                    "type": ie.get("type", "co_occurs"),
-                    "implicit": True,
-                    "weight": ie.get("weight", 1)
-                }
-            })
+        if stored_implicit:
+            # Use stored implicit relationships, resolving names to IDs
+            for ie in stored_implicit:
+                source_val = ie.get('source', '')
+                target_val = ie.get('target', '')
+                # Check if already valid node IDs
+                source_id = source_val if source_val in valid_node_ids else _resolve_entity_id(source_val, node_id_map, alias_map)
+                target_id = target_val if target_val in valid_node_ids else _resolve_entity_id(target_val, node_id_map, alias_map)
+                if not source_id or not target_id or source_id == target_id:
+                    continue
+                edges.append({
+                    "data": {
+                        "id": f"implicit_{source_id[:8]}_{target_id[:8]}",
+                        "source": source_id,
+                        "target": target_id,
+                        "label": ie.get("label", ""),
+                        "type": ie.get("type", "co_occurs"),
+                        "implicit": True,
+                        "weight": ie.get("weight", 1)
+                    }
+                })
+        else:
+            # Fall back to computing from transcripts
+            cooccurrence_data = analyze_transcript_cooccurrence(game_key)
+            implicit_edges_data = cooccurrence_data.get("edges", [])
+            
+            # Store for future use
+            if implicit_edges_data:
+                save_implicit_relationships(game_key, implicit_edges_data)
+            
+            # Add implicit edges to the graph, resolving names to IDs
+            for ie in implicit_edges_data:
+                source_val = ie.get('source', '')
+                target_val = ie.get('target', '')
+                source_id = source_val if source_val in valid_node_ids else _resolve_entity_id(source_val, node_id_map, alias_map)
+                target_id = target_val if target_val in valid_node_ids else _resolve_entity_id(target_val, node_id_map, alias_map)
+                if not source_id or not target_id or source_id == target_id:
+                    continue
+                edges.append({
+                    "data": {
+                        "id": f"implicit_{source_id[:8]}_{target_id[:8]}",
+                        "source": source_id,
+                        "target": target_id,
+                        "label": ie.get("label", ""),
+                        "type": ie.get("type", "co_occurs"),
+                        "implicit": True,
+                        "weight": ie.get("weight", 1)
+                    }
+                })
     except Exception as e:
         print(f"Error generating implicit edges: {e}")
+
+    sources = get_context_sources_summary(game_key)
+    context_edges = sum(1 for e in edges if e.get("data", {}).get("is_context"))
+    implicit_edges = sum(1 for e in edges if e.get("data", {}).get("implicit"))
     
-    return {"nodes": nodes, "edges": edges}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "stats": {
+            "nodes": len(nodes),
+            "context_edges": context_edges,
+            "implicit_edges": implicit_edges,
+            "sources": sources,
+        },
+    }
 
 
 @app.get("/api/context/{game}/segments")

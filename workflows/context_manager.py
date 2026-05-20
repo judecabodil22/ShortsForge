@@ -26,6 +26,28 @@ def _get_workspace():
 
 WORKSPACE = _get_workspace()
 
+# Child game key (normalized) -> franchise context key
+SERIES_MAPPING = {
+    "the_shadow_of_the_tomb_raider": "tomb_raider_series",
+    "shadow_of_the_tomb_raider": "tomb_raider_series",
+    "rise_of_the_tomb_raider": "tomb_raider_series",
+    "tomb_raider": "tomb_raider_series",
+    "tomb_raider_(2013)": "tomb_raider_series",
+    "tomb_raider_definitive_edition": "tomb_raider_series",
+}
+
+# Keywords to match MemPalace transcript chunks to a franchise graph key
+MEMPALACE_GAME_KEYWORDS = {
+    "tomb_raider_series": [
+        "tomb raider", "lara croft", "trinity", "shadow of the tomb", "rise of the tomb",
+        "peruvian jungle", "cozumel", "jonah",
+    ],
+    "cyberpunk_2077": ["cyberpunk", "night city", "johnny silverhand", "arasaka"],
+    "tell_me_why": ["tell me why", "goblin", "allison", "tyler"],
+}
+
+MEMPALACE_CHROMA_DB = os.path.expanduser("~/.mempalace/palace/chroma.sqlite3")
+
 
 # MemPalace integration
 def _get_mempalace_manager():
@@ -136,6 +158,126 @@ CONTEXT_CORRECTIONS_FILE = os.path.join(CONTEXT_DIR, "context_corrections.jsonl"
 CONTEXT_HISTORY_DIR = os.path.join(CONTEXT_DIR, "history")
 
 
+# ── Markdown + MemPalace loaders (used by graph / context manager v2) ────────
+
+def _wiki_name(cell: str) -> str:
+    cell = (cell or "").strip()
+    if cell.startswith("[[") and cell.endswith("]]"):
+        return cell[2:-2]
+    return cell
+
+
+def load_markdown_context(game_key: str) -> Dict[str, Any]:
+    """Load characters, locations, terms, relationships from Obsidian markdown tables."""
+    ctx_dir = os.path.join(CONTEXT_DIR, game_key)
+    if not os.path.isdir(ctx_dir):
+        return {"characters": [], "locations": [], "key_terms": [], "relationships": []}
+
+    result = {"characters": [], "locations": [], "key_terms": [], "relationships": []}
+    file_map = {
+        "characters": "characters.md",
+        "locations": "locations.md",
+        "key_terms": "key_terms.md",
+    }
+
+    for field, fname in file_map.items():
+        path = os.path.join(ctx_dir, fname)
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line.startswith("|") or "---" in line:
+                continue
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if not parts or parts[0].lower() in ("name", "character", "location", "term"):
+                continue
+            name = _wiki_name(parts[0])
+            if name and name not in result[field]:
+                result[field].append(name)
+
+    rel_path = os.path.join(ctx_dir, "relationships.md")
+    if os.path.exists(rel_path):
+        with open(rel_path, "r", encoding="utf-8") as f:
+            rel_content = f.read()
+        if "|" in rel_content and "---" in rel_content:
+            for line in rel_content.split("\n"):
+                line = line.strip()
+                if not line.startswith("|") or "---" in line or "Character A" in line:
+                    continue
+                parts = [p.strip() for p in line.split("|")[1:-1]]
+                if len(parts) < 3:
+                    continue
+                char_a = _wiki_name(parts[0])
+                connection = parts[1]
+                char_b = _wiki_name(parts[2])
+                if not char_a or char_a == "-":
+                    continue
+                if char_b and char_b != "-":
+                    rel = {"from": char_a, "to": char_b, "relationship": connection}
+                else:
+                    rel = {"from": char_a, "to": char_a, "relationship": connection}
+                if rel not in result["relationships"]:
+                    result["relationships"].append(rel)
+    return result
+
+
+def get_mempalace_text_chunks(game_key: str) -> List[str]:
+    """Return MemPalace narrative chunks relevant to a franchise (from ChromaDB)."""
+    keywords = MEMPALACE_GAME_KEYWORDS.get(game_key, [])
+    if not keywords or not os.path.exists(MEMPALACE_CHROMA_DB):
+        return []
+
+    chunks: List[str] = []
+    try:
+        import sqlite3
+        conn = sqlite3.connect(MEMPALACE_CHROMA_DB)
+        cur = conn.cursor()
+        cur.execute("SELECT c0 FROM embedding_fulltext_search_content WHERE c0 IS NOT NULL")
+        for (text,) in cur.fetchall():
+            if not text or len(text.strip()) < 40:
+                continue
+            lower = text.lower()
+            if any(kw in lower for kw in keywords):
+                chunks.append(text)
+        conn.close()
+    except Exception:
+        pass
+    return chunks
+
+
+def get_context_sources_summary(game_key: str) -> Dict[str, Any]:
+    """Inventory counts across verified JSON, markdown, MemPalace, and transcripts."""
+    md = load_markdown_context(game_key)
+    verified = load_verified_context(game_key)
+    if not verified:
+        verified = {}
+    vctx = verified.get("context", {}) if isinstance(verified, dict) else {}
+    mp_chunks = get_mempalace_text_chunks(game_key)
+    transcripts_dir = os.path.join(WORKSPACE, "transcripts")
+    transcript_files = []
+    if os.path.isdir(transcripts_dir):
+        transcript_files = [f for f in os.listdir(transcripts_dir) if f.endswith(".json")]
+    return {
+        "game_key": game_key,
+        "verified": {
+            "characters": len(vctx.get("characters", [])),
+            "locations": len(vctx.get("locations", [])),
+            "key_terms": len(vctx.get("key_terms", [])),
+            "relationships": len(vctx.get("relationships", [])),
+        },
+        "markdown": {
+            "characters": len(md.get("characters", [])),
+            "locations": len(md.get("locations", [])),
+            "key_terms": len(md.get("key_terms", [])),
+            "relationships": len(md.get("relationships", [])),
+        },
+        "mempalace_chunks": len(mp_chunks),
+        "transcript_files": transcript_files,
+    }
+
+
 # ── Verified Context Storage ─────────────────────────────────────────────────
 
 def load_verified_context(game_title: str) -> Dict[str, Any]:
@@ -152,7 +294,48 @@ def load_verified_context(game_title: str) -> Dict[str, Any]:
         return {}
 
 
-def save_verified_context(game_title: str, context: Dict[str, Any]):
+def _relationship_key(rel: Any) -> tuple:
+    if isinstance(rel, dict):
+        return (rel.get("from", "").strip().lower(), rel.get("to", "").strip().lower())
+    if isinstance(rel, str) and " are " in rel:
+        parts = rel.split(" are ", 1)
+        return (parts[0].strip().lower(), parts[1].strip().lower())
+    return ("", "")
+
+
+def merge_context_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Union list fields and relationships; overlay wins on relationship conflicts."""
+    out = dict(base or {})
+    for key in ("characters", "locations", "key_terms", "processed_transcripts", "previous_scripts"):
+        merged = []
+        seen = set()
+        for item in list(base.get(key, []) or []) + list(overlay.get(key, []) or []):
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            merged.append(item)
+        out[key] = merged
+
+    rel_map: Dict[tuple, Any] = {}
+    for rel in list(base.get("relationships", []) or []):
+        key = _relationship_key(rel)
+        if key[0] and key[1]:
+            rel_map[key] = rel
+    for rel in list(overlay.get("relationships", []) or []):
+        key = _relationship_key(rel)
+        if key[0] and key[1]:
+            rel_map[key] = rel
+    out["relationships"] = list(rel_map.values())
+
+    overlay_title = (overlay.get("title") or "").strip()
+    if overlay_title:
+        out["title"] = overlay_title
+    elif base.get("title"):
+        out["title"] = base.get("title")
+    return out
+
+
+def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool = False):
     """Save verified context for a game and sync to MemPalace."""
     all_context = {}
     
@@ -164,6 +347,9 @@ def save_verified_context(game_title: str, context: Dict[str, Any]):
             pass
     
     game_key = game_title.lower().replace(" ", "_").strip()
+    if merge:
+        existing = all_context.get(game_key, {}).get("context", {})
+        context = merge_context_dicts(existing, context)
     all_context[game_key] = {
         "context": context,
         "verified_at": datetime.now().isoformat(),
@@ -183,6 +369,134 @@ def save_verified_context(game_title: str, context: Dict[str, Any]):
             pass  # Sync succeeded, logged by function
     except Exception:
         pass  # Don't break context save if sync fails
+
+
+def save_implicit_relationships(game_title: str, implicit_edges: List[Dict[str, Any]]):
+    """Save implicit co-occurrence relationships to verified_context.json."""
+    all_context = {}
+    game_key = game_title.lower().replace(" ", "_").strip()
+    
+    if os.path.exists(VERIFIED_CONTEXT_FILE):
+        try:
+            with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                all_context = json.load(f)
+        except Exception:
+            pass
+    
+    if game_key not in all_context:
+        all_context[game_key] = {"context": {}, "verified_at": datetime.now().isoformat()}
+    
+    all_context[game_key]["implicit_relationships"] = implicit_edges
+    
+    try:
+        with open(VERIFIED_CONTEXT_FILE, "w") as f:
+            json.dump(all_context, f, indent=2)
+    except Exception as e:
+        print(f"Failed to save implicit relationships: {e}")
+
+
+def load_implicit_relationships(game_title: str) -> List[Dict[str, Any]]:
+    """Load stored implicit co-occurrence relationships."""
+    game_key = game_title.lower().replace(" ", "_").strip()
+    
+    if not os.path.exists(VERIFIED_CONTEXT_FILE):
+        return []
+    
+    try:
+        with open(VERIFIED_CONTEXT_FILE, "r") as f:
+            all_context = json.load(f)
+        return all_context.get(game_key, {}).get("implicit_relationships", [])
+    except Exception:
+        return []
+
+
+def compute_and_save_implicit_relationships(game_title: str, transcript_text: str):
+    """Compute co-occurrence from transcript text and merge with existing stored data."""
+    from collections import defaultdict
+    
+    game_key = game_title.lower().replace(" ", "_").strip()
+    
+    # Load current context to get entity names
+    verified = load_verified_context(game_title)
+    context = verified.get("context", {}) if verified else {}
+    
+    # Build entity list from context
+    entities = {}
+    for etype in ['characters', 'locations', 'key_terms']:
+        for item in context.get(etype, []):
+            # Handle both string items and dict items
+            if isinstance(item, str):
+                name = item
+                entity_id = item
+            else:
+                name = item.get('name', item.get('from', ''))
+                entity_id = item.get('id', name)
+            if name:
+                entities[name.lower()] = entity_id
+    
+    if not entities:
+        return  # No entities to analyze
+    
+    # Find entity occurrences in transcript
+    entity_occurrences = defaultdict(list)
+    text_lower = transcript_text.lower()
+    
+    for entity_name, entity_id in entities.items():
+        if entity_name in text_lower:
+            # Find approximate position (divide text into segments)
+            segment_size = max(1, len(text_lower) // 100)
+            pos = text_lower.find(entity_name)
+            while pos >= 0:
+                segment = pos // segment_size
+                entity_occurrences[entity_name].append(segment)
+                pos = text_lower.find(entity_name, pos + 1)
+    
+    # Compute co-occurrences (entities in same segment)
+    cooccurrence = defaultdict(int)
+    entity_names = list(entity_occurrences.keys())
+    
+    for i, e1 in enumerate(entity_names):
+        for e2 in entity_names[i+1:]:
+            segments1 = set(entity_occurrences[e1])
+            segments2 = set(entity_occurrences[e2])
+            common = segments1 & segments2
+            if common:
+                pair = tuple(sorted([e1, e2]))
+                cooccurrence[pair] = len(common)
+    
+    # Build new implicit edges
+    new_edges = []
+    for (e1, e2), count in cooccurrence.items():
+        if count >= 1:  # At least 1 co-occurrence
+            new_edges.append({
+                'source': entities[e1],
+                'target': entities[e2],
+                'type': 'co_occurs',
+                'weight': count,
+                'label': f'appears in {count} segment(s)'
+            })
+    
+    if not new_edges:
+        return
+    
+    # Merge with existing stored implicit relationships
+    existing = load_implicit_relationships(game_title)
+    existing_map = {}
+    for edge in existing:
+        key = tuple(sorted([edge.get('source', ''), edge.get('target', '')]))
+        existing_map[key] = edge
+    
+    for edge in new_edges:
+        key = tuple(sorted([edge['source'], edge['target']]))
+        if key in existing_map:
+            # Update weight if higher
+            existing_map[key]['weight'] = max(existing_map[key].get('weight', 0), edge['weight'])
+        else:
+            existing_map[key] = edge
+    
+    # Save merged
+    merged = list(existing_map.values())
+    save_implicit_relationships(game_title, merged)
 
 
 def is_first_run(game_title: str) -> bool:
@@ -388,20 +702,31 @@ def compare_context_with_history(
         else:
             resolved_rels.append(rel)
     
+    extracted_rel_keys = set()
+    for rel in extracted_rels:
+        key = _relationship_key(rel)
+        if key[0] and key[1]:
+            extracted_rel_keys.add(key)
+
+    merged_rels = {}
     for rel in verified_rels:
-        if isinstance(rel, dict):
-            key = (rel.get("from", ""), rel.get("to", ""))
-            if key not in [(r.get("from", ""), r.get("to", "")) for r in extracted_rels]:
-                if isinstance(rel, dict):
-                    pass
-        elif isinstance(rel, str):
-            parts = rel.split(" are ")
-            if len(parts) == 2:
-                key = (parts[0].strip(), parts[1].strip().split(" and ")[0].strip())
-                if key not in [(p.split(" are ")[0].strip(), p.split(" are ")[1].strip().split(" and ")[0].strip()) for p in extracted_rels if " are " in p]:
-                    changes["relationships_removed"] = changes.get("relationships_removed", [])
-    
-    resolved["relationships"] = resolved_rels
+        key = _relationship_key(rel)
+        if key[0] and key[1]:
+            merged_rels[key] = rel
+    for rel in resolved_rels:
+        key = _relationship_key(rel)
+        if key[0] and key[1]:
+            merged_rels[key] = rel
+            if key not in extracted_rel_keys:
+                changes["relationships_added"] = changes.get("relationships_added", [])
+                changes["relationships_added"].append(rel)
+
+    resolved["relationships"] = list(merged_rels.values())
+    resolved["characters"] = sorted(extracted_chars | verified_chars)
+    resolved["locations"] = sorted(extracted_locs | verified_locs)
+    resolved["key_terms"] = sorted(
+        set(extracted.get("key_terms", [])) | set(verified_ctx.get("key_terms", []))
+    )
     
     total_changes = (
         len(changes["characters_added"]) +

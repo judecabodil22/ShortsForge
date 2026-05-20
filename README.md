@@ -414,18 +414,29 @@ Open `http://localhost:8000` in your browser.
 
 The Context page features an interactive force-directed graph:
 
-- **Node Types**: Characters (cyan), Locations (green), Key Terms (yellow), Relationships (magenta), Games (gold)
+- **Node Types**: Characters (gold), Locations (amber), Key Terms (yellow), Relationships (red), Games (burgundy) - themed by visual style
 - **Edge Types**:
-  - **Explicit** (solid gray): Direct connections from relationships
-  - **Direct** (magenta): Entity-to-entity connections from shared relationships
-  - **Implicit** (dashed blue): Co-occurrence connections from transcripts
+  - **Explicit** (solid): Direct connections from relationships
+  - **Direct** (solid): Entity-to-entity connections from shared relationships
+  - **Implicit** (dashed): Co-occurrence connections from transcripts (stored persistently)
+- **Visual Themes**: Switch between 6 themes via the Settings panel:
+  - **Star Chart** (default): Classic gold/red 40k color scheme
+  - **Brain Neurons**: Purple gradient circles with neural pulse animations
+  - **Digital Circuits**: Green circuit board squares with connection dots
+  - **Hologram**: Cyan holographic style with scan line effects
+  - **Code Matrix**: Terminal green with cursor blinking animation
+  - **World Map**: Map pin style for location entities
+- **Theme Physics**: Each theme has unique physics presets (link distance, charge strength, velocity decay)
 - **Visual Settings**: Click the gear icon to adjust:
-  - **Link Distance**: How far nodes are pulled together (30-500)
-  - **Link Strength**: Edge pull force (0-1)
-  - **Repulsion**: Node separation force (-1000 to -50)
-  - **Collision Radius**: Minimum node distance (1-100)
+  - **Visual Theme**: Theme selector with preview icons
+  - **Link Distance**: How far nodes are pulled together (50-500)
+  - **Link Strength**: Edge pull force (0-2)
+  - **Repulsion**: Node separation force (-2000 to -50)
+  - **Collision Radius**: Minimum node distance (1-150)
+  - **Center Force**: How compact the graph is (0-1)
 - **Zoom Labels**: Labels only appear when zoomed in past 0.7x for clarity
 - **Interactive**: Click nodes for details, drag to rearrange, zoom to explore
+- **Persistent Data**: Implicit co-occurrence relationships are stored in verified_context.json - deleting transcripts doesn't affect the graph
 
 ### API Endpoints
 

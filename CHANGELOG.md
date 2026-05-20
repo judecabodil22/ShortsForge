@@ -4,6 +4,41 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.1.0 — 2026-05-20
+### Added
+- **Graph Visual Themes**: 6 switchable visual themes for the knowledge graph
+  - Star Chart (default): Classic gold/red 40k color scheme
+  - Brain Neurons: Purple gradient circles with pulsing effects
+  - Digital Circuits: Green circuit board squares with connection dots
+  - Hologram: Cyan holographic style with scan line effects
+  - Code Matrix: Terminal green with cursor blinking
+  - World Map: Map pin style for location entities
+- **Theme-Specific Physics**: Each theme has unique physics presets
+  - Different link distance, charge strength, and velocity decay
+- **Theme Persistence**: Selected theme saved to localStorage
+- **Animated Effects**: Per-theme animations
+  - Node pulse (brain), scan lines (hologram), cursor blink (code)
+  - Link flow effects, flickering, neural pathway pulses
+- **Persistent Co-occurrence Storage**: Implicit relationships stored in verified_context.json
+  - Co-occurrence edges computed during transcript import
+  - Stored persistently - deleting transcripts doesn't affect graph
+  - Graph loads stored data first, only computes from transcripts if none stored
+
+### Changed
+- **Graph Data Flow**: Implicit edges now loaded from verified_context.json
+  - Previously computed on-the-fly from transcripts (lost when deleted)
+  - Now extracted during import and saved to JSON
+- **Theme Dropdown**: Added to Graph Settings panel with visual theme buttons
+
+### Technical
+- context_manager.py: Added save_implicit_relationships(), load_implicit_relationships(), compute_and_save_implicit_relationships()
+- backend/main.py: Updated get_graph_data() to use stored implicit relationships first
+- shortsforge.py: Auto-calls compute_and_save_implicit_relationships() after transcript import
+- frontend Graph.tsx: Added visualTheme state, theme-specific rendering, animation loop
+- graphSettings.ts: Added VisualTheme type, THEME_PHYSICS presets, THEME_OPTIONS
+
+---
+
 ## 2.0.3 — 2026-05-19
 ### Added
 - **Enhanced Node Details Panel**:

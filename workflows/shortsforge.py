@@ -103,6 +103,9 @@ except ImportError:
 from context_manager import (
     load_verified_context,
     save_verified_context,
+    save_implicit_relationships,
+    compute_and_save_implicit_relationships,
+    merge_context_dicts,
     is_first_run,
     compare_context_with_history,
     format_context_for_confirmation,
@@ -1979,7 +1982,7 @@ def _cs_generate_srt(audio_file):
     # Use faster-whisper to generate transcript with timestamps
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel(env("WHISPER_MODEL", "large-v3"), device="cpu", compute_type="int8")
+        model = WhisperModel(env("WHISPER_MODEL", "medium"), device="cpu", compute_type="int8")
         segments, info = model.transcribe(audio_file, language="en", word_timestamps=False)
         
         srt_file = audio_file.replace(".wav", ".srt")
@@ -2944,7 +2947,8 @@ or relationships that were previously flagged as incorrect.
 1. CHARACTERS: List character names that appear in the transcript
 2. LOCATIONS: List places mentioned (e.g., dorm room, school, town)
 3. KEY_TERMS: Important story elements, themes, or concepts
-4. RELATIONSHIPS: Relationships between characters
+4. RELATIONSHIPS: Every meaningful link between characters (allies, enemies, family, mentors, rivals, etc.).
+   Include every pair you can infer from the transcript. Prefer structured objects over vague "associated_with".
 
 {constraints_text}
 
@@ -3317,12 +3321,13 @@ def phase_transcribe(video):
                 extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
                 
                 if extracted:
-                    _cs_update_context(extracted, os.path.basename(json_file))
-                    _cs_save_context(extracted)
-                    save_verified_context(game_title, extracted)
+                    ctx = _cs_update_context(extracted, os.path.basename(json_file))
+                    verified = load_verified_context(game_title)
+                    final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
+                    save_verified_context(game_title, final)
                     
-                    log(f"Context extracted from existing transcript: {len(extracted.get('characters', []))} chars")
-                    notify(f"📚 Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
+                    log(f"Context extracted from existing transcript: {len(final.get('characters', []))} chars, {len(final.get('relationships', []))} rels")
+                    notify(f"📚 Context extracted: {len(final.get('characters', []))} chars, {len(final.get('locations', []))} locs, {len(final.get('relationships', []))} rels")
                     
                     # Mine to MemPalace
                     if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
@@ -3347,7 +3352,7 @@ def phase_transcribe(video):
         from faster_whisper import WhisperModel
         log("Using faster-whisper for transcription...")
         
-        whisper_model = env("WHISPER_MODEL", "large-v3")
+        whisper_model = env("WHISPER_MODEL", "medium")
         log(f"Transcription model: {whisper_model}")
         
         model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
@@ -3420,12 +3425,13 @@ def phase_transcribe(video):
             extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
             
             if extracted:
-                _cs_update_context(extracted, os.path.basename(json_path))
-                _cs_save_context(extracted)
-                save_verified_context(game_title, extracted)
+                ctx = _cs_update_context(extracted, os.path.basename(json_path))
+                verified = load_verified_context(game_title)
+                final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
+                save_verified_context(game_title, final)
                 
-                log(f"Context extracted from transcript: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
-                notify(f"📚 Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs")
+                log(f"Context extracted from transcript: {len(final.get('characters', []))} chars, {len(final.get('relationships', []))} rels")
+                notify(f"📚 Context extracted: {len(final.get('characters', []))} chars, {len(final.get('locations', []))} locs, {len(final.get('relationships', []))} rels")
                 
                 # Mine to MemPalace
                 if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
@@ -3527,33 +3533,24 @@ def phase_context():
         set_status("Phase 3 FAILED")
         return
     
-    # Context verification flow
-    verified = load_verified_context(game_title)
-    
-    if not verified:
-        # First run - auto-save and sync to MemPalace
-        save_verified_context(game_title, extracted)
-        log(f"First run for {game_title} - context auto-saved")
-        set_status("Phase 3: Context extracted")
-    
-    else:
-        # Check for significant changes
-        comparison = compare_context_with_history(extracted, verified)
-        
-        if comparison.get("needs_confirmation"):
-            save_verified_context(game_title, extracted)
-            log(f"Context changes detected for {game_title} - auto-saving...")
-            set_status("Phase 3: Context extracted")
-        else:
-            # No significant changes - use verified context
-            log(f"Context verified (no significant changes)")
-            save_verified_context(game_title, verified.get("context", {}))
-    
-    # Update Obsidian files
     transcript_name = os.path.basename(json_file)
-    _cs_update_context(extracted, transcript_name)
-    log(f"Context extracted: {len(extracted.get('characters', []))} chars, {len(extracted.get('locations', []))} locs, {len(extracted.get('relationships', []))} rels")
-    notify(f"✅ Phase 3 Complete: Context extracted\n📝 {len(extracted.get('characters', []))} chars\n📍 {len(extracted.get('locations', []))} locs\n👥 {len(extracted.get('relationships', []))} rels")
+    ctx = _cs_update_context(extracted, transcript_name)
+    verified = load_verified_context(game_title)
+    final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
+    save_verified_context(game_title, final)
+
+    if not verified:
+        log(f"First run for {game_title} - context auto-saved")
+    else:
+        comparison = compare_context_with_history(extracted, verified)
+        if comparison.get("needs_confirmation"):
+            log(f"Context changes detected for {game_title} - merged and saved")
+        else:
+            log(f"Context verified (merged with existing)")
+
+    set_status("Phase 3 Complete")
+    log(f"Context extracted: {len(final.get('characters', []))} chars, {len(final.get('locations', []))} locs, {len(final.get('relationships', []))} rels")
+    notify(f"✅ Phase 3 Complete: Context extracted\n📝 {len(final.get('characters', []))} chars\n📍 {len(final.get('locations', []))} locs\n👥 {len(final.get('relationships', []))} rels")
     set_status("Phase 3 Complete")
 
 # ─── Phase 4: Scripts ─────────────────────────────────────────────────────────
@@ -4337,7 +4334,7 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                             clip_features = {
                                 'duration': dur,
                                 'has_dialogue': '?' in sc.get('text', ''),
-                                ''has_exclamation': '!' in sc.get('text', ''),
+                                'has_exclamation': '!' in sc.get('text', ''),
                                 'has_numbers': bool(sc.get('text', '').replace('.','').isdigit()),
                                 'density': sc.get('density', 0),
                                 'drama_score': sc.get('drama_score', 0),
@@ -4549,7 +4546,7 @@ def phase_tts(duration, num_hours, video=None):
                 srt_max_words = int(env("SRT_MAX_WORDS", "10"))
                 try:
                     from faster_whisper import WhisperModel
-                    model = WhisperModel(env("WHISPER_MODEL", "large-v3"), device="cpu", compute_type="int8")
+                    model = WhisperModel(env("WHISPER_MODEL", "medium"), device="cpu", compute_type="int8")
                     segments, _ = model.transcribe(wav, language="en", vad_filter=True)
                     with open(srt_out, "w") as f:
                         idx = 1
@@ -4757,10 +4754,12 @@ def run_pipeline(skip=None):
                 game_title = env("GAME_TITLE", "Unknown Game")
                 extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
                 if extracted:
-                    _cs_update_context(extracted, os.path.basename(json_file))
-                    _cs_save_context(extracted)
-                    save_verified_context(game_title, extracted)
-                    log(f"Context extracted: {len(extracted.get('characters', []))} chars")
+                    ctx = _cs_update_context(extracted, os.path.basename(json_file))
+                    verified = load_verified_context(game_title)
+                    final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
+                    save_verified_context(game_title, final)
+                    compute_and_save_implicit_relationships(game_title, transcript_text)
+                    log(f"Context extracted: {len(final.get('characters', []))} chars, {len(final.get('relationships', []))} rels")
         except Exception as e:
             log(f"Warning: Could not extract context: {e}")
     

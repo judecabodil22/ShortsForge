@@ -5,14 +5,36 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Network, ZoomIn, ZoomOut, Maximize2, RefreshCw, Pencil, Trash2, X, Save, Settings } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { getGames, getGraphData, getSegmentRefs, updateContextItem, deleteContextItem } from '@/lib/api'
+import {
+  DEFAULT_GRAPH_SETTINGS,
+  loadGraphSettings,
+  saveGraphSettings,
+  THEME_PHYSICS,
+  THEME_OPTIONS,
+  type GraphSettings,
+  type VisualTheme,
+} from '@/lib/graphSettings'
 
 const NODE_COLORS = {
-  character: '#22d3ee',  // cyan
-  location: '#4ade80',   // green
-  term: '#facc15',       // yellow
-  relationship: '#e879f9', // magenta
-  game: '#fb923c',       // orange
+  character: '#c9a227',
+  location: '#8b7312',
+  term: '#e8c547',
+  relationship: '#b71c3a',
+  game: '#7a1029',
 }
+
+const THEME_COLORS: Record<VisualTheme, Record<string, string>> = {
+  starchart: { character: '#c9a227', location: '#8b7312', term: '#e8c547', relationship: '#b71c3a', game: '#7a1029', background: '#0a0a0c' },
+  brain: { character: '#9b59b6', location: '#8e44ad', term: '#a569bd', relationship: '#e74c8c', game: '#c0392b', background: '#0a0612' },
+  circuit: { character: '#00ff41', location: '#00cc33', term: '#33ff66', relationship: '#ff6600', game: '#ffcc00', background: '#0a0f0a' },
+  hologram: { character: '#00ffff', location: '#00cccc', term: '#66ffff', relationship: '#ff00ff', game: '#00ffaa', background: '#001a1a' },
+  code: { character: '#00ff00', location: '#00cc00', term: '#33ff33', relationship: '#ff3333', game: '#ffff00', background: '#000800' },
+  world: { character: '#4a90d9', location: '#6b5b95', term: '#d4a574', relationship: '#c94c4c', game: '#2ecc71', background: '#0d0d0d' },
+}
+
+const LINK_IMPLICIT = 'rgba(183, 28, 58, 0.55)'
+const LINK_HIGHLIGHT = '#e8c547'
+const LINK_DEFAULT = 'rgba(201, 162, 39, 0.25)'
 
 interface NodeData {
   id: string
@@ -45,16 +67,11 @@ export default function Graph() {
   const [showEditModal, setShowEditModal] = useState(false)
   const [editForm, setEditForm] = useState({ label: '', description: '' })
   const [showImplicitEdges, setShowImplicitEdges] = useState(true)
-  const [showDirectEdges, setShowDirectEdges] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
-  const [graphSettings, setGraphSettings] = useState({
-    linkDistance: 250,
-    linkStrength: 1,
-    chargeStrength: -500,
-    collisionRadius: 60,
-    centerStrength: 0.5,
-    velocityDecay: 0.6,
-  })
+  const [graphSettings, setGraphSettings] = useState<GraphSettings>(() => loadGraphSettings())
+  const [graphReady, setGraphReady] = useState(false)
+  const initialFitKeyRef = useRef<string>('')
+  const [animationTime, setAnimationTime] = useState(0)
   
   const { data: games } = useQuery({
     queryKey: ['games'],
@@ -104,73 +121,152 @@ export default function Graph() {
     return () => window.removeEventListener('resize', updateDimensions)
   }, [updateDimensions])
 
-  const applyGraphSettings = useCallback((settings: typeof graphSettings) => {
-    if (!fgRef.current) return
-    const d3 = fgRef.current.d3
-    if (d3) {
-      d3.force('link').distance(settings.linkDistance).strength(settings.linkStrength)
-      d3.force('charge').strength(settings.chargeStrength)
-      d3.force('collision').radius(settings.collisionRadius)
-      d3.force('center').strength(settings.centerStrength)
-      d3.velocityDecay(settings.velocityDecay)
-      fgRef.current.d3ReheatGraph()
+  // Animation loop for theme effects
+  useEffect(() => {
+    let animId: number
+    const animate = () => {
+      setAnimationTime(Date.now() / 1000)
+      animId = requestAnimationFrame(animate)
+    }
+    animId = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(animId)
+  }, [])
+
+  const applyGraphSettings = useCallback((settings: GraphSettings) => {
+    const fg = fgRef.current
+    if (!fg) return
+
+    const link = fg.d3Force('link')
+    if (link) {
+      link.distance(settings.linkDistance)
+      link.strength(settings.linkStrength)
+    }
+    const charge = fg.d3Force('charge')
+    if (charge) charge.strength(settings.chargeStrength)
+    const center = fg.d3Force('center')
+    if (center) center.strength(settings.centerStrength)
+    const collision = fg.d3Force('collision')
+    if (collision?.radius) collision.radius(settings.collisionRadius)
+    if (typeof fg.d3ReheatSimulation === 'function') {
+      fg.d3ReheatSimulation()
     }
   }, [])
 
+  const handleThemeChange = useCallback((theme: VisualTheme) => {
+    const themePhysics = THEME_PHYSICS[theme]
+    const newSettings = { ...graphSettings, visualTheme: theme, ...themePhysics }
+    setGraphSettings(newSettings)
+    saveGraphSettings(newSettings)
+    applyGraphSettings(newSettings)
+  }, [graphSettings, applyGraphSettings])
+
+  const commitGraphSettings = useCallback(
+    (next: GraphSettings) => {
+      setGraphSettings(next)
+      saveGraphSettings(next)
+      applyGraphSettings(next)
+    },
+    [applyGraphSettings]
+  )
+
+  const updateGraphSetting = useCallback(
+    <K extends keyof GraphSettings>(key: K, value: GraphSettings[K]) => {
+      setGraphSettings((prev) => {
+        const next = { ...prev, [key]: value }
+        saveGraphSettings(next)
+        queueMicrotask(() => applyGraphSettings(next))
+        return next
+      })
+    },
+    [applyGraphSettings]
+  )
+
   const graphData = useMemo(() => {
-    if (!rawGraphData?.nodes) return { nodes: [], links: [], implicitCount: 0, directCount: 0 }
+    if (!rawGraphData?.nodes) return { nodes: [], links: [], implicitCount: 0, contextCount: 0 }
 
     const nodesMap = new Map<string, NodeData>()
-    const nodes = rawGraphData.nodes.map((n: any) => {
-      const node: NodeData = {
-        id: n.data.id,
-        label: n.data.label,
-        type: n.data.type,
-        category: n.data.category,
-        description: n.data.description,
-        val: n.data.type === 'game' ? 8 : 1,
-        neighbors: [],
-        links: [],
-        aliases: n.data.aliases || [],
-        tags: n.data.tags || [],
-      }
-      if (node.type === 'relationship') node.val = 0.5
-      nodesMap.set(node.id, node)
-      return node
-    })
+    const nodes = rawGraphData.nodes
+      .filter((n: any) => n.data.type !== 'relationship')
+      .map((n: any) => {
+        const node: NodeData = {
+          id: n.data.id,
+          label: n.data.label,
+          type: n.data.type,
+          category: n.data.category,
+          description: n.data.description,
+          val: n.data.type === 'game' ? 8 : 1,
+          neighbors: [],
+          links: [],
+          aliases: n.data.aliases || [],
+          tags: n.data.tags || [],
+        }
+        nodesMap.set(node.id, node)
+        return node
+      })
 
     let implicitCount = 0
-    let directCount = 0
-    const links = rawGraphData.edges.map((e: any) => {
-      const source = e.data.source
-      const target = e.data.target
-      const isImplicit = e.data.implicit === true
-      const isDirect = e.data.is_direct === true
+    let contextCount = 0
+    const links = rawGraphData.edges
+      .map((e: any) => {
+        const source = e.data.source
+        const target = e.data.target
+        const isImplicit = e.data.implicit === true
+        const isContext = e.data.is_context === true
 
-      const sNode = nodesMap.get(source)
-      const tNode = nodesMap.get(target)
+        const sNode = nodesMap.get(source)
+        const tNode = nodesMap.get(target)
+        if (!sNode || !tNode) return null
 
-      if (sNode && tNode) {
+        const link = {
+          source,
+          target,
+          label: e.data.label,
+          implicit: isImplicit,
+          type: e.data.type,
+          is_direct: e.data.is_direct === true,
+          is_context: isContext,
+        }
         sNode.neighbors?.push(target)
         tNode.neighbors?.push(source)
-        const link = { source, target, label: e.data.label, implicit: isImplicit, type: e.data.type, is_direct: isDirect }
         sNode.links?.push(link)
         tNode.links?.push(link)
-      }
 
-      if (isImplicit) implicitCount++
-      if (isDirect) directCount++
+        if (isImplicit) implicitCount++
+        if (isContext) contextCount++
+        return link
+      })
+      .filter(Boolean) as Array<{
+        source: string
+        target: string
+        label: string
+        implicit: boolean
+        type: string
+        is_direct: boolean
+        is_context: boolean
+      }>
 
-      return { source, target, label: e.data.label, implicit: isImplicit, type: e.data.type, is_direct: isDirect }
-    })
-
-    // Scale node size based on degree
     nodes.forEach((n: NodeData) => {
-       n.val = Math.min(10, 2 + (n.neighbors?.length || 0) * 0.5)
+      n.val = Math.min(10, 2 + (n.neighbors?.length || 0) * 0.5)
     })
 
-    return { nodes, links, implicitCount, directCount }
+    return { nodes, links, implicitCount, contextCount }
   }, [rawGraphData])
+
+  const graphInstanceKey = useMemo(
+    () => `${selectedGame}:${graphData.nodes.length}:${graphData.links.length}`,
+    [selectedGame, graphData.nodes.length, graphData.links.length]
+  )
+
+  useEffect(() => {
+    setGraphReady(false)
+    initialFitKeyRef.current = ''
+  }, [graphInstanceKey])
+
+  useEffect(() => {
+    if (graphReady && fgRef.current) {
+      applyGraphSettings(graphSettings)
+    }
+  }, [graphReady, applyGraphSettings, graphSettings])
 
   const highlightNodes = useMemo(() => {
     const set = new Set<string>()
@@ -206,80 +302,242 @@ export default function Graph() {
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     if (node.x == null || node.y == null || node.val == null) return
 
+    const theme = graphSettings.visualTheme
+    const colors = THEME_COLORS[theme]
     const isHighlight = highlightNodes.size === 0 || highlightNodes.has(node.id)
     const isSelected = selectedNode?.id === node.id
+    const isHovered = hoverNode?.id === node.id
 
-    const color = NODE_COLORS[node.type as keyof typeof NODE_COLORS] || '#666'
+    const color = colors[node.type] || '#666'
     const opacity = isHighlight ? 1 : 0.2
 
-    // Draw outer glow if selected
-    if (isSelected) {
+    // Draw based on theme
+    if (theme === 'starchart') {
+      // Original starchart - simple circles
+      if (isSelected) {
+        ctx.beginPath()
+        ctx.arc(node.x, node.y, node.val * 2, 0, 2 * Math.PI, false)
+        ctx.fillStyle = `${color}40`
+        ctx.fill()
+      }
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
+      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fill()
+      ctx.lineWidth = isSelected ? 0.8 : 0.2
+      ctx.strokeStyle = isSelected ? '#fff' : '#111'
+      ctx.stroke()
+    } 
+    else if (theme === 'brain') {
+      // Brain neurons - gradient circles with pulse
+      const pulse = Math.sin(animationTime * 3 + node.id.charCodeAt(0)) * 0.3 + 0.7
+      const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, node.val * 2)
+      gradient.addColorStop(0, isHighlight ? `${color}${Math.floor(pulse * 255).toString(16).padStart(2, '0')}` : `${color}33`)
+      gradient.addColorStop(0.7, `${color}22`)
+      gradient.addColorStop(1, 'transparent')
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, node.val * (isSelected ? 2.5 : 2), 0, 2 * Math.PI, false)
+      ctx.fillStyle = gradient
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
+      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fill()
+      if (isSelected || isHovered) {
+        ctx.lineWidth = 1.5
+        ctx.strokeStyle = '#fff'
+        ctx.stroke()
+      }
+    }
+    else if (theme === 'circuit') {
+      // Digital circuits - squares with connection dots
+      const size = node.val * 1.2
+      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fillRect(node.x - size, node.y - size, size * 2, size * 2)
+      ctx.strokeStyle = isSelected ? '#fff' : (isHighlight ? color : '#222')
+      ctx.lineWidth = isSelected ? 2 : 1
+      ctx.strokeRect(node.x - size, node.y - size, size * 2, size * 2)
+      // Connection dots
+      ctx.fillStyle = isHighlight ? '#00ff41' : '#005500'
+      ctx.fillRect(node.x - size - 3, node.y - 2, 3, 4)
+      ctx.fillRect(node.x + size, node.y - 2, 3, 4)
+      ctx.fillRect(node.x - 2, node.y - size - 3, 4, 3)
+      ctx.fillRect(node.x - 2, node.y + size, 4, 3)
+    }
+    else if (theme === 'hologram') {
+      // Hologram - circles with scan line
+      const flicker = Math.sin(animationTime * 20) * 0.1 + 0.9
+      // Outer glow
+      const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, node.val * 2)
+      gradient.addColorStop(0, `${color}60`)
+      gradient.addColorStop(1, 'transparent')
       ctx.beginPath()
       ctx.arc(node.x, node.y, node.val * 2, 0, 2 * Math.PI, false)
-      ctx.fillStyle = `${color}40`
+      ctx.fillStyle = gradient
+      ctx.fill()
+      // Main circle
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
+      ctx.fillStyle = `${color}${Math.floor(opacity * flicker * 255).toString(16).padStart(2, '0')}`
+      ctx.fill()
+      // Scan line
+      const scanY = node.y - node.val + ((animationTime * 50) % (node.val * 2))
+      ctx.beginPath()
+      ctx.moveTo(node.x - node.val, scanY)
+      ctx.lineTo(node.x + node.val, scanY)
+      ctx.strokeStyle = `${color}80`
+      ctx.lineWidth = 1
+      ctx.stroke()
+      if (isSelected) {
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      }
+    }
+    else if (theme === 'code') {
+      // Code matrix - terminal rectangles
+      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fillRect(node.x - node.val * 1.5, node.y - node.val, node.val * 3, node.val * 2)
+      ctx.strokeStyle = isSelected ? '#fff' : (isHighlight ? color : '#003300')
+      ctx.lineWidth = isSelected ? 2 : 1
+      ctx.strokeRect(node.x - node.val * 1.5, node.y - node.val, node.val * 3, node.val * 2)
+      // Cursor
+      const cursorBlink = Math.sin(animationTime * 4) > 0
+      if (cursorBlink && (isSelected || isHovered)) {
+        ctx.fillStyle = '#00ff00'
+        ctx.fillRect(node.x - node.val * 1.5 + 2, node.y - node.val + 2, 2, node.val * 2 - 4)
+      }
+    }
+    else if (theme === 'world') {
+      // World map - map pin style
+      const pinSize = node.val * 1.3
+      // Pin head
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, pinSize * 0.6, 0, 2 * Math.PI, false)
+      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fill()
+      if (isSelected || isHovered) {
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      }
+      // Pin point
+      ctx.beginPath()
+      ctx.moveTo(node.x, node.y + pinSize * 0.6)
+      ctx.lineTo(node.x - pinSize * 0.3, node.y + pinSize * 1.2)
+      ctx.lineTo(node.x + pinSize * 0.3, node.y + pinSize * 1.2)
+      ctx.closePath()
+      ctx.fillStyle = isHighlight ? color : '#333'
+      ctx.fill()
+      // Center dot
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, pinSize * 0.25, 0, 2 * Math.PI, false)
+      ctx.fillStyle = '#fff'
       ctx.fill()
     }
 
-    // Draw Node Body
-    ctx.beginPath()
-    ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
-    ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
-    ctx.fill()
-
-    // Draw Node Border
-    ctx.lineWidth = isSelected ? 0.8 : 0.2
-    ctx.strokeStyle = isSelected ? '#fff' : '#111'
-    ctx.stroke()
-
     // Draw Label (only show on hover/select for focused nodes)
     const showLabel = (isSelected || (isHighlight && hoverNode))
-    
     if (showLabel) {
-      const fontSize = 12 / globalScale
+      const fontSize = Math.max(8, 12 / globalScale)
       ctx.font = `${isSelected ? 'bold ' : ''}${fontSize}px Inter, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillStyle = `rgba(255, 255, 255, ${isSelected ? 1 : 0.9})`
-      ctx.fillText(node.label ?? '', node.x, node.y + node.val + (fontSize * 1.2))
+      ctx.fillText(node.label ?? '', node.x, node.y + node.val + fontSize + 2)
     }
-  }, [highlightNodes, selectedNode, hoverNode])
+  }, [highlightNodes, selectedNode, hoverNode, graphSettings.visualTheme, animationTime])
   
   const paintLink = useCallback((link: any, ctx: CanvasRenderingContext2D) => {
     if (link.source?.x == null || link.source?.y == null || link.target?.x == null || link.target?.y == null) return
 
     // Filter implicit edges if toggle is off
     if (link.implicit && !showImplicitEdges) return
-    if (link.is_direct && !showDirectEdges) return
 
+    const theme = graphSettings.visualTheme
+    const colors = THEME_COLORS[theme]
     const isHighlight = highlightLinks.size === 0 || highlightLinks.has(link)
     const isImplicit = link.implicit === true
-    const isDirect = link.is_direct === true
+    const isContext = link.is_context === true
+
+    const baseColor = isContext ? colors.term : (isImplicit ? colors.relationship : colors.character)
 
     ctx.beginPath()
     ctx.moveTo(link.source.x, link.source.y)
     ctx.lineTo(link.target.x, link.target.y)
 
-    if (isImplicit) {
-      ctx.setLineDash([4, 4])
-      ctx.lineWidth = 0.5
-      ctx.strokeStyle = isHighlight ? 'rgba(100, 150, 255, 0.8)' : 'rgba(100, 150, 255, 0.2)'
-    } else if (isDirect) {
+    if (theme === 'starchart') {
+      if (isContext) {
+        ctx.setLineDash([])
+        ctx.lineWidth = isHighlight ? 2.5 : 1.5
+        ctx.strokeStyle = isHighlight ? LINK_HIGHLIGHT : 'rgba(201, 162, 39, 0.75)'
+      } else if (isImplicit) {
+        ctx.setLineDash([4, 4])
+        ctx.lineWidth = isHighlight ? 1 : 0.5
+        ctx.strokeStyle = isHighlight ? LINK_IMPLICIT : 'rgba(183, 28, 58, 0.2)'
+      } else if (isHighlight && highlightLinks.size > 0) {
+        ctx.setLineDash([])
+        ctx.lineWidth = 1.5
+        ctx.strokeStyle = LINK_HIGHLIGHT
+      } else {
+        ctx.setLineDash([])
+        ctx.lineWidth = 0.5
+        ctx.strokeStyle = isHighlight ? 'rgba(201, 162, 39, 0.65)' : LINK_DEFAULT
+      }
+    }
+    else if (theme === 'brain') {
+      // Pulsing neural pathways
+      const pulse = Math.sin(animationTime * 2 + link.source.id.charCodeAt(0)) * 0.3 + 0.7
       ctx.setLineDash([])
+      ctx.lineWidth = isHighlight ? 2 : (isImplicit ? 0.5 : 1)
+      ctx.strokeStyle = isHighlight ? `${colors.character}${Math.floor(pulse * 200).toString(16).padStart(2, '0')}` : `${baseColor}40`
+    }
+    else if (theme === 'circuit') {
+      // Digital circuit traces with dots
+      ctx.setLineDash(isImplicit ? [3, 3] : [])
+      ctx.lineWidth = isHighlight ? 1.5 : (isImplicit ? 0.5 : 0.8)
+      ctx.strokeStyle = isHighlight ? '#00ff41' : `${baseColor}66`
+      // Circuit connection dots
+      if (isHighlight) {
+        const midX = (link.source.x + link.target.x) / 2
+        const midY = (link.source.y + link.target.y) / 2
+        ctx.fillStyle = '#00ff41'
+        ctx.fillRect(midX - 2, midY - 2, 4, 4)
+      }
+    }
+    else if (theme === 'hologram') {
+      // Hologram dashed cyan lines
+      const flicker = Math.sin(animationTime * 10) * 0.2 + 0.8
+      ctx.setLineDash([8, 4])
       ctx.lineWidth = isHighlight ? 2 : 1
-      ctx.strokeStyle = isHighlight ? '#e879f9' : 'rgba(232, 121, 249, 0.5)'
-    } else if (isHighlight && highlightLinks.size > 0) {
+      ctx.strokeStyle = isHighlight ? `rgba(0, 255, 255, ${flicker})` : `${colors.character}44`
+    }
+    else if (theme === 'code') {
+      // Matrix-style vertical lines
       ctx.setLineDash([])
-      ctx.lineWidth = 1.5
-      ctx.strokeStyle = '#22d3ee'
-    } else {
-      ctx.setLineDash([])
-      ctx.lineWidth = 0.5
-      ctx.strokeStyle = isHighlight ? 'rgba(80, 80, 100, 0.8)' : 'rgba(80, 80, 100, 0.15)'
+      ctx.lineWidth = isHighlight ? 2.5 : 1
+      ctx.strokeStyle = isHighlight ? '#00ff00' : `${baseColor}33`
+      // Add flowing effect
+      const flowPos = (animationTime * 30) % 40
+      if (isHighlight) {
+        ctx.setLineDash([flowPos, 40 - flowPos])
+      }
+    }
+    else if (theme === 'world') {
+      // World map arc paths
+      const midX = (link.source.x + link.target.x) / 2
+      const midY = (link.source.y + link.target.y) / 2 - 20
+      ctx.beginPath()
+      ctx.moveTo(link.source.x, link.source.y)
+      ctx.quadraticCurveTo(midX, midY, link.target.x, link.target.y)
+      ctx.setLineDash(isImplicit ? [5, 5] : [])
+      ctx.lineWidth = isHighlight ? 2 : 1
+      ctx.strokeStyle = isHighlight ? colors.character : `${baseColor}44`
     }
 
     ctx.stroke()
     ctx.setLineDash([])
-  }, [highlightLinks, showImplicitEdges])
+  }, [highlightLinks, showImplicitEdges, graphSettings.visualTheme, animationTime])
 
   const updateMutation = useMutation({
     mutationFn: ({ itemType, itemId, data }: { itemType: string; itemId: string; data: any }) =>
@@ -303,7 +561,11 @@ export default function Graph() {
 
   const handleZoomIn = () => fgRef.current?.zoom(fgRef.current.zoom() * 1.5, 400)
   const handleZoomOut = () => fgRef.current?.zoom(fgRef.current.zoom() / 1.5, 400)
-  const handleFit = () => fgRef.current?.zoomToFit(400, 50)
+  const handleFit = () => {
+    initialFitKeyRef.current = ''
+    fgRef.current?.zoomToFit(400, 80)
+    initialFitKeyRef.current = graphInstanceKey
+  }
 
   return (
     <div className="space-y-6">
@@ -312,7 +574,9 @@ export default function Graph() {
           <h1 className="text-3xl font-display font-bold text-white">
             <span className="text-cyber-cyan">KNOWLEDGE</span> GRAPH
           </h1>
-          <p className="text-gray-400 mt-1">Interactive Obsidian-style visualization</p>
+          <p className="text-gray-400 mt-1">
+            Nodes are entities; edges are saved relationships and transcript co-occurrence.
+          </p>
         </div>
 
         <div className="flex items-center gap-4">
@@ -343,28 +607,18 @@ export default function Graph() {
         ))}
         <div className="w-px h-4 bg-gray-600" />
         <div className="flex items-center gap-2">
-          <div className="w-6 h-0.5 bg-gray-400" />
-          <span className="text-sm text-gray-400">explicit</span>
+          <div className="w-6 h-0.5 bg-40k-gold-bright" />
+          <span className="text-sm text-gray-400">context relationship</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-6 h-0.5 border-t-2 border-dashed border-blue-400" />
-          <span className="text-sm text-gray-400">implicit</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-0.5 bg-cyber-magenta" />
-          <span className="text-sm text-gray-400">direct</span>
+          <div className="w-6 h-0.5 border-t-2 border-dashed border-40k-crimson-bright" />
+          <span className="text-sm text-gray-400">co-occurrence</span>
         </div>
         <button
           onClick={() => setShowImplicitEdges(!showImplicitEdges)}
-          className={`cyber-button text-xs px-3 py-1 ${showImplicitEdges ? 'bg-cyber-cyan/20 text-cyber-cyan' : ''}`}
+          className={`cyber-button text-xs px-3 py-1 ${showImplicitEdges ? 'bg-40k-gold/20 text-40k-gold' : ''}`}
         >
-          {showImplicitEdges ? 'Hide' : 'Show'} Implicit
-        </button>
-        <button
-          onClick={() => setShowDirectEdges(!showDirectEdges)}
-          className={`cyber-button text-xs px-3 py-1 ${showDirectEdges ? 'bg-cyber-magenta/20 text-cyber-magenta' : ''}`}
-        >
-          {showDirectEdges ? 'Hide' : 'Show'} Direct
+          {showImplicitEdges ? 'Hide' : 'Show'} Co-occurrence
         </button>
       </div>
 
@@ -395,6 +649,24 @@ export default function Graph() {
               </div>
               <div className="space-y-3">
                 <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Visual Theme</label>
+                  <div className="flex flex-wrap gap-1">
+                    {THEME_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => handleThemeChange(option.value)}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${
+                          graphSettings.visualTheme === option.value
+                            ? 'bg-cyber-cyan text-black'
+                            : 'bg-cyber-dark border border-cyber-border text-gray-300 hover:bg-cyber-border'
+                        }`}
+                      >
+                        {option.icon} {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
                   <label className="text-xs text-gray-400 flex justify-between">
                     <span>Link Distance</span>
                     <span className="text-cyber-cyan">{graphSettings.linkDistance}</span>
@@ -404,11 +676,7 @@ export default function Graph() {
                     min="50"
                     max="500"
                     value={graphSettings.linkDistance}
-                    onChange={(e) => {
-                      const newSettings = { ...graphSettings, linkDistance: Number(e.target.value) }
-                      setGraphSettings(newSettings)
-                      applyGraphSettings(newSettings)
-                    }}
+                    onChange={(e) => updateGraphSetting('linkDistance', Number(e.target.value))}
                     className="w-full h-1 bg-gray-700 rounded appearance-none cursor-pointer"
                   />
                 </div>
@@ -506,11 +774,7 @@ export default function Graph() {
                   />
                 </div>
                 <button
-                  onClick={() => {
-                    const defaultSettings = { linkDistance: 250, linkStrength: 1, chargeStrength: -500, collisionRadius: 60, centerStrength: 0.5, velocityDecay: 0.6 }
-                    setGraphSettings(defaultSettings)
-                    applyGraphSettings(defaultSettings)
-                  }}
+                  onClick={() => commitGraphSettings({ ...DEFAULT_GRAPH_SETTINGS })}
                   className="w-full cyber-button text-xs py-1 mt-2"
                 >
                   Reset to Default
@@ -522,6 +786,7 @@ export default function Graph() {
           <div ref={containerRef} className="w-full h-[600px] bg-[#09090b] rounded-lg">
             {graphData.nodes.length > 0 && dimensions.width > 0 && (
               <ForceGraph2D
+                key={graphInstanceKey}
                 ref={fgRef}
                 width={dimensions.width}
                 height={dimensions.height}
@@ -542,17 +807,39 @@ export default function Graph() {
                 d3VelocityDecay={graphSettings.velocityDecay}
                 cooldownTicks={100}
                 onEngineStop={() => {
-                  applyGraphSettings(graphSettings)
-                  fgRef.current?.zoomToFit(400, 50)
+                  setGraphReady(true)
+                  if (initialFitKeyRef.current !== graphInstanceKey) {
+                    initialFitKeyRef.current = graphInstanceKey
+                    requestAnimationFrame(() => {
+                      fgRef.current?.zoomToFit(400, 80)
+                    })
+                  }
                 }}
               />
             )}
           </div>
 
-          <div className="absolute bottom-4 left-4 z-10 flex gap-4 text-xs text-gray-400 bg-cyber-dark/80 backdrop-blur px-3 py-1.5 rounded-full border border-cyber-border/50">
-            <span>Nodes: {graphData.nodes.length}</span>
-            <span>Edges: {graphData.links.length - graphData.implicitCount - graphData.directCount} explicit + {graphData.directCount} direct + {graphData.implicitCount} implicit</span>
-          </div>
+          <motion.div
+            className="absolute bottom-4 left-4 z-10 flex flex-col gap-2 max-w-md"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            <motion.div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400 bg-cyber-dark/80 backdrop-blur px-3 py-1.5 rounded-full border border-cyber-border/50">
+              <span>Nodes: {graphData.nodes.length}</span>
+              <span>Edges: {graphData.contextCount} context + {graphData.implicitCount} co-occurrence</span>
+              {rawGraphData?.stats?.sources && (
+                <span className="text-gray-500">
+                  MemPalace: {rawGraphData.stats.sources.mempalace_chunks} chunks · transcripts:{' '}
+                  {(rawGraphData.stats.sources.transcript_files || []).length}
+                </span>
+              )}
+            </motion.div>
+            {graphData.nodes.length > 15 && graphData.contextCount < 3 && (
+              <p className="text-xs text-amber-200/90 bg-cyber-dark/90 backdrop-blur px-3 py-2 rounded-lg border border-amber-500/30">
+                Many entities but few relationship edges. Add relationships in Context or re-run Phase 3 on your transcript.
+              </p>
+            )}
+          </motion.div>
         </Card>
 
         <Card>
@@ -631,7 +918,7 @@ export default function Graph() {
                     <p className="text-xs text-gray-400 mb-2">Tags</p>
                     <div className="flex flex-wrap gap-1">
                       {(selectedNode as any).tags.map((tag: string, idx: number) => (
-                        <span key={idx} className="px-2 py-0.5 bg-cyber-cyan/20 text-cyber-cyan rounded text-xs">
+                        <span key={idx} className="px-2 py-0.5 bg-40k-gold/20 text-40k-gold rounded text-xs">
                           #{tag}
                         </span>
                       ))}
@@ -675,7 +962,7 @@ export default function Graph() {
                       {Object.entries(segmentRefs.references).flatMap(([_transcript, nodes]: [string, any]) =>
                         nodes.filter((n: any) => n.node.toLowerCase() === selectedNode.label?.toLowerCase() ||
                           selectedNode.label?.toLowerCase().includes(n.node.toLowerCase())).map((n: any, idx: number) => (
-                            <span key={idx} className="px-2 py-1 bg-cyber-cyan/20 text-cyber-cyan text-xs rounded">
+                            <span key={idx} className="px-2 py-1 bg-40k-gold/20 text-40k-gold text-xs rounded">
                               {n.transcript}
                             </span>
                           ))
