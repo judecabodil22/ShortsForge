@@ -6,11 +6,11 @@ import { Card } from '@/components/ui/Card'
 import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, createGameContext, getStatus } from '@/lib/api'
 
 const TYPE_CONFIG = {
-  character: { icon: Users, color: 'text-cyber-cyan', bg: 'bg-cyber-cyan/20' },
-  location: { icon: MapPin, color: 'text-cyber-green', bg: 'bg-cyber-green/20' },
-  term: { icon: BookOpen, color: 'text-cyber-yellow', bg: 'bg-cyber-yellow/20' },
-  relationship: { icon: Link2, color: 'text-cyber-magenta', bg: 'bg-cyber-magenta/20' },
-  game: { icon: Gamepad2, color: 'text-cyber-yellow', bg: 'bg-cyber-yellow/20' },
+  character: { icon: Users, color: 'text-40k-gold', bg: 'bg-40k-gold/20' },
+  location: { icon: MapPin, color: 'text-40k-gold-dim', bg: 'bg-40k-gold-dim/20' },
+  term: { icon: BookOpen, color: 'text-40k-gold-bright', bg: 'bg-40k-gold-bright/20' },
+  relationship: { icon: Link2, color: 'text-40k-crimson-bright', bg: 'bg-40k-crimson-bright/20' },
+  game: { icon: Gamepad2, color: 'text-40k-gold-bright', bg: 'bg-40k-gold-bright/20' },
 }
 
 interface ContextItem {
@@ -213,7 +213,7 @@ export default function Context() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-cyber-cyan">CONTEXT</span> EDITOR
+            <span className="text-40k-gold">CONTEXT</span> EDITOR
           </h1>
           <p className="text-gray-400 mt-1">
             {selectedFranchiseInfo?.is_series 
@@ -240,7 +240,7 @@ export default function Context() {
             <motion.button 
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              className="cyber-button flex items-center gap-2 text-cyber-red border-cyber-red/50"
+              className="cyber-button flex items-center gap-2 text-40k-red-bright border-40k-red-bright/50"
               disabled={clearMutation.isPending}
               onClick={() => {
                 if (window.confirm(`Are you sure you want to CLEAR ALL context for this franchise? This cannot be undone.`)) {
@@ -268,16 +268,16 @@ export default function Context() {
 
       {/* Franchise Info Banner */}
       {selectedFranchiseInfo?.is_series && selectedFranchiseInfo.children?.length > 0 && (
-        <Card className="bg-cyber-dark/50 border-cyber-cyan/20">
+        <Card className="bg-40k-dark/50 border-40k-gold/20">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-cyber-cyan/20 flex items-center justify-center">
-              <Layers className="w-5 h-5 text-cyber-cyan" />
+            <div className="w-10 h-10 rounded-lg bg-40k-gold/20 flex items-center justify-center">
+              <Layers className="w-5 h-5 text-40k-gold" />
             </div>
             <div>
               <p className="text-sm text-gray-400">Franchise contains:</p>
               <div className="flex gap-2 mt-1">
                 {selectedFranchiseInfo.children.map((child: string) => (
-                  <span key={child} className="px-2 py-1 text-xs bg-cyber-cyan/10 text-cyber-cyan rounded">
+                  <span key={child} className="px-2 py-1 text-xs bg-40k-gold/10 text-40k-gold rounded">
                     {child}
                   </span>
                 ))}
@@ -298,8 +298,8 @@ export default function Context() {
                   onClick={() => setActiveTab(tab)}
                   className={`px-4 py-2 rounded-lg text-sm transition-all ${
                     activeTab === tab
-                      ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan/30'
-                      : 'bg-cyber-card text-gray-400 hover:text-white'
+                      ? 'bg-40k-gold/20 text-40k-gold border border-40k-gold/30'
+                      : 'bg-40k-card text-gray-400 hover:text-white'
                   }`}
                 >
                   {tab === 'all' ? 'All' : tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -337,7 +337,7 @@ export default function Context() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.02 }}
                 >
-                  <Card className="hover:border-cyber-cyan/30 transition-all cursor-pointer">
+                  <Card className="hover:border-40k-gold/30 transition-all cursor-pointer">
                     <div className="flex items-start gap-3">
                       <div className={`w-10 h-10 rounded-lg ${config.bg} flex items-center justify-center ${config.color}`}>
                         <Icon className="w-5 h-5" />
@@ -359,7 +359,7 @@ export default function Context() {
 
                     <div className="mt-4 flex items-center justify-end">
                       <button 
-                        className="text-xs text-cyber-cyan hover:underline flex items-center gap-1"
+                        className="text-xs text-40k-gold hover:underline flex items-center gap-1"
                         onClick={(e) => {
                           e.stopPropagation()
                           handleEdit(item)
@@ -404,12 +404,12 @@ export default function Context() {
               initial={{ scale: 0.9 }}
               animate={{ scale: 1 }}
               exit={{ scale: 0.9 }}
-              className="bg-cyber-card border border-cyber-border rounded-lg p-6 w-full max-w-md"
+              className="bg-40k-card border border-40k-border rounded-lg p-6 w-full max-w-md"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-display font-semibold text-white flex items-center gap-2">
-                  <Pencil className="w-5 h-5 text-cyber-cyan" />
+                  <Pencil className="w-5 h-5 text-40k-gold" />
                   Edit {editingItem.type.charAt(0).toUpperCase() + editingItem.type.slice(1)}
                 </h3>
                 <button onClick={() => setEditingItem(null)} className="text-gray-400 hover:text-white">
@@ -454,7 +454,7 @@ export default function Context() {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={handleDelete}
-                  className="px-4 py-2 text-cyber-red hover:bg-cyber-red/10 rounded-lg"
+                  className="px-4 py-2 text-40k-red-bright hover:bg-40k-red-bright/10 rounded-lg"
                 >
                   Delete
                 </motion.button>
@@ -497,12 +497,12 @@ export default function Context() {
               initial={{ scale: 0.9 }}
               animate={{ scale: 1 }}
               exit={{ scale: 0.9 }}
-              className="bg-cyber-card border border-cyber-border rounded-lg p-6 w-full max-w-md"
+              className="bg-40k-card border border-40k-border rounded-lg p-6 w-full max-w-md"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-display font-semibold text-white flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-cyber-cyan" />
+                  <Layers className="w-5 h-5 text-40k-gold" />
                   Create New Franchise
                 </h3>
                 <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-white">

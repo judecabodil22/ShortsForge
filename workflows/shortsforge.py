@@ -18,6 +18,18 @@ from update_manager import (
     perform_update,
     cleanup_old_backups,
 )
+try:
+    from constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score, parse_duration, get_next_groq_key
+except ImportError:
+    from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score, parse_duration, get_next_groq_key
+try:
+    from core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin, get_state as _rr_get_state
+except ImportError:
+    from workflows.core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin, get_state as _rr_get_state
+from performance_database import (
+    store_script,
+    backfill_script_titles,
+)
 from keychain_manager import (
     get_gemini_keys,
     get_groq_keys,
@@ -62,6 +74,7 @@ try:
         get_variant_performance_stats,
         get_weighted_tts_voices,
         update_tts_learning,
+        backfill_script_titles,
     )
     PERFORMANCE_DB_AVAILABLE = True
 except ImportError:
@@ -78,6 +91,7 @@ except ImportError:
     def get_variant_performance_stats(): return {}
     def get_weighted_tts_voices(): return []
     def update_tts_learning(*args, **kwargs): pass
+    def backfill_script_titles(*args, **kwargs): return {}
 
 try:
     from learning_engine import (
@@ -100,18 +114,18 @@ try:
 except ImportError:
     AUDIO_ANALYSIS_AVAILABLE = False
     def enhance_scene_selection(*args, **kwargs): return args[0] if args else []
-from context_manager import (
+from context_manager_v2 import (
     load_verified_context,
     save_verified_context,
     save_implicit_relationships,
     compute_and_save_implicit_relationships,
-    merge_context_dicts,
     is_first_run,
     compare_context_with_history,
     format_context_for_confirmation,
     get_verified_context_for_validation,
     clear_verified_context,
 )
+from context_manager import merge_context_dicts
 import requests
 from jinja2 import Environment, FileSystemLoader, BaseLoader
 
@@ -274,22 +288,18 @@ _LEARNING_VARIANT_STATS = {}
 _LEARNING_TTS_WEIGHTS = []
 _LEARNING_OPTIMIZED_PARAMS = {}
 
+# Context editing state
+CONTEXT_EDIT_STATE = {}
+
 # Shared state between phases (used for linking clips to scripts in DB)
 _SCRIPT_ID_MAP = {}  # {script_hour_index: script_id}
-
-# Round-robin state for variant/voice/style cycling (initialized by _init_round_robin)
-_rr_variants = []
-_rr_perspectives = []
-_rr_voices = []
-_rr_styles = []
-_rr_script_index = 0
-_rr_tts_index = 0
 
 
 def _clear_shared_state():
     """Clear shared state between phase runs."""
     global _SCRIPT_ID_MAP
     _SCRIPT_ID_MAP = {}
+    reset_round_robin()
 
 
 def _refresh_learning_state():
@@ -310,15 +320,10 @@ def _refresh_learning_state():
         oauth_file = os.path.join(WORKSPACE, ".shortsforge", "youtube_oauth.json")
         if os.path.exists(oauth_file):
             try:
-                from metrics_fetcher import get_recent_uploads
-                from performance_database import auto_match_and_fetch
-                log("[LEARNING] Fetching latest YouTube metrics...")
-                recent = get_recent_uploads(days=30, max_results=50)
-                if recent:
-                    result = auto_match_and_fetch(recent)
-                    log(f"[LEARNING] YouTube sync: {result.get('matched_count', 0)} matched, {result.get('new_metrics', 0)} new metrics")
-                else:
-                    log("[LEARNING] No recent uploads found")
+                from performance_database import sync_youtube_metrics
+                log("[LEARNING] Syncing YouTube metrics...")
+                result = sync_youtube_metrics(days=30, max_results=50)
+                log(f"[LEARNING] YouTube sync: {result.get('matched_count', 0)} matched, {result.get('new_metrics', 0)} new metrics")
             except Exception as sync_err:
                 log(f"[LEARNING] YouTube sync skipped: {sync_err}")
 
@@ -348,80 +353,18 @@ def _get_variant_weight(variant_key):
 
 def _init_round_robin(num_scripts):
     """Initialize round-robin lists - learning-weighted once per pipeline run."""
-    global _rr_variants, _rr_perspectives, _rr_voices, _rr_styles, _rr_script_index, _rr_tts_index
-    import random
-
-    all_variants = list(SCRIPT_VARIANTS.keys())
-    all_perspectives = list(SCRIPT_PERSPECTIVES)
-    all_voices = [
-        "Vindemiatrix", "Aoede", "Callirrhoe", "Gacrux", "Sulafat", "Leda",
-        "Kore", "Enceladus", "Erinome", "Despina", "Alnilam", "Laomedeia",
-        "Achernar", "Pulcherrima", "Zephyr", "Puck", "Charon", "Fenrir",
-        "Orus", "Iapetus", "Umbriel", "Algieba", "Rasalgethi", "Schedar",
-        "Sadachbia", "Sadaltager", "Achird", "Zubenelgenubi", "Algenib", "Autonoe"
-    ]
-    all_styles = list(TTS_STYLE_OPTIONS)
-
-    random.shuffle(all_perspectives)
-
-    weighted_variants = []
-    for variant in all_variants:
-        weight = _get_variant_weight(variant)
-        slots = max(1, round(weight * 2))
-        weighted_variants.extend([variant] * slots)
-
-    random.shuffle(weighted_variants)
-    _rr_variants = (weighted_variants * ((num_scripts // max(len(weighted_variants), 1)) + 2))[:num_scripts]
-
-    _rr_perspectives = (all_perspectives * ((num_scripts // max(len(all_perspectives), 1)) + 2))[:num_scripts]
-
-    if _LEARNING_TTS_WEIGHTS:
-        weighted_voices = []
-        for item in _LEARNING_TTS_WEIGHTS:
-            slots = max(1, round(item['weight'] * 3))
-            weighted_voices.extend([(item['voice'], item['style'])] * slots)
-        random.shuffle(weighted_voices)
-        voice_style_pairs = weighted_voices
-    else:
-        voice_style_pairs = [(v, s) for v in all_voices for s in all_styles]
-        random.shuffle(voice_style_pairs)
-
-    _rr_voices = [v for v, s in voice_style_pairs]
-    _rr_styles = [s for v, s in voice_style_pairs]
-
-    _rr_script_index = 0
-    _rr_tts_index = 0
-
-    log(f"[LEARNING] Round-robin: {len(_rr_variants)} variants, {len(_rr_voices)} TTS combos")
+    init_round_robin(
+        num_scripts=num_scripts,
+        variant_keys=list(SCRIPT_VARIANTS.keys()),
+        perspectives=list(SCRIPT_PERSPECTIVES),
+        variant_weights=_LEARNING_VARIANT_WEIGHTS,
+        tts_weights=_LEARNING_TTS_WEIGHTS,
+    )
+    log(f"[LEARNING] Round-robin: {len(list(SCRIPT_VARIANTS.keys()))} variants, {len(TTS_VOICES)*len(TTS_STYLE_OPTIONS)} TTS combos")
 
 def _get_next_round_robin():
     """Get next round-robin item and advance index."""
-    global _rr_script_index
-    if not _rr_variants:
-        return random.choice(list(SCRIPT_VARIANTS.keys())), random.choice(SCRIPT_PERSPECTIVES)
-
-    variant = _rr_variants[_rr_script_index] if _rr_script_index < len(_rr_variants) else random.choice(list(SCRIPT_VARIANTS.keys()))
-    perspective = _rr_perspectives[_rr_script_index] if _rr_script_index < len(_rr_perspectives) else random.choice(SCRIPT_PERSPECTIVES)
-    _rr_script_index += 1
-    return variant, perspective
-
-def _get_next_voice_style():
-    """Get next round-robin voice and style (separate from script round-robin)."""
-    global _rr_tts_index
-    if not _rr_voices:
-        all_voices = [
-            "Vindemiatrix", "Aoede", "Callirrhoe", "Gacrux", "Sulafat", "Leda",
-            "Kore", "Enceladus", "Erinome", "Despina", "Alnilam", "Laomedeia",
-            "Achernar", "Pulcherrima", "Zephyr", "Puck", "Charon", "Fenrir",
-            "Orus", "Iapetus", "Umbriel", "Algieba", "Rasalgethi", "Schedar",
-            "Sadachbia", "Sadaltager", "Achird", "Zubenelgenubi", "Algenib", "Autonoe"
-        ]
-        return random.choice(all_voices), random.choice(TTS_STYLE_OPTIONS)
-    
-    voice = _rr_voices[_rr_tts_index] if _rr_tts_index < len(_rr_voices) else random.choice(_rr_voices)
-    style = _rr_styles[_rr_tts_index] if _rr_tts_index < len(_rr_styles) else random.choice(_rr_styles)
-    _rr_tts_index += 1
-    return voice, style
+    return get_next_variant_perspective(list(SCRIPT_VARIANTS.keys()), list(SCRIPT_PERSPECTIVES))
 
 # ─── Environment ──────────────────────────────────────────────────────────────
 def load_env():
@@ -796,9 +739,6 @@ def handle_context_callback(callback_data, game_title, cb_id):
 
 # Store pending context for confirmation
 PENDING_CONTEXT = {}
-
-# Store context edit state for Telegram editing flow
-CONTEXT_EDIT_STATE = {}
 
 def handle_context_edit_input(txt, chat_id):
     """Handle context editing flow via Telegram."""
@@ -1194,11 +1134,7 @@ Edit via:
     return None
 
 def get_voice_menu():
-    voices = ["Vindemiatrix", "Aoede", "Callirrhoe", "Gacrux", "Sulafat", "Leda",
-              "Kore", "Enceladus", "Erinome", "Despina", "Alnilam", "Laomedeia",
-              "Achernar", "Pulcherrima", "Zephyr", "Puck", "Charon", "Fenrir",
-              "Orus", "Iapetus", "Umbriel", "Algieba", "Rasalgethi", "Schedar",
-              "Sadachbia", "Sadaltager", "Achird", "Zubenelgenubi", "Algenib", "Autonoe"]
+    voices = TTS_VOICES
     current = env("TTS_VOICE", "")
     keyboard = []
     for i in range(0, len(voices), 3):
@@ -1272,7 +1208,7 @@ def get_content_studio_menu():
         ]
     }
 
-def handle_menu_callback(callback_data):
+def handle_menu_callback(callback_data, cb_id=None):
     """Handle menu button callbacks."""
     if callback_data == "menu_status":
         return _get_rich_status()
@@ -1365,12 +1301,9 @@ def handle_menu_callback(callback_data):
         clear_verified_context(game)
         return "✅ Context cleared"
     elif callback_data.startswith("ctx_"):
-        # Route to context callback handler
-        # Extract cb_id from callback query if available
-        cb_id_local = None
-        # In the context of handle_menu_callback, we don't have direct access to cb_id
-        # The cb_id is handled in the listener's callback processing
-        return handle_context_callback(callback_data, env("GAME_TITLE", ""), cb_id_local)
+        # Context callbacks are routed directly in the listener with cb_id
+        # This path should not be reached for ctx_ callbacks
+        return "Use context menu directly"
     elif callback_data == "cleanup_files":
         count = cleanup_all_files()
         return f"🧹 Cleaned up {count} file(s)"
@@ -1885,7 +1818,7 @@ def _cs_generate_tts(script, voice_style):
         "Educational": ["Alnilam", "Algieba", "Schedar"]
     }
     style_voices = voices_by_style.get(voice_style, voices_by_style["Documentary"])
-    voice = style_voices[_rr_tts_index % len(style_voices)]
+    voice = style_voices[_rr_get_state()['tts_index'] % len(style_voices)]
     
     # Split script into 2 segments (~750 words each)
     words = script.split()
@@ -3325,6 +3258,7 @@ def phase_transcribe(video):
                     verified = load_verified_context(game_title)
                     final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
                     save_verified_context(game_title, final)
+                    compute_and_save_implicit_relationships(game_title, transcript_text)
                     
                     log(f"Context extracted from existing transcript: {len(final.get('characters', []))} chars, {len(final.get('relationships', []))} rels")
                     notify(f"📚 Context extracted: {len(final.get('characters', []))} chars, {len(final.get('locations', []))} locs, {len(final.get('relationships', []))} rels")
@@ -3429,6 +3363,7 @@ def phase_transcribe(video):
                 verified = load_verified_context(game_title)
                 final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
                 save_verified_context(game_title, final)
+                compute_and_save_implicit_relationships(game_title, transcript_text)
                 
                 log(f"Context extracted from transcript: {len(final.get('characters', []))} chars, {len(final.get('relationships', []))} rels")
                 notify(f"📚 Context extracted: {len(final.get('characters', []))} chars, {len(final.get('locations', []))} locs, {len(final.get('relationships', []))} rels")
@@ -3538,6 +3473,7 @@ def phase_context():
     verified = load_verified_context(game_title)
     final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
     save_verified_context(game_title, final)
+    compute_and_save_implicit_relationships(game_title, transcript_text)
 
     if not verified:
         log(f"First run for {game_title} - context auto-saved")
@@ -3620,19 +3556,6 @@ SCRIPT_VARIANTS = {
         "instruction": """Write like sharing an amazing true story with a friend. Hook immediately with something incredible or unexpected. Build naturally with vivid details. Include a pattern interrupt with 'but here is the crazy part' or 'and that is when everything changed'. End with impact, loop back to the hook, and add CTA. Target 75-150 words.""",
     },
 }
-
-TTS_STYLE_OPTIONS = [
-    "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments.",
-    "Speak confidently and authoritatively. Explain causes and effects clearly, like an expert.",
-    "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-    "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-    "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-    "Speak like a professional news reporter. Clear, factual, objective. Present information in order.",
-    "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
-    "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-    "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
-    "Speak like sharing an incredible story with a friend. Conversational, engaging, hook them early.",
-]
 
 
 def _get_variant_performance_text(variant_key):
@@ -4125,6 +4048,23 @@ def phase_scripts(json_file, duration, num_hours, video=None):
             log(f"   Script {i}: {wc} words (source: {best_metadata.get('source', 'unknown')})")
             scripts_generated += 1
             
+            # Extract title for DB storage and validation
+            title_match = re.search(r'^TITLE:\s*(.+)$', best_script, re.MULTILINE)
+            if not title_match:
+                log(f"   WARNING: Script {i} missing TITLE: line — recovering from first line...")
+                lines = best_script.strip().split('\n')
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith('#'):
+                        recovered = stripped[:80]
+                        best_script = f"TITLE: {recovered}\n\n{best_script}"
+                        log(f"   Recovered title: {recovered}")
+                        with open(out, "w") as f:
+                            f.write(best_script)
+                        break
+            else:
+                log(f"   Script title: {title_match.group(1)}")
+            
             # Store script in performance database for learning
             if PERFORMANCE_DB_AVAILABLE and LEARNING_ENGINE_AVAILABLE:
                 try:
@@ -4448,7 +4388,7 @@ def phase_tts(duration, num_hours, video=None):
         set_status("Phase 6 FAILED")
         raise RuntimeError("GEMINI_API_KEY not configured")
 
-    if not _rr_voices:
+    if _rr_get_state()['voices'] == 0:
         _init_round_robin(num_hours)
     
     set_status("Phase 6: Generating TTS...")
@@ -4482,7 +4422,7 @@ def phase_tts(duration, num_hours, video=None):
                 tts_text = _strip_title(txt)
                 
                 # Use round-robin voice and style
-                rr_voice, rr_style = _get_next_voice_style()
+                rr_voice, rr_style = get_next_voice_style()
                 log(f"   Using voice: {rr_voice}, style: {rr_style[:40]}...")
                 
                 _tts_api(tts_text, pcm, rr_voice, rr_style)
@@ -5368,14 +5308,7 @@ WantedBy=default.target
         print("No updates available.")
 
     # Rotate TTS voice on each listener start (all voices - male and female)
-    all_voices = [
-        "Vindemiatrix", "Aoede", "Callirrhoe", "Gacrux", "Sulafat", "Leda",
-        "Kore", "Enceladus", "Erinome", "Despina", "Alnilam", "Laomedeia",
-        "Achernar", "Pulcherrima", "Zephyr", "Puck", "Charon", "Fenrir",
-        "Orus", "Iapetus", "Umbriel", "Algieba", "Rasalgethi", "Schedar",
-        "Sadachbia", "Sadaltager", "Achird", "Zubenelgenubi", "Algenib", "Autonoe"
-    ]
-    rotated_voice = random.choice(all_voices)
+    rotated_voice = random.choice(TTS_VOICES)
     
     # Also rotate TTS style randomly
     rotated_style = random.choice(TTS_STYLE_OPTIONS)
@@ -5390,16 +5323,14 @@ WantedBy=default.target
     if os.path.exists(oauth_file):
         print("[BACKGROUND] Syncing YouTube metrics...")
         try:
-            from metrics_fetcher import get_recent_uploads
-            from performance_database import auto_match_and_fetch
-            recent = get_recent_uploads(days=30, max_results=50)
-            if recent:
-                result = auto_match_and_fetch(recent)
-                synced = result.get('matched_count', 0)
-                new_metrics = result.get('new_metrics', 0)
-                print(f"[BACKGROUND] YouTube sync: {synced} matched, {new_metrics} new metrics")
-                if synced > 0 or new_metrics > 0:
-                    tg_send(f"📊 YouTube sync complete: {synced} matched, {new_metrics} new metrics")
+            from performance_database import sync_youtube_metrics
+            print("[BACKGROUND] Syncing YouTube metrics...")
+            result = sync_youtube_metrics(days=30, max_results=50)
+            synced = result.get('matched_count', 0)
+            new_metrics = result.get('new_metrics', 0)
+            print(f"[BACKGROUND] YouTube sync: {synced} matched, {new_metrics} new metrics")
+            if synced > 0 or new_metrics > 0:
+                tg_send(f"📊 YouTube sync complete: {synced} matched, {new_metrics} new metrics")
         except Exception as sync_err:
             print(f"[BACKGROUND] YouTube sync failed: {sync_err}")
 
@@ -5683,11 +5614,7 @@ def onboard():
         config["PLAYLIST_URL"] = ask("PLAYLIST_URL", "YouTube Playlist URL",
             lambda v: v.startswith("https://www.youtube.com/playlist?list="))
 
-        voices = ["Zephyr","Puck","Charon","Kore","Fenrir","Leda","Orus","Aoede",
-                  "Callirhoe","Autonoe","Enceladus","Iapetus","Umbriel","Algieba",
-                  "Despina","Erinome","Algenib","Rasalgethi","Schedar","Gacrux",
-                  "Pulcherrima","Achird","Zubenelgenubi","Vindemiatrix","Sadachbia",
-                  "Sadaltager","Sulafat","Achernar","Alnilam","Laomedeia"]
+        voices = TTS_VOICES
         default_voice = existing.get("TTS_VOICE", "Vindemiatrix") or "Vindemiatrix"
         default_idx = voices.index(default_voice) + 1 if default_voice in voices else 24
         print(f"\n  TTS Voice (pick a number):")

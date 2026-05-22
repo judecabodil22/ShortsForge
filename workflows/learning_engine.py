@@ -10,6 +10,11 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
 
+try:
+    from constants import calculate_readability, calculate_hook_strength
+except ImportError:
+    from workflows.constants import calculate_readability, calculate_hook_strength
+
 WORKSPACE = os.path.expanduser("~/ShortsForge")
 
 
@@ -270,50 +275,6 @@ def extract_nlp_features(script_text: str) -> Dict[str, Any]:
     return features
 
 
-def calculate_readability(text: str) -> float:
-    """Calculate readability score (Flesch Reading Ease approximation)."""
-    sentences = re.split(r'[.!?]+', text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    words = text.split()
-    
-    if not sentences or not words:
-        return 0
-    
-    num_sentences = len(sentences)
-    num_words = len(words)
-    num_syllables = sum(count_syllables(word) for word in words)
-    
-    if num_sentences == 0 or num_words == 0:
-        return 0
-    
-    avg_sentence_length = num_words / num_sentences
-    avg_syllables_per_word = num_syllables / num_words
-    
-    score = 206.835 - (1.015 * avg_sentence_length) - (84.6 * avg_syllables_per_word)
-    return max(0, min(100, score))
-
-
-def count_syllables(word: str) -> int:
-    """Count syllables in a word."""
-    word = word.lower()
-    vowels = 'aeiouy'
-    count = 0
-    prev_was_vowel = False
-    
-    for char in word:
-        is_vowel = char in vowels
-        if is_vowel and not prev_was_vowel:
-            count += 1
-        prev_was_vowel = is_vowel
-    
-    if word.endswith('e'):
-        count -= 1
-    if count <= 0:
-        count = 1
-    
-    return count
-
-
 def calculate_sentiment(text: str) -> float:
     """Calculate sentiment polarity (-1 to 1)."""
     positive_words = {
@@ -363,40 +324,6 @@ def calculate_emotional_intensity(text: str) -> float:
     
     intensity = min(1.0, (exclamation_density * 0.3 + emotional_density * 0.7))
     return intensity
-
-
-def calculate_hook_strength(script_text: str) -> float:
-    """Calculate hook strength based on opening line analysis."""
-    lines = script_text.strip().split('\n')
-    if not lines:
-        return 0
-    
-    first_line = lines[0].lower()
-    strength = 0
-    
-    hook_starters = [
-        'what nobody tells you', 'secret', 'truth about', 'never realized',
-        'here\'s why', 'the reality is', 'you need to know', 'did you know',
-        'discover', 'uncover', 'revealed', 'shocking', 'amazing'
-    ]
-    
-    for starter in hook_starters:
-        if starter in first_line:
-            strength += 0.3
-    
-    if first_line.startswith('i\'m ') or first_line.startswith('i '):
-        strength += 0.1
-    
-    if any(word in first_line for word in ['never', 'always', 'everyone', 'nobody']):
-        strength += 0.2
-    
-    if re.search(r'\d+', first_line):
-        strength += 0.15
-    
-    if '?' in first_line:
-        strength += 0.2
-    
-    return min(1.0, strength)
 
 
 def calculate_power_word_density(text: str) -> float:

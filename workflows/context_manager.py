@@ -14,7 +14,6 @@ Key features:
 import os
 import json
 import re
-import subprocess
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 
@@ -150,7 +149,6 @@ def sync_context_to_mempalace(game_title: str, context: Dict[str, Any]) -> Dict[
     
     return result
 
-WORKSPACE = _get_workspace()
 CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
 
 VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")

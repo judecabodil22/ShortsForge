@@ -4,24 +4,23 @@
 
 @layer base {
   :root {
-    --cyber-black: #09090b;
-    --cyber-dark: #18181b;
-    --cyber-card: #27272a;
-    --cyber-border: #3f3f46;
-    --cyber-cyan: #22d3ee;
-    --cyber-magenta: #e879f9;
-    --cyber-yellow: #facc15;
-    --cyber-green: #4ade80;
-    --cyber-orange: #fb923c;
-    --cyber-red: #f87171;
+    --40k-black: #0a0505;
+    --40k-dark: #140808;
+    --40k-card: #1c0e0e;
+    --40k-border: #4a2828;
+    --40k-crimson: #7a1029;
+    --40k-crimson-bright: #b71c3a;
+    --40k-gold: #c9a227;
+    --40k-gold-dim: #8b7312;
+    --40k-gold-bright: #e8c547;
   }
 
   * {
-    @apply border-cyber-border;
+    @apply border-40k-border;
   }
 
   body {
-    @apply bg-cyber-black text-zinc-200 font-mono;
+    @apply bg-40k-black text-stone-200 font-mono;
   }
 
   ::-webkit-scrollbar {
@@ -29,62 +28,95 @@
     height: 8px;
   }
   ::-webkit-scrollbar-track {
-    @apply bg-cyber-dark;
+    @apply bg-40k-dark;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-cyber-border rounded;
+    @apply bg-40k-border rounded;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-cyber-cyan/50;
+    @apply bg-40k-gold/50;
+  }
+
+  input[type='range'] {
+    @apply accent-40k-gold;
   }
 }
 
 @layer components {
-  .cyber-card {
-    @apply bg-cyber-card border border-cyber-border rounded-lg p-4;
-    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.05);
+  .cyber-card,
+  .imperium-card {
+    @apply bg-40k-card border border-40k-border rounded-lg p-4;
+    box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.08);
   }
 
-  .cyber-card-hover {
-    @apply cyber-card transition-all duration-200;
+  .cyber-card-hover,
+  .imperium-card-hover {
+    @apply imperium-card transition-all duration-200;
   }
 
-  .cyber-card-hover:hover {
-    @apply border-cyber-cyan/50;
-    box-shadow: 0 0 15px rgba(34, 211, 238, 0.15);
+  .cyber-card-hover:hover,
+  .imperium-card-hover:hover {
+    @apply border-40k-gold/50;
+    box-shadow: 0 0 15px rgba(201, 162, 39, 0.2);
   }
 
-  .cyber-button {
+  .cyber-button,
+  .imperium-button {
     @apply px-4 py-2 rounded font-medium transition-all duration-200;
-    @apply bg-cyber-card border border-cyber-border text-zinc-200;
+    @apply bg-40k-card border border-40k-border text-stone-200;
   }
 
-  .cyber-button:hover {
-    @apply border-cyber-cyan text-cyber-cyan;
-    box-shadow: 0 0 12px rgba(34, 211, 238, 0.3);
+  .cyber-button:hover,
+  .imperium-button:hover {
+    @apply border-40k-gold text-40k-gold;
+    box-shadow: 0 0 12px rgba(201, 162, 39, 0.25);
   }
 
-  .cyber-button-primary {
-    @apply cyber-button bg-cyber-cyan/10 border-cyber-cyan/30 text-cyber-cyan;
+  .cyber-button-primary,
+  .imperium-button-primary {
+    @apply imperium-button bg-40k-gold/10 border-40k-gold/40 text-40k-gold;
   }
 
-  .cyber-button-primary:hover {
-    @apply bg-cyber-cyan/20 border-cyber-cyan;
-    box-shadow: 0 0 20px rgba(34, 211, 238, 0.4);
+  .cyber-button-primary:hover,
+  .imperium-button-primary:hover {
+    @apply bg-40k-gold/20 border-40k-gold;
+    box-shadow: 0 0 20px rgba(201, 162, 39, 0.35);
   }
 
-  .cyber-input {
-    @apply w-full px-3 py-2 rounded bg-cyber-dark border border-cyber-border;
-    @apply text-zinc-200 placeholder-zinc-500;
-    @apply focus:outline-none focus:border-cyber-cyan/50 focus:ring-1 focus:ring-cyber-cyan/30;
+  .cyber-input,
+  .imperium-input {
+    @apply w-full px-3 py-2 rounded bg-40k-dark border border-40k-border;
+    @apply text-stone-200 placeholder-stone-500;
+    @apply focus:outline-none focus:border-40k-gold/50 focus:ring-1 focus:ring-40k-gold/30;
   }
 
   .nav-item {
     @apply flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200;
-    @apply text-zinc-400 hover:text-cyber-cyan hover:bg-cyber-card/50;
+    @apply text-stone-400 hover:text-40k-gold hover:bg-40k-card/50;
   }
 
   .nav-item-active {
-    @apply nav-item bg-cyber-cyan/10 text-cyber-cyan border-l-2 border-cyber-cyan;
+    @apply nav-item bg-40k-gold/10 text-40k-gold border-l-2 border-40k-crimson;
+  }
+
+  .scanline-overlay {
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(122, 16, 41, 0.03) 2px,
+      rgba(122, 16, 41, 0.03) 4px
+    );
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(201, 162, 39, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(201, 162, 39, 0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
 }

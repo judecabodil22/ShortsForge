@@ -40,20 +40,21 @@ export default function Layout({ children }: LayoutProps) {
       <motion.aside 
         initial={false}
         animate={{ width: sidebarCollapsed ? 80 : 240 }}
-        className="flex flex-col bg-cyber-dark border-r border-cyber-border"
+        className="flex flex-col bg-40k-dark border-r border-40k-border"
       >
         {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-5 border-b border-cyber-border">
-          <div className="w-10 h-10 rounded-lg bg-cyber-cyan/20 border border-cyber-cyan/30 flex items-center justify-center">
-            <Zap className="w-6 h-6 text-cyber-cyan" />
+        <div className="flex items-center gap-3 px-4 py-5 border-b border-40k-border">
+          <div className="w-10 h-10 rounded-lg bg-40k-crimson/30 border border-40k-gold/40 flex items-center justify-center">
+            <Zap className="w-6 h-6 text-40k-gold-bright" />
           </div>
           {!sidebarCollapsed && (
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="font-display font-bold text-xl text-cyber-cyan"
+              className="font-display font-bold text-xl"
             >
-              SHORTS<span className="text-white">FORGE</span>
+              <span className="text-40k-gold">SHORTS</span>
+              <span className="text-40k-crimson-bright">FORGE</span>
             </motion.div>
           )}
         </div>
@@ -88,7 +89,7 @@ export default function Layout({ children }: LayoutProps) {
         {/* Collapse Button */}
         <button
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          className="p-4 border-t border-cyber-border text-gray-500 hover:text-cyber-cyan transition-colors"
+          className="p-4 border-t border-40k-border text-gray-500 hover:text-40k-gold transition-colors"
         >
           {sidebarCollapsed ? '→' : '←'}
         </button>
@@ -97,30 +98,30 @@ export default function Layout({ children }: LayoutProps) {
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <header className="flex items-center justify-between px-6 py-4 border-b border-cyber-border bg-cyber-dark/50">
+        <header className="flex items-center justify-between px-6 py-4 border-b border-40k-border bg-40k-dark/50">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-cyber-green animate-pulse" />
+              <Activity className="w-4 h-4 text-40k-gold-dim animate-pulse" />
               <span className="text-sm text-gray-400">System Online</span>
             </div>
           </div>
           
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-cyber-card border border-cyber-border">
-              <span className="w-2 h-2 rounded-full bg-cyber-green animate-pulse" />
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-40k-card border border-40k-border">
+              <span className="w-2 h-2 rounded-full bg-40k-gold-dim animate-pulse" />
               <span className="text-xs text-gray-400">Auto-sync: Active</span>
             </div>
           </div>
         </header>
 
         {/* Page Content */}
-        <div className="flex-1 overflow-hidden relative bg-cyber-dark/30 grid-bg">
+        <div className="flex-1 overflow-hidden relative bg-40k-dark/30 grid-bg">
           {children}
         </div>
 
         {/* Footer */}
-        <footer className="px-6 py-3 border-t border-cyber-border bg-cyber-dark/50 flex items-center justify-between text-xs text-gray-500">
-          <span>ShortsForge v2.0.0 | Cyberpunk Edition</span>
+        <footer className="px-6 py-3 border-t border-40k-border bg-40k-dark/50 flex items-center justify-between text-xs text-gray-500">
+          <span>ShortsForge v2.0.0 | Imperium Edition</span>
           <span>Workspace: ~/ShortsForge</span>
         </footer>
       </main>

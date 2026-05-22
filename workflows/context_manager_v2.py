@@ -6,10 +6,12 @@ Advanced context management with editor, search, and analytics.
 import os
 import json
 import uuid
-import glob
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Callable
-from functools import lru_cache
+
+try:
+    from workflows.context_manager import load_markdown_context
+except ImportError:
+    from context_manager import load_markdown_context
 
 WORKSPACE = os.path.expanduser("~/ShortsForge")
 CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
@@ -149,9 +151,18 @@ class ContextManagerV2:
         self.load_all_contexts()
     
     def load_all_contexts(self):
-        """Load all games' contexts from verified_context.json."""
+        """Load all games' contexts from verified_context.json.
+        
+        Uses file mtime caching to avoid re-reading when the file hasn't changed.
+        """
+        import time
         if not os.path.exists(VERIFIED_CONTEXT_FILE):
             return
+        
+        # Check if file has changed since last load
+        current_mtime = os.path.getmtime(VERIFIED_CONTEXT_FILE)
+        if hasattr(self, '_context_mtime') and self._context_mtime == current_mtime:
+            return  # File unchanged, skip reload
         
         try:
             with open(VERIFIED_CONTEXT_FILE, "r") as f:
@@ -199,16 +210,89 @@ class ContextManagerV2:
                         item.game_key = game_key
                         item.type = "relationship"
                     elif isinstance(rel, dict):
+                        from_name = (rel.get("from") or "").strip()
+                        to_name = (rel.get("to") or "").strip()
+                        rel_type = (rel.get("relationship") or rel.get("type") or "").strip()
+                        label = f"{from_name} ↔ {to_name}" if from_name and to_name else from_name or to_name or "relationship"
                         item = ContextItem(
-                            game_key, "relationship",
-                            f"{rel.get('from', '')} ↔ {rel.get('to', '')}",
-                            category=rel.get("relationship", "")
+                            game_key,
+                            "relationship",
+                            label,
+                            category=rel_type,
+                            metadata={
+                                "from": from_name,
+                                "to": to_name,
+                                "relationship": rel_type,
+                            },
                         )
                     else:
                         item = ContextItem(game_key, "relationship", str(rel))
                     self.contexts[game_key]["relationship"].append(item)
+
+                # Merge Obsidian markdown (entities + relationship tables)
+                self._merge_markdown_context(game_key)
+
+            # Track file mtime to skip future reloads if unchanged
+            self._context_mtime = current_mtime
         except Exception as e:
             print(f"Error loading contexts: {e}")
+
+    def _merge_markdown_context(self, game_key: str):
+        """Add entities/relationships from Context/{game_key}/*.md not already in memory."""
+        md = load_markdown_context(game_key)
+        if game_key not in self.contexts:
+            self.contexts[game_key] = {
+                "character": [], "location": [], "term": [], "relationship": []
+            }
+
+        def _names(items):
+            return {i.name.lower() for i in items}
+
+        for char in md.get("characters", []):
+            if char.lower() not in _names(self.contexts[game_key]["character"]):
+                self.contexts[game_key]["character"].append(
+                    ContextItem(game_key, "character", char, source="markdown")
+                )
+        for loc in md.get("locations", []):
+            if loc.lower() not in _names(self.contexts[game_key]["location"]):
+                self.contexts[game_key]["location"].append(
+                    ContextItem(game_key, "location", loc, source="markdown")
+                )
+        for term in md.get("key_terms", []):
+            if term.lower() not in _names(self.contexts[game_key]["term"]):
+                self.contexts[game_key]["term"].append(
+                    ContextItem(game_key, "term", term, source="markdown")
+                )
+
+        existing_rel_keys = set()
+        for item in self.contexts[game_key]["relationship"]:
+            meta = item.metadata or {}
+            k = (meta.get("from", "").lower(), meta.get("to", "").lower())
+            if k[0] and k[1]:
+                existing_rel_keys.add(k)
+
+        for rel in md.get("relationships", []):
+            if not isinstance(rel, dict):
+                continue
+            from_n = (rel.get("from") or "").strip()
+            to_n = (rel.get("to") or "").strip()
+            if not from_n or not to_n or from_n.lower() == to_n.lower():
+                continue
+            key = (from_n.lower(), to_n.lower())
+            if key in existing_rel_keys:
+                continue
+            existing_rel_keys.add(key)
+            rel_type = (rel.get("relationship") or "related").strip()
+            self.contexts[game_key]["relationship"].append(
+                ContextItem(
+                    game_key,
+                    "relationship",
+                    f"{from_n} ↔ {to_n}",
+                    category=rel_type,
+                    source="markdown",
+                    metadata={"from": from_n, "to": to_n, "relationship": rel_type},
+                )
+            )
     
     def get_games(self) -> List[str]:
         """Get list of all game keys."""
@@ -461,3 +545,133 @@ def import_context(game_key: str, items: List[Dict]) -> Dict:
 
 def export_context(game_key: str, item_type: str = None) -> List[Dict]:
     return get_context_manager().export_items(game_key, item_type)
+
+
+# ─── v1-compatible facade (unified interface for pipeline) ────────────────────
+
+def load_verified_context(game_title: str) -> Dict[str, Any]:
+    """Load verified context for a game (v1-compatible)."""
+    cm = get_context_manager()
+    cm.load_all_contexts()
+    game_key = game_title.lower().replace(" ", "_").strip()
+    if game_key not in cm.contexts:
+        return {}
+    ctx = cm.contexts[game_key]
+    return {
+        "characters": [i.to_dict() for i in ctx.get("character", [])],
+        "locations": [i.to_dict() for i in ctx.get("location", [])],
+        "key_terms": [i.to_dict() for i in ctx.get("term", [])],
+        "relationships": [i.to_dict() for i in ctx.get("relationship", [])],
+    }
+
+
+def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool = False) -> None:
+    """Save verified context for a game (v1-compatible).
+    
+    Stores raw dict format for backward compatibility with v1 consumers.
+    """
+    cm = get_context_manager()
+    game_key = game_title.lower().replace(" ", "_").strip()
+    
+    if merge:
+        cm.load_all_contexts()
+        existing = cm.contexts.get(game_key, {})
+        from context_manager import merge_context_dicts
+        raw_existing = {
+            "characters": [i.to_dict() if hasattr(i, 'to_dict') else i for i in existing.get("character", [])],
+            "locations": [i.to_dict() if hasattr(i, 'to_dict') else i for i in existing.get("location", [])],
+            "key_terms": [i.to_dict() if hasattr(i, 'to_dict') else i for i in existing.get("term", [])],
+            "relationships": [i.to_dict() if hasattr(i, 'to_dict') else i for i in existing.get("relationship", [])],
+        }
+        context = merge_context_dicts(raw_existing, context)
+    
+    # Store as raw dict (v1 format) for backward compatibility
+    import json
+    all_data = {}
+    if os.path.exists(VERIFIED_CONTEXT_FILE):
+        try:
+            with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                all_data = json.load(f)
+        except Exception:
+            pass
+    
+    all_data[game_key] = {
+        "context": context,
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "source": "user_approved"
+    }
+    
+    os.makedirs(CONTEXT_DIR, exist_ok=True)
+    with open(VERIFIED_CONTEXT_FILE, "w") as f:
+        json.dump(all_data, f, indent=2)
+    
+    # Invalidate cache so next load picks up changes
+    if hasattr(cm, '_context_mtime'):
+        del cm._context_mtime
+
+
+def clear_verified_context(game_title: str) -> None:
+    """Clear verified context for a game (v1-compatible)."""
+    import json
+    game_key = game_title.lower().replace(" ", "_").strip()
+    if not os.path.exists(VERIFIED_CONTEXT_FILE):
+        return
+    try:
+        with open(VERIFIED_CONTEXT_FILE, "r") as f:
+            all_data = json.load(f)
+        if game_key in all_data:
+            del all_data[game_key]
+            with open(VERIFIED_CONTEXT_FILE, "w") as f:
+                json.dump(all_data, f, indent=2)
+    except Exception:
+        pass
+    
+    cm = get_context_manager()
+    if game_key in cm.contexts:
+        del cm.contexts[game_key]
+    if hasattr(cm, '_context_mtime'):
+        del cm._context_mtime
+
+
+def get_verified_context_for_validation(game_title: str) -> Dict[str, Any]:
+    """Get context for validation (v1-compatible)."""
+    return load_verified_context(game_title)
+
+
+def compare_context_with_history(game_title: str, new_context: Dict[str, Any]) -> Dict[str, Any]:
+    """Compare new context with history (v1-compatible stub)."""
+    return {"changes": [], "game": game_title}
+
+
+def format_context_for_confirmation(game_title: str, context: Dict[str, Any]) -> str:
+    """Format context for Telegram confirmation (v1-compatible)."""
+    lines = [f"Context for {game_title}:"]
+    for key, items in context.items():
+        if isinstance(items, list):
+            lines.append(f"\n{key}:")
+            for item in items:
+                if isinstance(item, dict):
+                    lines.append(f"  - {item.get('name', str(item))}")
+                else:
+                    lines.append(f"  - {item}")
+    return "\n".join(lines)
+
+
+def is_first_run(game_title: str) -> bool:
+    """Check if this is the first context run for a game (v1-compatible)."""
+    game_key = game_title.lower().replace(" ", "_").strip()
+    return not os.path.exists(VERIFIED_CONTEXT_FILE) or game_key not in (
+        json.load(open(VERIFIED_CONTEXT_FILE)) if os.path.exists(VERIFIED_CONTEXT_FILE) else {}
+    )
+
+
+def compute_and_save_implicit_relationships(game_title: str, transcript_text: str) -> Dict[str, Any]:
+    """Compute and save implicit relationships (v1-compatible)."""
+    from context_manager import compute_and_save_implicit_relationships as v1_compute
+    return v1_compute(game_title, transcript_text)
+
+
+def save_implicit_relationships(game_title: str, implicit_edges: list) -> None:
+    """Save implicit relationships (v1-compatible)."""
+    from context_manager import save_implicit_relationships as v1_save
+    v1_save(game_title, implicit_edges)

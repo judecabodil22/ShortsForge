@@ -24,20 +24,21 @@ interface PipelineStatus {
 const PHASE_MAP: Record<string, number> = {
   'download': 1,
   'transcribe': 2,
-  'scripts': 3,
-  'clip': 4,
-  'tts': 5,
-  'upload': 6,
+  'context': 3,
+  'scripts': 4,
+  'clips': 5,
+  'tts': 6,
 }
 
-const PHASE_ORDER = ['download', 'transcribe', 'scripts', 'clip', 'tts', 'upload']
+const PHASE_ORDER = ['download', 'transcribe', 'context', 'scripts', 'clips', 'tts']
 
 const initialPhases: Phase[] = [
   { id: 'p1', name: 'Download', description: 'Download or import videos', enabled: true, videoSource: 'youtube' },
   { id: 'p2', name: 'Transcribe', description: 'Convert audio to text with timestamps', enabled: true },
-  { id: 'p3', name: 'Scripts', description: 'Generate AI-powered narration scripts', enabled: true },
-  { id: 'p4', name: 'Clip', description: 'Extract video clips based on scene detection', enabled: true },
-  { id: 'p5', name: 'TTS', description: 'Create AI voice narration with subtitles', enabled: true },
+  { id: 'p3', name: 'Context', description: 'Extract and verify game context', enabled: true },
+  { id: 'p4', name: 'Scripts', description: 'Generate AI-powered narration scripts', enabled: true },
+  { id: 'p5', name: 'Clips', description: 'Extract video clips based on scene detection', enabled: true },
+  { id: 'p6', name: 'TTS', description: 'Create AI voice narration with subtitles', enabled: true },
 ]
 
 export default function Pipeline() {
@@ -215,10 +216,10 @@ export default function Pipeline() {
   }
 
   const getLogColor = (log: string): string => {
-    if (log.includes('ERROR') || log.includes('error:')) return 'text-cyber-red'
-    if (log.includes('WARNING') || log.includes('warn')) return 'text-cyber-orange'
-    if (log.includes('SUCCESS') || log.includes('complete') || log.includes('Done')) return 'text-cyber-green'
-    if (log.includes('Starting') || log.includes('Processing')) return 'text-cyber-cyan'
+    if (log.includes('ERROR') || log.includes('error:')) return 'text-40k-red-bright'
+    if (log.includes('WARNING') || log.includes('warn')) return 'text-40k-bronze'
+    if (log.includes('SUCCESS') || log.includes('complete') || log.includes('Done')) return 'text-40k-gold-dim'
+    if (log.includes('Starting') || log.includes('Processing')) return 'text-40k-gold'
     return 'text-gray-300'
   }
 
@@ -238,7 +239,7 @@ export default function Pipeline() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-cyber-cyan">PIPELINE</span> CONTROL
+            <span className="text-40k-gold">PIPELINE</span> CONTROL
           </h1>
           <p className="text-gray-400 mt-1">
             {pipelineStatus.running ? `Running: ${pipelineStatus.current_phase}` : 'Configure and run the pipeline'}
@@ -279,25 +280,25 @@ export default function Pipeline() {
 
       {/* Pipeline Status Card */}
       <Card className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-r from-cyber-cyan/5 to-cyber-magenta/5" />
+        <div className="absolute inset-0 bg-gradient-to-r from-40k-gold/5 to-40k-crimson-bright/5" />
         <div className="relative">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-display font-semibold text-white flex items-center gap-2">
-              <Activity className="w-5 h-5 text-cyber-cyan" />
+              <Activity className="w-5 h-5 text-40k-gold" />
               Pipeline Status
               {pipelineStatus.running && (
                 <motion.span
                   animate={{ opacity: [1, 0.5, 1] }}
                   transition={{ duration: 1.5, repeat: Infinity }}
-                  className="w-2 h-2 rounded-full bg-cyber-green"
+                  className="w-2 h-2 rounded-full bg-40k-gold-dim"
                 />
               )}
             </h3>
             <div className={`px-3 py-1 rounded-full text-sm font-medium ${
               pipelineStatus.running 
-                ? 'bg-cyber-green/20 text-cyber-green' 
+                ? 'bg-40k-gold-dim/20 text-40k-gold-dim' 
                 : pipelineStatus.error
-                  ? 'bg-cyber-red/20 text-cyber-red'
+                  ? 'bg-40k-red-bright/20 text-40k-red-bright'
                   : 'bg-gray-500/20 text-gray-400'
             }`}>
               {pipelineStatus.error ? 'Error' : pipelineStatus.running ? 'Running' : 'Idle'}
@@ -307,17 +308,17 @@ export default function Pipeline() {
           {/* Phase Timeline */}
           <div className="relative">
             <div className="flex items-center justify-between mb-4">
-              {PHASE_ORDER.slice(0, 5).map((phase, idx) => {
+              {PHASE_ORDER.map((phase, idx) => {
                 const phaseStatus = getPhaseStatus(phase)
                 const phaseName = phase.charAt(0).toUpperCase() + phase.slice(1)
                 return (
                   <div key={phase} className="flex flex-col items-center flex-1">
                     <motion.div
                       className={`w-10 h-10 rounded-full flex items-center justify-center border-2 ${
-                        phaseStatus === 'complete' ? 'bg-cyber-green border-cyber-green' :
-                        phaseStatus === 'running' ? 'bg-cyber-cyan border-cyber-cyan animate-pulse' :
-                        phaseStatus === 'error' ? 'bg-cyber-red border-cyber-red' :
-                        'bg-cyber-dark border-cyber-border'
+                        phaseStatus === 'complete' ? 'bg-40k-gold-dim border-40k-gold-dim' :
+                        phaseStatus === 'running' ? 'bg-40k-gold border-40k-gold animate-pulse' :
+                        phaseStatus === 'error' ? 'bg-40k-red-bright border-40k-red-bright' :
+                        'bg-40k-dark border-40k-border'
                       }`}
                       animate={phaseStatus === 'running' ? { scale: [1, 1.1, 1] } : {}}
                       transition={{ duration: 1, repeat: Infinity }}
@@ -332,7 +333,7 @@ export default function Pipeline() {
                         <span className="text-sm font-bold text-gray-500">{idx + 1}</span>
                       )}
                     </motion.div>
-                    <span className={`text-xs mt-2 text-center ${phaseStatus === 'running' ? 'text-cyber-cyan' : 'text-gray-500'}`}>
+                    <span className={`text-xs mt-2 text-center ${phaseStatus === 'running' ? 'text-40k-gold' : 'text-gray-500'}`}>
                       {phaseName}
                     </span>
                   </div>
@@ -341,9 +342,9 @@ export default function Pipeline() {
             </div>
 
             {/* Progress Bar */}
-            <div className="h-2 bg-cyber-dark rounded-full overflow-hidden">
+            <div className="h-2 bg-40k-dark rounded-full overflow-hidden">
               <motion.div 
-                className="h-full bg-gradient-to-r from-cyber-cyan to-cyber-magenta"
+                className="h-full bg-gradient-to-r from-40k-gold to-40k-crimson-bright"
                 animate={{ width: pipelineStatus.running ? `${pipelineStatus.progress}%` : '0%' }}
                 transition={{ type: 'spring', stiffness: 50, damping: 20 }}
               />
@@ -352,7 +353,7 @@ export default function Pipeline() {
             {/* Status Message */}
             <div className="flex justify-between mt-2 text-xs text-gray-500">
               <span>{pipelineStatus.progress}%</span>
-              <span className="text-cyber-cyan">{pipelineStatus.message || (pipelineStatus.running ? 'Processing...' : 'Ready')}</span>
+              <span className="text-40k-gold">{pipelineStatus.message || (pipelineStatus.running ? 'Processing...' : 'Ready')}</span>
             </div>
           </div>
 
@@ -361,9 +362,9 @@ export default function Pipeline() {
             <motion.div 
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="mt-4 p-3 bg-cyber-red/10 border border-cyber-red/30 rounded-lg"
+              className="mt-4 p-3 bg-40k-red-bright/10 border border-40k-red-bright/30 rounded-lg"
             >
-              <div className="flex items-center gap-2 text-cyber-red text-sm font-medium mb-1">
+              <div className="flex items-center gap-2 text-40k-red-bright text-sm font-medium mb-1">
                 <AlertCircle className="w-4 h-4" />
                 Error
               </div>
@@ -376,17 +377,17 @@ export default function Pipeline() {
       {/* Live Logs Panel */}
       <Card className="p-0 overflow-hidden">
         <div 
-          className="flex items-center justify-between p-4 cursor-pointer hover:bg-cyber-dark/50 transition-colors"
+          className="flex items-center justify-between p-4 cursor-pointer hover:bg-40k-dark/50 transition-colors"
           onClick={() => setExpandedLogs(!expandedLogs)}
         >
           <div className="flex items-center gap-2">
-            <Terminal className="w-5 h-5 text-cyber-cyan" />
+            <Terminal className="w-5 h-5 text-40k-gold" />
             <h3 className="text-lg font-display font-semibold text-white">Live Logs</h3>
             {pipelineStatus.running && (
               <motion.div
                 animate={{ opacity: [1, 0.3, 1] }}
                 transition={{ duration: 0.8, repeat: Infinity }}
-                className="w-2 h-2 rounded-full bg-cyber-green"
+                className="w-2 h-2 rounded-full bg-40k-gold-dim"
               />
             )}
             <span className="text-xs text-gray-500">({liveLogs.length} lines)</span>
@@ -404,7 +405,7 @@ export default function Pipeline() {
               exit={{ height: 0, opacity: 0 }}
               className="overflow-hidden"
             >
-              <div className="h-[300px] bg-cyber-dark border-t border-cyber-border p-4 overflow-y-auto font-mono text-xs space-y-1">
+              <div className="h-[300px] bg-40k-dark border-t border-40k-border p-4 overflow-y-auto font-mono text-xs space-y-1">
                 {liveLogs.length > 0 ? (
                   liveLogs.map((log, i) => (
                     <motion.div 
@@ -432,7 +433,7 @@ export default function Pipeline() {
 
         {/* Compact Log Preview */}
         {!expandedLogs && liveLogs.length > 0 && (
-          <div className="h-16 bg-cyber-dark border-t border-cyber-border px-4 py-2 overflow-hidden font-mono text-xs">
+          <div className="h-16 bg-40k-dark border-t border-40k-border px-4 py-2 overflow-hidden font-mono text-xs">
             <div className={`text-gray-300 truncate`}>
               {liveLogs[liveLogs.length - 1]}
             </div>
@@ -451,26 +452,26 @@ export default function Pipeline() {
               <Reorder.Item key={phase.id} value={phase}>
                 <Card hoverable className="relative overflow-hidden group cursor-grab active:cursor-grabbing">
                   <motion.div 
-                    className="absolute top-0 left-0 h-full bg-cyber-cyan/5 transition-all"
+                    className="absolute top-0 left-0 h-full bg-40k-gold/5 transition-all"
                     animate={{ width: phaseStatus === 'running' ? '100%' : phaseStatus === 'complete' ? '100%' : '0%' }}
                     initial={{ width: 0 }}
                   />
                   <div className="absolute top-0 right-0 w-16 h-16 opacity-10">
-                    <div className="w-full h-full bg-gradient-to-br from-cyber-cyan to-transparent" />
+                    <div className="w-full h-full bg-gradient-to-br from-40k-gold to-transparent" />
                   </div>
                   
                   <div className="flex items-start justify-between relative">
                     <div className="flex items-start gap-4">
-                      <div className="mt-1 text-gray-500 group-hover:text-cyber-cyan transition-colors">
+                      <div className="mt-1 text-gray-500 group-hover:text-40k-gold transition-colors">
                         <GripVertical className="w-5 h-5" />
                       </div>
                       <div className="flex items-center gap-2">
                         <motion.div
                           className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                            phaseStatus === 'complete' ? 'bg-cyber-green/20 text-cyber-green' :
-                            phaseStatus === 'running' ? 'bg-cyber-cyan/20 text-cyber-cyan' :
-                            phaseStatus === 'error' ? 'bg-cyber-red/20 text-cyber-red' :
-                            'bg-cyber-dark text-gray-500'
+                            phaseStatus === 'complete' ? 'bg-40k-gold-dim/20 text-40k-gold-dim' :
+                            phaseStatus === 'running' ? 'bg-40k-gold/20 text-40k-gold' :
+                            phaseStatus === 'error' ? 'bg-40k-red-bright/20 text-40k-red-bright' :
+                            'bg-40k-dark text-gray-500'
                           }`}
                           animate={phaseStatus === 'running' ? { scale: [1, 1.1, 1] } : {}}
                         >
@@ -484,15 +485,15 @@ export default function Pipeline() {
                         </motion.div>
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <span className="w-6 h-6 rounded bg-cyber-cyan/20 text-cyber-cyan text-xs flex items-center justify-center font-bold">
+                            <span className="w-6 h-6 rounded bg-40k-gold/20 text-40k-gold text-xs flex items-center justify-center font-bold">
                               {index + 1}
                             </span>
                             <h3 className="font-display font-semibold text-white">{phase.name}</h3>
                             {phase.id === 'p1' && (
                               <span className={`text-xs px-2 py-0.5 rounded ${
                                 phase.videoSource === 'local' 
-                                  ? 'bg-cyber-green/20 text-cyber-green' 
-                                  : 'bg-cyber-cyan/20 text-cyber-cyan'
+                                  ? 'bg-40k-gold-dim/20 text-40k-gold-dim' 
+                                  : 'bg-40k-gold/20 text-40k-gold'
                               }`}>
                                 {phase.videoSource === 'local' ? 'Local' : 'YouTube'}
                               </span>
@@ -517,12 +518,12 @@ export default function Pipeline() {
                         type="checkbox"
                         checked={phase.enabled}
                         onChange={() => togglePhase(phase.id)}
-                        className="w-4 h-4 rounded border-cyber-border bg-cyber-dark text-cyber-cyan focus:ring-cyber-cyan"
+                        className="w-4 h-4 rounded border-40k-border bg-40k-dark text-40k-gold focus:ring-40k-gold"
                       />
                       <span className="text-sm text-gray-400">Enabled</span>
                     </label>
                     <button 
-                      className="ml-auto p-2 text-gray-400 hover:text-cyber-cyan transition-colors"
+                      className="ml-auto p-2 text-gray-400 hover:text-40k-gold transition-colors"
                       onClick={() => openSettings(phase)}
                     >
                       <Settings className="w-4 h-4" />
@@ -541,7 +542,7 @@ export default function Pipeline() {
           <motion.div 
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-cyber-card border border-cyber-border rounded-lg p-6 w-full max-w-lg"
+            className="bg-40k-card border border-40k-border rounded-lg p-6 w-full max-w-lg"
           >
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-display font-semibold text-white">
@@ -563,8 +564,8 @@ export default function Pipeline() {
                       onClick={() => toggleVideoSource('youtube')}
                       className={`flex-1 p-3 rounded-lg border flex items-center justify-center gap-2 ${
                         selectedPhase.videoSource === 'youtube'
-                          ? 'border-cyber-cyan bg-cyber-cyan/10 text-cyber-cyan'
-                          : 'border-cyber-border text-gray-400 hover:border-gray-500'
+                          ? 'border-40k-gold bg-40k-gold/10 text-40k-gold'
+                          : 'border-40k-border text-gray-400 hover:border-gray-500'
                       }`}
                     >
                       <Video className="w-4 h-4" />
@@ -576,8 +577,8 @@ export default function Pipeline() {
                       onClick={() => toggleVideoSource('local')}
                       className={`flex-1 p-3 rounded-lg border flex items-center justify-center gap-2 ${
                         selectedPhase.videoSource === 'local'
-                          ? 'border-cyber-cyan bg-cyber-cyan/10 text-cyber-cyan'
-                          : 'border-cyber-border text-gray-400 hover:border-gray-500'
+                          ? 'border-40k-gold bg-40k-gold/10 text-40k-gold'
+                          : 'border-40k-border text-gray-400 hover:border-gray-500'
                       }`}
                     >
                       <FolderOpen className="w-4 h-4" />
@@ -595,7 +596,7 @@ export default function Pipeline() {
                         value={downloadUrl}
                         onChange={(e) => setDownloadUrl(e.target.value)}
                         placeholder="https://youtube.com/watch?v=..."
-                        className="flex-1 bg-cyber-dark border border-cyber-border rounded px-3 py-2 text-sm text-white focus:border-cyber-cyan focus:outline-none"
+                        className="flex-1 bg-40k-dark border border-40k-border rounded px-3 py-2 text-sm text-white focus:border-40k-gold focus:outline-none"
                       />
                       <motion.button 
                         whileHover={{ scale: 1.05 }}
@@ -616,8 +617,8 @@ export default function Pipeline() {
                     <label className="text-sm text-gray-400 mb-2 block">Available Videos</label>
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {localVideos.map((video, i) => (
-                        <div key={i} className="p-2 bg-cyber-dark rounded text-sm text-gray-300 flex items-center gap-2">
-                          <Video className="w-4 h-4 text-cyber-cyan" />
+                        <div key={i} className="p-2 bg-40k-dark rounded text-sm text-gray-300 flex items-center gap-2">
+                          <Video className="w-4 h-4 text-40k-gold" />
                           {video.name}
                         </div>
                       ))}

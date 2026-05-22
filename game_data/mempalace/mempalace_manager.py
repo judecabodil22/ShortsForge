@@ -15,7 +15,15 @@ class MemPalaceManager:
     def __init__(self, palace_path: str = None):
         """Initialize with memory path"""
         if palace_path is None:
-            palace_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "memory")
+            config_path = os.path.expanduser("~/.mempalace/config.json")
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r") as f:
+                        palace_path = json.load(f).get("palace_path")
+                except Exception:
+                    palace_path = None
+            if not palace_path:
+                palace_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "memory")
         self.palace_path = palace_path
         self.mempalace_cli = "mempalace"
         
@@ -96,19 +104,24 @@ class MemPalaceManager:
         }
     
     def get_character_list(self, game_title: str) -> List[str]:
-        """Get verified character names for game"""
+        """Get character names from MemPalace memory for a game."""
         game_sanitized = game_title.lower().replace(" ", "_")
         
         stdout, stderr, rc = self._run_command(["list", "rooms", "--wing", game_sanitized])
         
-        characters = []
-        if rc == 0 and "characters" in stdout.lower():
-            characters.append("characters")
+        if rc != 0:
+            return []
         
+        # Parse room names from output (one per line, skip empty lines)
+        characters = [line.strip() for line in stdout.strip().split('\n') if line.strip()]
         return characters
     
     def get_relationships(self, game_title: str) -> List[Dict[str, str]]:
-        """Get relationship facts: (character, relationship, target)"""
+        """Get relationship facts: (character, relationship, target).
+        
+        Not yet implemented — returns empty list.
+        Relationships are currently sourced from verified_context.json relationships.md.
+        """
         return []
     
     def get_forbidden_characters(self, game_title: str) -> List[str]:
@@ -189,7 +202,11 @@ class MemPalaceManager:
         return sorted_metrics[:top_n]
     
     def get_entity(self, entity_name: str, game_title: str = None) -> List[Dict[str, Any]]:
-        """Query knowledge graph for entity"""
+        """Query knowledge graph for entity details.
+        
+        Not yet implemented — returns empty list.
+        Entity details are currently sourced from verified_context.json.
+        """
         return []
     
     def invalidate_fact(self, entity: str, relationship: str, target: str) -> bool:

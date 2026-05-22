@@ -18,6 +18,11 @@ import math
 import os
 import json
 from datetime import datetime, timedelta
+
+try:
+    from constants import calculate_readability as _calc_readability, calculate_hook_strength as _calc_hook
+except ImportError:
+    from workflows.constants import calculate_readability as _calc_readability, calculate_hook_strength as _calc_hook
 from rapidfuzz import fuzz
 
 
@@ -182,30 +187,7 @@ def score_engagement(script_text):
 
 def _score_hook(hook_text):
     """Score the hook strength of the first 100 words."""
-    score = 0.0
-
-    # Length check (should be substantial, not too short)
-    words = hook_text.split()
-    if len(words) >= 15:
-        score += 0.2
-
-    # Hook indicators: strong opening words
-    hook_words = ['but', 'however', 'yet', 'suddenly', 'then', 'when', 'what',
-                  'how', 'why', 'never', 'always', 'every', 'impossible',
-                  'shocking', 'secret', 'hidden', 'truth', 'real', 'actually']
-    hook_text_lower = hook_text.lower()
-    for hw in hook_words:
-        if hw in hook_text_lower:
-            score += 0.15
-            break
-
-    # No weak openings
-    weak_openings = ['in conclusion', 'to summarize', 'this is about',
-                     'this script', 'the following']
-    for wo in weak_openings:
-        if wo in hook_text_lower:
-            score -= 0.3
-            break
+    return _calc_hook(hook_text)
 
     # Question or statement that creates intrigue
     if '?' in hook_text or '!' in hook_text:
@@ -249,38 +231,8 @@ def _score_readability(text, word_count, sentence_count):
     if sentence_count == 0 or word_count == 0:
         return 0.0
 
-    # Average words per sentence
-    avg_words = word_count / sentence_count
-
-    # Count syllables (approximate)
-    syllable_count = 0
-    for word in text.split():
-        word = word.lower().strip(".,!?;:\"'()[]{}")
-        if not word:
-            continue
-        # Simple syllable count
-        count = 0
-        vowels = "aeiouy"
-        prev_vowel = False
-        for char in word:
-            is_vowel = char in vowels
-            if is_vowel and not prev_vowel:
-                count += 1
-            prev_vowel = is_vowel
-        if word.endswith("e") and count > 1:
-            count -= 1
-        syllable_count += max(1, count)
-
-    if word_count == 0:
-        return 0.0
-
-    # Flesch Reading Ease formula
-    flesch = 206.835 - 1.015 * (word_count / sentence_count) - 84.6 * (syllable_count / word_count)
-
-    # Normalize to 0-1 scale (Flesch typically 0-100)
-    readability = max(0.0, min(1.0, flesch / 100.0))
-
-    return readability
+    flesch = _calc_readability(text)
+    return max(0.0, min(1.0, flesch / 100.0))
 
 
 # ── Multi-Attempt Selection ──────────────────────────────────────────────────

@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 
+try:
+    from constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score
+except ImportError:
+    from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score
+
 WORKSPACE = os.path.expanduser("~/ShortsForge")
 DB_DIR = os.path.join(WORKSPACE, ".shortsforge")
 DB_PATH = os.path.join(DB_DIR, "performance.db")
@@ -20,9 +25,11 @@ os.makedirs(DB_DIR, exist_ok=True)
 
 
 def get_db() -> sqlite3.Connection:
-    """Get database connection."""
-    conn = sqlite3.connect(DB_PATH)
+    """Get database connection with WAL mode for better concurrency."""
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -35,6 +42,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS scripts (
             id TEXT PRIMARY KEY,
             video_name TEXT NOT NULL,
+            title TEXT,
             content_type TEXT,
             script_text TEXT,
             features TEXT,  -- JSON blob for script features
@@ -137,6 +145,13 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tts_learning_voice ON tts_learning(voice)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tts_learning_content ON tts_learning(content_type)")
     
+    # Migrate existing scripts table: add title column if missing
+    cursor.execute("PRAGMA table_info(scripts)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'title' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN title TEXT")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_scripts_title ON scripts(title)")
+    
     cursor.execute("PRAGMA table_info(learnings)")
     columns = [row[1] for row in cursor.fetchall()]
     if 'variance' not in columns:
@@ -148,13 +163,22 @@ def init_db():
     conn.close()
 
 
+def _extract_title_from_script(script_text: str) -> Optional[str]:
+    """Extract TITLE: line from a script's raw text. Returns None if not found."""
+    if not script_text:
+        return None
+    match = re.search(r'^TITLE:\s*(.+)$', script_text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
 def store_script(
     video_name: str,
     content_type: str,
     script_text: str,
     features: Dict[str, Any],
     variants: List[Dict] = None,
-    selected_variant: int = 0
+    selected_variant: int = 0,
+    title: Optional[str] = None
 ) -> str:
     """Store a generated script."""
     conn = get_db()
@@ -163,12 +187,16 @@ def store_script(
     script_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
     
+    # Auto-extract title from script text if not provided
+    script_title = title or _extract_title_from_script(script_text)
+    
     cursor.execute("""
-        INSERT INTO scripts (id, video_name, content_type, script_text, features, variants, selected_variant, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO scripts (id, video_name, title, content_type, script_text, features, variants, selected_variant, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         script_id,
         video_name,
+        script_title,
         content_type,
         script_text,
         json.dumps(features),
@@ -258,33 +286,64 @@ def store_metrics(
     favorites: int = 0,
     raw_data: Dict = None
 ) -> str:
-    """Store YouTube metrics for a video."""
+    """Store YouTube metrics for a video. Updates existing row if one exists for this video_id, otherwise inserts."""
     conn = get_db()
     cursor = conn.cursor()
     
-    metric_id = str(uuid.uuid4())
     fetched_at = datetime.now(timezone.utc).isoformat()
     
     total_engagement = likes + comments
     engagement_ratio = (total_engagement / views * 100) if views > 0 else 0
     
-    performance_score = _calculate_performance_score(views, engagement_ratio)
+    performance_score = calculate_performance_score(views, engagement_ratio)
     
-    cursor.execute("""
-        INSERT INTO metrics (id, video_id, fetched_at, views, likes, comments, favorites, engagement_ratio, performance_score, raw_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        metric_id,
-        video_id,
-        fetched_at,
-        views,
-        likes,
-        comments,
-        favorites,
-        engagement_ratio,
-        performance_score,
-        json.dumps(raw_data or {})
-    ))
+    # Check if metrics already exist for this video
+    cursor.execute("SELECT id FROM metrics WHERE video_id = ?", (video_id,))
+    existing = cursor.fetchone()
+    
+    if existing:
+        # Update existing metrics row
+        metric_id = existing['id']
+        cursor.execute("""
+            UPDATE metrics SET
+                fetched_at = ?,
+                views = ?,
+                likes = ?,
+                comments = ?,
+                favorites = ?,
+                engagement_ratio = ?,
+                performance_score = ?,
+                raw_data = ?
+            WHERE id = ?
+        """, (
+            fetched_at,
+            views,
+            likes,
+            comments,
+            favorites,
+            engagement_ratio,
+            performance_score,
+            json.dumps(raw_data or {}),
+            metric_id
+        ))
+    else:
+        # Insert new metrics row
+        metric_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO metrics (id, video_id, fetched_at, views, likes, comments, favorites, engagement_ratio, performance_score, raw_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            metric_id,
+            video_id,
+            fetched_at,
+            views,
+            likes,
+            comments,
+            favorites,
+            engagement_ratio,
+            performance_score,
+            json.dumps(raw_data or {})
+        ))
     
     cursor.execute("""
         UPDATE videos SET metrics_fetched_at = ? WHERE id = ?
@@ -293,17 +352,6 @@ def store_metrics(
     conn.commit()
     conn.close()
     return metric_id
-
-
-def _calculate_performance_score(views: int, engagement_ratio: float) -> float:
-    """Calculate a combined performance score (0-100)."""
-    if views == 0:
-        return 0.0
-    
-    views_score = min(views / 100, 100) * 0.4
-    engagement_score = min(engagement_ratio * 10, 100) * 0.6
-    
-    return views_score + engagement_score
 
 
 def get_script_by_id(script_id: str) -> Optional[Dict]:
@@ -500,7 +548,7 @@ def get_channel_baseline() -> Dict[str, float]:
 
 
 def get_all_videos_with_metrics() -> List[Dict]:
-    """Get all videos with their metrics."""
+    """Get all videos with their latest metrics row."""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -509,8 +557,10 @@ def get_all_videos_with_metrics() -> List[Dict]:
                m.views, m.likes, m.comments, m.engagement_ratio, m.performance_score
         FROM videos v
         LEFT JOIN scripts s ON s.id = v.script_id
-        LEFT JOIN metrics m ON m.video_id = v.id
-        ORDER BY m.fetched_at DESC
+        LEFT JOIN metrics m ON m.id = (
+            SELECT m2.id FROM metrics m2 WHERE m2.video_id = v.id ORDER BY m2.fetched_at DESC LIMIT 1
+        )
+        ORDER BY v.created_at DESC
     """)
     
     rows = cursor.fetchall()
@@ -560,6 +610,11 @@ def get_all_scripts() -> List[Dict]:
 def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
     """Auto-match YouTube videos to scripts and fetch metrics.
     
+    Matching strategy (in priority order):
+    1. Exact match: YouTube title == stored script.title (case-insensitive, whitespace-normalized)
+    2. Substring match: stored script.title appears as a contiguous phrase in YouTube title
+    3. Word-overlap fallback: legacy scoring (0.3+ threshold) for edge cases
+    
     Args:
         recent_videos: List of videos from get_recent_uploads()
     
@@ -571,40 +626,6 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
     errors = []
     
     scripts = get_all_scripts()
-    script_map = {}
-    
-    # Also load script titles from files - map by filename (including Script001/002)
-    script_file_titles = {}
-    scripts_dir = os.path.expanduser("~/ShortsForge/scripts")
-    if os.path.exists(scripts_dir):
-        for fname in os.listdir(scripts_dir):
-            if fname.endswith(".txt"):
-                fpath = os.path.join(scripts_dir, fname)
-                try:
-                    with open(fpath, "r") as f:
-                        content = f.read()
-                    # Extract TITLE: line
-                    match = re.search(r'^TITLE:\s*(.+)$', content, re.MULTILINE)
-                    if match:
-                        title = match.group(1).strip()
-                        # Use full filename (e.g., "The Strength of Faith-Script001") as key
-                        key = os.path.splitext(fname)[0].lower()
-                        script_file_titles[key] = title.lower()
-                except:
-                    pass
-    
-    # Build script map - include actual TITLE from each script file
-    for script in scripts:
-        video_name = script.get('video_name', '')
-        script_id = script.get('id', '')
-        if video_name:
-            script_map[video_name.lower()] = script
-            # Also map by the actual TITLE from the script file - try both Script001 and Script002 variants
-            for suffix in ['-script001', '-script002', '-script003', '-script004', '-script005']:
-                file_key = video_name.lower() + suffix
-                if file_key in script_file_titles:
-                    actual_title = script_file_titles[file_key]
-                    script_map[actual_title] = script
     
     existing_learning_keys = set()
     conn = get_db()
@@ -612,36 +633,94 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
     cursor.execute("SELECT feature_name, feature_value FROM learnings")
     for row in cursor.fetchall():
         existing_learning_keys.add((row['feature_name'], row['feature_value']))
-    conn.close()
     
     for video in recent_videos:
         video_id = video.get('video_id', '')
-        title = video.get('title', '')
+        yt_title = video.get('title', '')
         duration_seconds = video.get('duration_seconds', 0)
 
         if duration_seconds == 0 or duration_seconds > 180:
+            import logging
+            log = logging.getLogger(__name__)
+            log.info(f"Skipping video {video_id} ({yt_title}): duration={duration_seconds}s (not a short)")
             continue
 
         existing = get_video_by_youtube_id(video_id)
         if existing:
+            store_metrics(
+                video_id=existing['id'],
+                views=video.get('views', 0),
+                likes=video.get('likes', 0),
+                comments=video.get('comments', 0),
+                favorites=0,
+                raw_data=video
+            )
+            new_metrics += 1
             continue
 
-        title_clean = re.sub(r'[^\w\s]', ' ', title.lower())
-        title_words = set(title_clean.split())
-        
         best_match = None
-        best_score = 0
-        
-        for script_video_name, script_data in script_map.items():
-            script_words = set(script_video_name.split())
-            common = title_words & script_words
-            if common:
-                score = len(common) / max(len(title_words), len(script_words))
-                if score > best_score:
-                    best_score = score
-                    best_match = script_data
-        
-        if best_match and best_score >= 0.3:
+        match_reason = None
+
+        yt_normalized = ' '.join(yt_title.lower().split())
+
+        for script in scripts:
+            script_title = script.get('title') or ''
+
+            if not script_title:
+                continue
+
+            script_normalized = ' '.join(script_title.lower().split())
+
+            # Pass 1: Exact match
+            if yt_normalized == script_normalized:
+                best_match = script
+                match_reason = 'exact'
+                break
+
+        if not best_match:
+            for script in scripts:
+                script_title = script.get('title') or ''
+                if not script_title:
+                    continue
+
+                # Pass 2: Substring match (stored title inside YouTube title)
+                script_lower = script_title.lower()
+                yt_lower = yt_title.lower()
+
+                # Check if the stored title appears as a contiguous substring
+                if script_lower in yt_lower:
+                    best_match = script
+                    match_reason = 'substring'
+                    break
+
+        if not best_match:
+            # Pass 3: Word-overlap fallback (legacy behavior)
+            yt_words = set(yt_normalized.split())
+            best_score = 0.0
+
+            for script in scripts:
+                video_name = script.get('video_name', '')
+                script_title = script.get('title') or ''
+
+                candidates = [video_name.lower()]
+                if script_title:
+                    candidates.append(' '.join(script_title.lower().split()))
+
+                for candidate in candidates:
+                    cand_words = set(candidate.split())
+                    common = yt_words & cand_words
+                    if common:
+                        score = len(common) / max(len(yt_words), len(cand_words))
+                        if score > best_score:
+                            best_score = score
+                            best_match = script
+                            match_reason = 'word_overlap'
+
+            if best_match and best_score < 0.3:
+                best_match = None
+                match_reason = None
+
+        if best_match:
             try:
                 video_url = f"https://www.youtube.com/watch?v={video_id}"
                 video_db_id = link_video(
@@ -649,7 +728,7 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
                     clip_id=None,
                     video_url=video_url,
                     youtube_id=video_id,
-                    title=title
+                    title=yt_title
                 )
                 
                 store_metrics(
@@ -677,8 +756,6 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
                 performance_score = _calculate_performance_score(video.get('views', 0), engagement_ratio)
                 
                 if best_match.get('content_type'):
-                    key = ('content_type', best_match['content_type'])
-                    existing_learning_keys.add(key)
                     store_learning(
                         feature_name='content_type',
                         feature_value=best_match['content_type'],
@@ -689,8 +766,6 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
                     )
                 
                 if features.get('word_count'):
-                    key = ('word_count', str(features['word_count']))
-                    existing_learning_keys.add(key)
                     store_learning(
                         feature_name='word_count',
                         feature_value=str(features['word_count']),
@@ -726,12 +801,87 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
             except Exception as e:
                 errors.append(str(e))
     
+    conn.close()
+    
     return {
         'matched_count': matched,
         'new_metrics': new_metrics,
         'errors': errors,
         'total_videos_processed': len(recent_videos)
     }
+
+
+def sync_youtube_metrics(days: int = 7, max_results: int = 50) -> Dict[str, Any]:
+    """Unified YouTube metrics sync: fetch recent uploads, backfill titles, auto-match.
+    
+    Single entry point for all YouTube sync operations.
+    Call this from pipeline completion, API endpoints, or manual sync.
+    
+    Returns:
+        Dict with matched_count, new_metrics, errors, total_videos_processed
+    """
+    try:
+        from metrics_fetcher import get_recent_uploads
+    except ImportError:
+        from workflows.metrics_fetcher import get_recent_uploads
+    
+    backfill_script_titles()
+    videos = get_recent_uploads(days=days, max_results=max_results)
+    if not videos:
+        return {'matched_count': 0, 'new_metrics': 0, 'errors': [], 'total_videos_processed': 0}
+    return auto_match_and_fetch(videos)
+
+
+def backfill_script_titles() -> Dict[str, Any]:
+    """Backfill the title column for existing scripts from .txt files.
+    
+    Returns dict with updated_count, errors.
+    """
+    updated = 0
+    errors = []
+    scripts_dir = os.path.expanduser("~/ShortsForge/scripts")
+    
+    if not os.path.exists(scripts_dir):
+        return {'updated_count': 0, 'errors': ['scripts directory does not exist']}
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    for fname in os.listdir(scripts_dir):
+        if not fname.endswith(".txt"):
+            continue
+        
+        fpath = os.path.join(scripts_dir, fname)
+        try:
+            with open(fpath, "r") as f:
+                script_text = f.read()
+        except Exception as e:
+            errors.append(f"Failed to read {fname}: {e}")
+            continue
+        
+        title = _extract_title_from_script(script_text)
+        if not title:
+            errors.append(f"No TITLE: found in {fname}")
+            continue
+        
+        base_name = os.path.splitext(fname)[0]
+        
+        if '-Script' in base_name:
+            video_basename = base_name.rsplit('-Script', 1)[0].strip()
+        else:
+            video_basename = base_name
+        
+        cursor.execute(
+            "UPDATE scripts SET title = ? WHERE video_name = ? AND (title IS NULL OR title = '')",
+            (title, video_basename)
+        )
+        if cursor.rowcount > 0:
+            updated += cursor.rowcount
+    
+    conn.commit()
+    conn.close()
+    
+    return {'updated_count': updated, 'errors': errors}
 
 
 def update_tts_learning(
@@ -804,27 +954,14 @@ def get_weighted_tts_voices() -> List[Dict]:
     """Get TTS voice/style combos weighted by performance.
 
     Returns list sorted by weight (descending). Combos with no data get weight 0.1.
+    Cached with 5-minute TTL to avoid regenerating 300 combinations on every call.
     """
+    import time
+    if hasattr(get_weighted_tts_voices, '_cache') and hasattr(get_weighted_tts_voices, '_cache_time'):
+        if time.time() - get_weighted_tts_voices._cache_time < 300:
+            return get_weighted_tts_voices._cache
+
     all_tts_data = get_tts_learning_data()
-    all_voices_list = [
-        "Vindemiatrix", "Aoede", "Callirrhoe", "Gacrux", "Sulafat", "Leda",
-        "Kore", "Enceladus", "Erinome", "Despina", "Alnilam", "Laomedeia",
-        "Achernar", "Pulcherrima", "Zephyr", "Puck", "Charon", "Fenrir",
-        "Orus", "Iapetus", "Umbriel", "Algieba", "Rasalgethi", "Schedar",
-        "Sadachbia", "Sadaltager", "Achird", "Zubenelgenubi", "Algenib", "Autonoe"
-    ]
-    all_styles = [
-        "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments.",
-        "Speak confidently and authoritatively. Explain causes and effects clearly, like an expert.",
-        "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-        "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-        "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-        "Speak like a professional news reporter. Clear, factual, objective. Present information in order.",
-        "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
-        "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-        "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
-        "Speak like sharing an incredible story with a friend. Conversational, engaging, hook them early.",
-    ]
 
     tts_map = {}
     for r in all_tts_data:
@@ -836,14 +973,17 @@ def get_weighted_tts_voices() -> List[Dict]:
         max_score = 1
 
     weighted = []
-    for voice in all_voices_list:
-        for style in all_styles:
+    for voice in TTS_VOICES:
+        for style in TTS_STYLE_OPTIONS:
             key = (voice, style)
             raw = tts_map.get(key, 0)
             weight = max(0.1, raw / max_score) if raw > 0 else 0.1
             weighted.append({'voice': voice, 'style': style, 'weight': weight})
 
     weighted.sort(key=lambda x: x['weight'], reverse=True)
+
+    get_weighted_tts_voices._cache = weighted
+    get_weighted_tts_voices._cache_time = time.time()
     return weighted
 
 

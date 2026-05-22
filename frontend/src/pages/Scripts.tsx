@@ -48,7 +48,7 @@ export default function Scripts() {
       <motion.div variants={{ hidden: { opacity: 0, y: -20 }, show: { opacity: 1, y: 0 } }} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-cyber-cyan">SCRIPT</span> MANAGER
+            <span className="text-40k-gold">SCRIPT</span> MANAGER
           </h1>
           <p className="text-gray-400 mt-1">View and analyze generated scripts</p>
         </div>
@@ -71,7 +71,7 @@ export default function Scripts() {
         <motion.div layout variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }}>
           <Card layout hoverable className="max-h-[600px] overflow-y-auto">
           <h3 className="text-lg font-display font-semibold text-white mb-4 flex items-center gap-2">
-            <FileText className="w-5 h-5 text-cyber-cyan" />
+            <FileText className="w-5 h-5 text-40k-gold" />
             Scripts ({filteredScripts.length})
           </h3>
 
@@ -85,8 +85,8 @@ export default function Scripts() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   className={cn(
-                    'p-4 bg-cyber-dark rounded-lg cursor-pointer transition-all hover:border-cyber-cyan/30',
-                    selectedScript === script.id ? 'border-cyber-cyan' : 'border-transparent'
+                    'p-4 bg-40k-dark rounded-lg cursor-pointer transition-all hover:border-40k-gold/30',
+                    selectedScript === script.id ? 'border-40k-gold' : 'border-transparent'
                   )}
                   onClick={() => setSelectedScript(script.id)}
                 >
@@ -94,7 +94,7 @@ export default function Scripts() {
                     <div>
                       <h4 className="font-medium text-white">{script.video_name}</h4>
                       <div className="flex items-center gap-2 mt-2">
-                        <span className="px-2 py-0.5 text-xs rounded bg-cyber-cyan/20 text-cyber-cyan">
+                        <span className="px-2 py-0.5 text-xs rounded bg-40k-gold/20 text-40k-gold">
                           {script.content_type || 'Unknown'}
                         </span>
                         <span className="text-xs text-gray-500">
@@ -109,7 +109,7 @@ export default function Scripts() {
                         e.stopPropagation()
                         handleAnalyze(script.id)
                       }}
-                      className="p-2 text-gray-400 hover:text-cyber-magenta transition-colors"
+                      className="p-2 text-gray-400 hover:text-40k-crimson-bright transition-colors"
                     >
                       <Sparkles className="w-4 h-4" />
                     </motion.button>
@@ -128,19 +128,19 @@ export default function Scripts() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-display font-semibold text-white flex items-center gap-2">
-                  <BarChart2 className="w-5 h-5 text-cyber-magenta" />
+                  <BarChart2 className="w-5 h-5 text-40k-crimson-bright" />
                   NLP Analysis
                 </h3>
-                <div className="px-3 py-1 bg-cyber-magenta/20 text-cyber-magenta rounded text-sm">
+                <div className="px-3 py-1 bg-40k-crimson-bright/20 text-40k-crimson-bright rounded text-sm">
                   Virality: {analyzedScript.virality_prediction?.toFixed(0) || 50}/100
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 {Object.entries(analyzedScript.features || {}).slice(0, 12).map(([key, value]) => (
-                  <div key={key} className="p-3 bg-cyber-dark rounded-lg">
+                  <div key={key} className="p-3 bg-40k-dark rounded-lg">
                     <p className="text-xs text-gray-400 capitalize">{key.replace(/_/g, ' ')}</p>
-                    <p className="text-lg font-medium text-cyber-cyan">
+                    <p className="text-lg font-medium text-40k-gold">
                       {typeof value === 'number' ? (Number.isInteger(value) ? value : value.toFixed(1)) : value?.toString() || '-'}
                     </p>
                   </div>

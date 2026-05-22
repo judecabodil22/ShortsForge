@@ -1,22 +1,22 @@
 import { cn } from '@/lib/utils'
 import { HTMLMotionProps, motion } from 'framer-motion'
 
-interface CardProps extends HTMLMotionProps<"div"> {
-  variant?: 'default' | 'glow-cyan' | 'glow-magenta'
+interface CardProps extends HTMLMotionProps<'div'> {
+  variant?: 'default' | 'glow-gold' | 'glow-crimson'
   hoverable?: boolean
 }
 
 export function Card({ className, variant = 'default', hoverable = false, children, ...props }: CardProps) {
   const variantClasses = {
     default: '',
-    'glow-cyan': 'border-cyber-cyan/30 hover:border-cyber-cyan hover:shadow-[0_0_20px_rgba(0,255,245,0.1)]',
-    'glow-magenta': 'border-cyber-magenta/30 hover:border-cyber-magenta hover:shadow-[0_0_20px_rgba(255,0,255,0.1)]',
+    'glow-gold': 'border-40k-gold/30 hover:border-40k-gold hover:shadow-40k-gold',
+    'glow-crimson': 'border-40k-crimson-bright/30 hover:border-40k-crimson-bright hover:shadow-40k-crimson',
   }
   
   return (
     <motion.div 
       className={cn(
-        'bg-cyber-card border border-cyber-border rounded-lg p-4 transition-all duration-300',
+        'bg-40k-card border border-40k-border rounded-lg p-4 transition-all duration-300',
         variantClasses[variant],
         className
       )}
@@ -39,22 +39,22 @@ interface StatCardProps {
 export function StatCard({ label, value, icon, trend }: StatCardProps) {
   return (
     <Card className="flex items-center justify-between">
-      <div>
-        <p className="text-sm text-gray-400 mb-1">{label}</p>
-        <p className="text-2xl font-display font-bold text-white">{value}</p>
+      <motion.div>
+        <p className="text-sm text-stone-400 mb-1">{label}</p>
+        <p className="text-2xl font-display font-bold text-40k-gold-bright">{value}</p>
         {trend && (
           <p className={cn(
             'text-xs mt-1',
-            trend.positive ? 'text-cyber-green' : 'text-cyber-red'
+            trend.positive ? 'text-40k-gold-dim' : 'text-40k-red-bright'
           )}>
             {trend.positive ? '↑' : '↓'} {Math.abs(trend.value)}%
           </p>
         )}
-      </div>
+      </motion.div>
       {icon && (
-        <div className="w-12 h-12 rounded-lg bg-cyber-cyan/10 border border-cyber-cyan/20 flex items-center justify-center text-cyber-cyan">
+        <motion.div className="w-12 h-12 rounded-lg bg-40k-gold/10 border border-40k-gold/25 flex items-center justify-center text-40k-gold">
           {icon}
-        </div>
+        </motion.div>
       )}
     </Card>
   )

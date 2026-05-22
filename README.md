@@ -61,9 +61,10 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 ### Key Capabilities
 
-- **5-Phase Pipeline**: Download → Transcribe → Script → Clip → TTS
+- **6-Phase Pipeline**: Download → Transcribe → Context → Script → Clip → TTS
 - **Resumable**: Each phase saves progress - restart anywhere
 - **Skippable Phases**: Run any combination of phases independently
+- **WebSocket Log Streaming**: Live pipeline logs in browser
 - **Content Studio**: Generate additional content from existing transcripts
 - **Real-time Metrics**: Track YouTube performance via API
 - **ML Learning**: Optimize content based on historical performance
@@ -72,15 +73,16 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 ## Features
 
-### Pipeline (5 Phases)
+### Pipeline (6 Phases)
 
 | Phase | Name | Description | Output |
 |-------|------|-------------|--------|
 | **1** | Download | Downloads videos from YouTube playlist | `streams/` |
 | **2** | Transcribe | Converts audio to text with timestamps | `transcripts/` |
-| **3** | Scripts | Generates AI-powered narration scripts | `scripts/` |
-| **4** | Clip | Extracts video clips based on scene detection | `shorts/` |
-| **5** | TTS | Creates AI voice narration with subtitles | `tts/` |
+| **3** | Context | Extracts characters, locations, relationships | `Context/` |
+| **4** | Scripts | Generates AI-powered narration scripts | `scripts/` |
+| **5** | Clip | Extracts video clips based on scene detection | `shorts/` |
+| **6** | TTS | Creates AI voice narration with subtitles | `tts/` |
 
 ### Content Studio
 
@@ -94,10 +96,12 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 - **Cyberpunk Dashboard**: React-based UI with real-time updates
 - **Pipeline Control**: Start/stop/monitor pipeline from browser
+- **Real-time Log Streaming**: WebSocket broadcasts live pipeline logs
 - **Metrics Visualization**: Charts showing video performance
 - **Context Graph**: Interactive knowledge graph with adjustable layout
 - **WebSocket Support**: Live updates without refresh
 - **Graph Visual Settings**: Configurable link distance, repulsion, collision for easy viewing
+- **Graph Visual Themes**: 6 switchable themes (Star Chart, Brain Neurons, Digital Circuits, Hologram, Code Matrix, World Map)
 - **Zoom-Based Labels**: Node labels appear only when zoomed in for clarity
 
 ### Learning Engine
@@ -112,7 +116,8 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 - **YouTube API Integration**: Fetch views, likes, comments
 - **OAuth Support**: Authenticated access for channel data
-- **Auto-matching**: Link YouTube shorts to source scripts
+- **Auto-matching**: Link YouTube shorts to source scripts by exact title, substring, or word-overlap scoring
+- **Auto-sync**: Periodic sync updates metrics for all known Shorts; new Shorts auto-matched to scripts
 - **Performance Scores**: Calculate engagement metrics
 - **Learning Data**: Store content type performance for optimization
 
@@ -167,7 +172,12 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 | `script_validation.py` | Script quality scoring and content type detection |
 | `audio_analysis.py` | Audio feature extraction for clip selection |
 | `keychain_manager.py` | Secure API key storage in system keychain |
+| `constants.py` | Centralized configuration (voices, styles, scoring, rotation) |
+| `content_studio.py` | Content Studio orchestration facade |
 | `backend/main.py` | FastAPI web server with REST API |
+| `core/round_robin.py` | Shuffled round-robin engine for voice/style/Groq rotation |
+| `core/config.py` | `.env` file management utilities |
+| `core/pipeline_context.py` | Shared pipeline state for cross-phase coordination |
 
 ---
 
@@ -437,6 +447,8 @@ The Context page features an interactive force-directed graph:
 - **Zoom Labels**: Labels only appear when zoomed in past 0.7x for clarity
 - **Interactive**: Click nodes for details, drag to rearrange, zoom to explore
 - **Persistent Data**: Implicit co-occurrence relationships are stored in verified_context.json - deleting transcripts doesn't affect the graph
+- **Auto-Placeholder Nodes**: Entities referenced in relationships but missing as graph nodes are auto-created as placeholders
+- **Franchise Merging**: Selecting a franchise (e.g. "Tomb Raider Series") merges characters and relationships from all child games
 
 ### API Endpoints
 
@@ -450,11 +462,14 @@ The Context page features an interactive force-directed graph:
 | `/api/metrics/summary` | GET | Performance summary |
 | `/api/metrics/videos` | GET | All videos with metrics |
 | `/api/metrics/sync` | POST | Sync YouTube metrics |
+| `/api/metrics/content-performance` | GET | Content type performance |
 | `/api/scripts` | GET | All scripts |
 | `/api/learnings` | GET | ML learnings |
 | `/api/context/{game}` | GET | Game context |
+| `/api/context/{game}/graph` | GET | Game knowledge graph |
+| `/api/context/all/graph` | GET | All games combined graph |
 | `/api/config` | GET/POST | Configuration |
-| `/ws` | WS | WebSocket for real-time updates |
+| `/ws` | WS | WebSocket for real-time updates (status + log streaming) |
 
 ---
 
@@ -567,16 +582,25 @@ ShortsForge/
 │   ├── src/                   # React source
 │   └── dist/                 # Pre-built static files
 ├── workflows/                  # Core pipeline modules
-│   ├── shortsforge.py        # Main application (6121 lines)
+│   ├── shortsforge.py        # Main application
+│   ├── constants.py          # Centralized configuration
+│   ├── content_studio.py     # Content Studio facade
 │   ├── context_manager.py    # Context storage v1
-│   ├── context_manager_v2.py  # Context storage v2 (graph)
-│   ├── metrics_fetcher.py    # YouTube API integration
-│   ├── learning_engine.py    # ML optimization
+│   ├── context_manager_v2.py # Context storage v2 (graph)
+│   ├── metrics_fetcher.py   # YouTube API integration
+│   ├── learning_engine.py   # ML optimization
 │   ├── performance_database.py # SQLite storage
-│   ├── script_validation.py  # Script quality scoring
-│   ├── audio_analysis.py     # Audio feature extraction
-│   ├── keychain_manager.py   # Secure key storage
-│   └── update_manager.py     # Update checking
+│   ├── script_validation.py # Script quality scoring
+│   ├── audio_analysis.py    # Audio feature extraction
+│   ├── keychain_manager.py  # Secure key storage
+│   ├── update_manager.py    # Update checking
+│   ├── core/                # Extracted core modules
+│   │   ├── round_robin.py  # Round-robin engine
+│   │   ├── config.py       # Env file management
+│   │   └── pipeline_context.py # Pipeline state
+│   ├── pipeline/            # Pipeline phase stubs
+│   ├── generators/          # Generator stubs
+│   └── telegram/            # Telegram bot stubs
 ├── prompts/                   # AI prompt templates
 │   ├── base.j2               # Base prompt
 │   ├── character_pov.j2      # Character POV style
@@ -716,9 +740,11 @@ These endpoints require API key authentication:
 - Check bot was started with `/start`
 
 **Q: Metrics sync not working**
-- Verify YouTube OAuth is configured
-- Check video duration (must be < 3 minutes)
-- Ensure script with matching TITLE exists
+- Verify YouTube OAuth is configured (`client_secret.json` in workspace)
+- Check video duration (must be < 3 minutes to be treated as Short)
+- Ensure the Short exists on YouTube and appears in recent uploads
+- Run sync via API: `curl -X POST http://localhost:8000/api/metrics/sync -H "X-API-Key: YOUR_KEY"`
+- Check the database: stored YouTube IDs must match actual YouTube video IDs
 
 ### Debug Mode
 
@@ -740,7 +766,7 @@ python workflows/shortsforge.py run --verbose
 ### Adding New Features
 
 1. **Script Styles**: Add new `.j2` template in `prompts/`
-2. **TTS Voices**: Update voice list in `shortsforge.py`
+2. **TTS Voices**: Update voice list in `workflows/constants.py`
 3. **API Endpoints**: Add route in `backend/main.py`
 4. **Metrics**: Add tracking in `performance_database.py`
 
@@ -768,7 +794,7 @@ pytest
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
 
-Current version: **2.0.3**
+Current version: **2.2.0**
 
 ---
 

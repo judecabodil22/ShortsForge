@@ -4,7 +4,55 @@ All notable changes to this project are documented here.
 
 ---
 
-## 2.1.0 — 2026-05-20
+## 2.2.0 — 2026-05-22
+### Fixed
+- **Frontend Blank Page**: Removed `AnimatePresence mode="wait"` causing race conditions in React Router — pages now consistently render on navigation
+- **Graph Hidden-Games Filter**: `Graph.tsx` now clears and re-populates `nodesMap` from scratch instead of additive-only update, removing orphaned references to hidden game nodes
+- **Graph Entity Name Collision**: `_register_graph_node()` uses first-registration-wins (character > location > term) — prevents "Night City" term from overwriting location node
+- **Graph Placeholder Nodes**: Relationships referencing unregistered entities now auto-create placeholder nodes instead of silently dropping edges
+- **Graph Franchise Merging**: `_build_single_game_graph()` merges child game context into franchise graphs — Tomb Raider Series went from 38→81 characters, 13→45 context edges
+- **Co-occurrence Child Entities**: `analyze_transcript_cooccurrence()` loads entities from child games when resolving franchise keys — implicit edges went from 37→211
+- **All Games Route**: Moved `/api/context/all/graph` before parameterized `/api/context/{game}/graph` to fix route capture
+- **TTS Voice Style**: Fixed `_get_next_voice_style()` → `get_next_voice_style()` call in `shortsforge.py:4425`
+- **metrics_fetcher Import**: Added try/except fallback for `workflows.metrics_fetcher` in `performance_database.py:823`
+- **Tracker Sync**: `get_recent_uploads()` no longer returns early before fetching duration stats; `get_all_videos_with_metrics()` uses correlated subquery instead of LEFT JOIN to eliminate duplicate metric rows
+- **SQLite Concurrency**: Added `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000` for concurrent pipeline + API access
+- **MemPalace**: `get_character_list()` now correctly parses room names from MemPalace output
+
+### Added
+- **Centralized Constants**: `workflows/constants.py` — single source for TTS voices (30), style options (10), `calculate_performance_score()`, `parse_duration()`, `calculate_readability()`, `calculate_hook_strength()`, `get_next_groq_key()`
+- **Unified YouTube Sync**: `sync_youtube_metrics()` in `performance_database.py` replaces 3 duplicated implementations across `shortsforge.py` and `backend/main.py`
+- **Module Extraction**: Created `workflows/core/round_robin.py`, `workflows/core/config.py`, `workflows/core/pipeline_context.py`, `workflows/content_studio.py`, and module stubs (`pipeline/`, `generators/`, `telegram/`)
+- **WebSocket Log Streaming**: Background log tailer reads `/tmp/pipeline.log` and broadcasts over WebSocket to all connected clients
+- **Graph Caching**: Function-level TTL caches for `get_weighted_tts_voices()` (5-min) and graph endpoints (60-sec with file-mtime invalidation)
+- **Context v2 Facade**: Added v1-compatible API to `context_manager_v2.py` — `load_verified_context()`, `save_verified_context()`, `clear_verified_context()`, `compare_context_with_history()`, `format_context_for_confirmation()`, `is_first_run()`, `compute_and_save_implicit_relationships()`, `save_implicit_relationships()`
+- **Missing Dependencies**: Completed `requirements.txt` with fastapi, uvicorn, slowapi, jinja2, requests, spacy, rapidfuzz, textblob
+- **.gitignore**: Added Cursor IDE directory
+
+### Changed
+- **Frontend Production Build**: Backend serves `frontend/dist/` via `StaticFiles` with Vite dev server fallback for development
+- **Phase Numbering**: Unified to 6 phases (Download, Transcribe, Context, Scripts, Clips, TTS) across `PHASE_LABELS` and `PHASE_MAP`
+- **Context Callback Routing**: `handle_context_callback` moved to module top; context callbacks routed directly via `cb_id` instead of `handle_menu_callback`
+- **`.env.example`**: Renamed from "Lambda Cut" to "ShortsForge"; added `WHISPER_MODEL` option
+- **All `docs/`**: Updated "lambda_cut" → "ShortsForge" references
+- **Pipeline Context**: Import fallback pattern (`try/except ImportError`) for all new modules to support both direct execution and package imports
+- **`store_metrics()`**: Changed from insert-only to upsert to prevent stale metric rows on known videos
+- **Frontend Metrics**: Deduplicates `videos?.videos` array by `youtube_id` and sorts by `created_at DESC`
+- **`.gitignore`**: Rebranded from `Lambda Cut` to `ShortsForge`
+
+### Technical
+- `backend/main.py`: Graph franchise logic (L1153-1260), co-occurrence child entity loading (L854-940), node registration guard (L1066-1083), placeholder node auto-creation (L1203-1232)
+- `workflows/shortsforge.py`: 215 lines removed — duplicated sync, context, and constants extracted to dedicated modules
+- `workflows/performance_database.py`: Rewritten metrics sync, learning engine queries, and YouTube auto-match
+- `workflows/constants.py`: 210 lines — new centralized constants module
+- `workflows/core/round_robin.py`: 130 lines — extracted round-robin engine with `get_state()` helper
+- `workflows/core/pipeline_context.py`: Shared pipeline state object with try/except imports
+- `workflows/content_studio.py`: Content Studio facade with stubs for future extraction
+- `frontend/src/App.tsx`: Removed `AnimatePresence mode="wait"`, simplified per-route entrance animations
+- `frontend/src/pages/Graph.tsx`: Rebuild `nodesMap` from scratch on filter (L231-233)
+
+---
+
 ### Added
 - **Graph Visual Themes**: 6 switchable visual themes for the knowledge graph
   - Star Chart (default): Classic gold/red 40k color scheme

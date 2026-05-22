@@ -122,7 +122,7 @@ Or use bracket tags for quick styling:
 ## Directory Structure
 
 ```
-lambda_cut/
+ShortsForge/
 ├── .env              # Configuration (not in git)
 ├── workflows/        # Python code
 ├── streams/         # Downloaded videos
@@ -138,13 +138,13 @@ To run listener as a systemd service:
 
 ```bash
 # Enable auto-start on boot
-systemctl --user enable lambda-cut-listener.service
+systemctl --user enable shortsforge-listener.service
 
 # Start manually
-systemctl --user start lambda-cut-listener.service
+systemctl --user start shortsforge-listener.service
 
 # Check status
-systemctl --user status lambda-cut-listener.service
+systemctl --user status shortsforge-listener.service
 ```
 
 ## API Keys

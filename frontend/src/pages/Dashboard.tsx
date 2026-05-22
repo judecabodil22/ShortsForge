@@ -94,7 +94,7 @@ export default function Dashboard() {
           animate={{ opacity: 1, x: 0 }}
         >
           <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-cyber-cyan">DASH</span>BOARD
+            <span className="text-40k-gold">DASH</span>BOARD
           </h1>
           <p className="text-gray-400 mt-1">System overview and quick stats</p>
         </motion.div>
@@ -176,16 +176,16 @@ export default function Dashboard() {
         <motion.div variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }}>
           <Card hoverable className="h-full">
           <h3 className="text-lg font-display font-semibold text-white mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-cyber-cyan" />
+            <Activity className="w-5 h-5 text-40k-gold" />
             Pipeline Status
           </h3>
           
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 bg-cyber-dark rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-40k-dark rounded-lg">
               <span className="text-gray-400">Status</span>
               <span className={`px-3 py-1 rounded-full text-sm ${
                 status?.pipeline?.running 
-                  ? 'bg-cyber-green/20 text-cyber-green' 
+                  ? 'bg-40k-gold-dim/20 text-40k-gold-dim' 
                   : 'bg-gray-500/20 text-gray-400'
               }`}>
                 {status?.pipeline?.running ? 'Running' : 'Idle'}
@@ -194,16 +194,16 @@ export default function Dashboard() {
 
             {/* Current Phase */}
             {status?.pipeline?.running && (
-              <div className="p-3 bg-cyber-dark rounded-lg">
+              <div className="p-3 bg-40k-dark rounded-lg">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-gray-400 text-sm">Current Phase</span>
-                  <span className="text-cyber-cyan text-sm font-medium capitalize">
+                  <span className="text-40k-gold text-sm font-medium capitalize">
                     {status?.pipeline?.current_phase?.replace('_', ' ') || 'Starting...'}
                   </span>
                 </div>
-                <div className="h-2 bg-cyber-border rounded-full overflow-hidden">
+                <div className="h-2 bg-40k-border rounded-full overflow-hidden">
                   <motion.div 
-                    className="h-full bg-gradient-to-r from-cyber-cyan to-cyber-magenta"
+                    className="h-full bg-gradient-to-r from-40k-gold to-40k-crimson-bright"
                     initial={{ width: 0 }}
                     animate={{ width: `${status?.pipeline?.progress || 0}%` }}
                     transition={{ type: 'spring', stiffness: 50, damping: 20 }}
@@ -218,49 +218,49 @@ export default function Dashboard() {
 
             {/* Error Display */}
             {status?.pipeline?.error && (
-              <div className="p-3 bg-cyber-red/10 border border-cyber-red/30 rounded-lg">
-                <div className="flex items-center gap-2 text-cyber-red text-sm font-medium mb-1">
+              <div className="p-3 bg-40k-red-bright/10 border border-40k-red-bright/30 rounded-lg">
+                <div className="flex items-center gap-2 text-40k-red-bright text-sm font-medium mb-1">
                   ⚠️ Error
                 </div>
                 <p className="text-xs text-gray-300 font-mono">{status.pipeline.error}</p>
               </div>
             )}
 
-            <div className="flex items-center justify-between p-3 bg-cyber-dark rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-40k-dark rounded-lg">
               <span className="text-gray-400">OAuth</span>
               <span className={`px-3 py-1 rounded-full text-sm ${
                 status?.oauth_configured 
-                  ? 'bg-cyber-green/20 text-cyber-green' 
-                  : 'bg-cyber-orange/20 text-cyber-orange'
+                  ? 'bg-40k-gold-dim/20 text-40k-gold-dim' 
+                  : 'bg-40k-bronze/20 text-40k-bronze'
               }`}>
                 {status?.oauth_configured ? 'Connected' : 'Not Configured'}
               </span>
             </div>
 
-            <div className="flex items-center justify-between p-3 bg-cyber-dark rounded-lg">
+            <div className="flex items-center justify-between p-3 bg-40k-dark rounded-lg">
               <span className="text-gray-400">Game Title</span>
-              <span className="text-cyber-cyan text-sm font-medium">
+              <span className="text-40k-gold text-sm font-medium">
                 {status?.game_title || 'Not set'}
               </span>
             </div>
 
             {status?.parent_franchise && status?.parent_franchise !== status?.game_title && (
-              <div className="flex items-center justify-between p-3 bg-cyber-dark rounded-lg">
+              <div className="flex items-center justify-between p-3 bg-40k-dark rounded-lg">
                 <span className="text-gray-400">Series</span>
-                <span className="text-cyber-magenta text-sm font-medium">
+                <span className="text-40k-crimson-bright text-sm font-medium">
                   {status?.parent_franchise}
                 </span>
               </div>
             )}
 
             {/* Video Source Toggle */}
-            <div className="flex items-center gap-2 p-3 bg-cyber-dark rounded-lg">
+            <div className="flex items-center gap-2 p-3 bg-40k-dark rounded-lg">
               <span className="text-gray-400 text-sm">Source:</span>
               <button
                 onClick={() => setVideoSource('youtube')}
                 className={`px-3 py-1 rounded text-sm flex items-center gap-1 ${
                   videoSource === 'youtube' 
-                    ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan' 
+                    ? 'bg-40k-gold/20 text-40k-gold border border-40k-gold' 
                     : 'text-gray-500 hover:text-gray-300'
                 }`}
               >
@@ -270,7 +270,7 @@ export default function Dashboard() {
                 onClick={() => setVideoSource('local')}
                 className={`px-3 py-1 rounded text-sm flex items-center gap-1 ${
                   videoSource === 'local' 
-                    ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan' 
+                    ? 'bg-40k-gold/20 text-40k-gold border border-40k-gold' 
                     : 'text-gray-500 hover:text-gray-300'
                 }`}
               >
@@ -316,14 +316,14 @@ export default function Dashboard() {
               Object.entries(weights.weights).map(([type, weight]) => (
                 <div key={type} className="flex items-center gap-3">
                   <div className="w-24 text-sm text-gray-400 capitalize">{type}</div>
-                  <div className="flex-1 h-2 bg-cyber-dark rounded-full overflow-hidden">
+                  <div className="flex-1 h-2 bg-40k-dark rounded-full overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
                       animate={{ width: `${(weight as number) * 100}%` }}
-                      className="h-full bg-gradient-to-r from-cyber-cyan to-cyber-magenta"
+                      className="h-full bg-gradient-to-r from-40k-gold to-40k-crimson-bright"
                     />
                   </div>
-                  <div className="w-12 text-right text-sm text-cyber-cyan">
+                  <div className="w-12 text-right text-sm text-40k-gold">
                     {((weight as number) * 100).toFixed(0)}%
                   </div>
                 </div>
@@ -334,9 +334,9 @@ export default function Dashboard() {
           </div>
 
           {weights?.selected && (
-            <div className="mt-4 p-3 bg-cyber-dark rounded-lg">
+            <div className="mt-4 p-3 bg-40k-dark rounded-lg">
               <p className="text-sm text-gray-400">
-                Next selected type: <span className="text-cyber-cyan font-medium capitalize">{weights.selected}</span>
+                Next selected type: <span className="text-40k-gold font-medium capitalize">{weights.selected}</span>
               </p>
             </div>
           )}
@@ -351,26 +351,26 @@ export default function Dashboard() {
           Learnings Summary
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="text-center p-4 bg-cyber-dark rounded-lg">
-            <p className="text-2xl font-display font-bold text-cyber-cyan">
+          <div className="text-center p-4 bg-40k-dark rounded-lg">
+            <p className="text-2xl font-display font-bold text-40k-gold">
               <AnimatedCounter value={metrics?.learnings_count || 0} />
             </p>
             <p className="text-sm text-gray-400">Patterns Discovered</p>
           </div>
-          <div className="text-center p-4 bg-cyber-dark rounded-lg">
-            <p className="text-2xl font-display font-bold text-cyber-magenta">
+          <div className="text-center p-4 bg-40k-dark rounded-lg">
+            <p className="text-2xl font-display font-bold text-40k-crimson-bright">
               <AnimatedCounter value={metrics?.total_scripts || 0} />
             </p>
             <p className="text-sm text-gray-400">Scripts Analyzed</p>
           </div>
-          <div className="text-center p-4 bg-cyber-dark rounded-lg">
-            <p className="text-2xl font-display font-bold text-cyber-yellow">
+          <div className="text-center p-4 bg-40k-dark rounded-lg">
+            <p className="text-2xl font-display font-bold text-40k-gold-bright">
               <AnimatedCounter value={baseline.sample_count || 0} />
             </p>
             <p className="text-sm text-gray-400">Data Points</p>
           </div>
-          <div className="text-center p-4 bg-cyber-dark rounded-lg">
-            <p className="text-2xl font-display font-bold text-cyber-green">
+          <div className="text-center p-4 bg-40k-dark rounded-lg">
+            <p className="text-2xl font-display font-bold text-40k-gold-dim">
               <AnimatedCounter value={baseline.avg_score || 0} />
             </p>
             <p className="text-sm text-gray-400">Avg Score</p>
@@ -385,11 +385,11 @@ export default function Dashboard() {
           <motion.div 
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-cyber-card border border-cyber-border rounded-lg p-4 w-full max-w-4xl h-[80vh] flex flex-col"
+            className="bg-40k-card border border-40k-border rounded-lg p-4 w-full max-w-4xl h-[80vh] flex flex-col"
           >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-display font-semibold text-white flex items-center gap-2">
-                <Settings className="w-5 h-5 text-cyber-cyan" />
+                <Settings className="w-5 h-5 text-40k-gold" />
                 Pipeline Logs
               </h3>
               <button onClick={() => setShowLogs(false)} className="text-gray-400 hover:text-white">
@@ -397,7 +397,7 @@ export default function Dashboard() {
               </button>
             </div>
             
-            <div className="flex-1 bg-cyber-dark border border-cyber-border rounded p-4 overflow-y-auto font-mono text-xs text-cyber-green">
+            <div className="flex-1 bg-40k-dark border border-40k-border rounded p-4 overflow-y-auto font-mono text-xs text-40k-gold-dim">
               {logsData?.logs?.length ? (
                 logsData.logs.map((log: string, i: number) => (
                   <div key={i} className="mb-1 whitespace-pre-wrap">{log}</div>

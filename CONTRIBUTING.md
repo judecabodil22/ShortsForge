@@ -62,7 +62,6 @@ ShortsForge/
 │   └── update_manager.py  # Auto-update system
 ├── content_studio/         # Content Studio feature
 ├── docs/                  # Documentation
-├── .github/workflows/      # CI/CD
 └── ...
 ```
 

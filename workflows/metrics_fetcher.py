@@ -13,6 +13,11 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, List, Any
 
+try:
+    from constants import calculate_performance_score, parse_duration
+except ImportError:
+    from workflows.constants import calculate_performance_score, parse_duration
+
 WORKSPACE = os.path.expanduser("~/ShortsForge")
 CLIENT_SECRETS_FILE = os.path.join(WORKSPACE, "client_secret.json")
 OAUTH_CREDENTIALS_FILE = os.path.join(WORKSPACE, ".shortsforge", "youtube_oauth.json")
@@ -146,7 +151,6 @@ def fetch_video_metadata(video_id: str) -> Optional[Dict[str, Any]]:
     url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id={video_id}&key={api_key}"
     
     try:
-        import urllib.request
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.loads(response.read().decode())
         
@@ -167,7 +171,6 @@ def fetch_metrics(video_id: str) -> Optional[Dict[str, Any]]:
     url = f"https://www.googleapis.com/youtube/v3/videos?part=statistics&id={video_id}&key={api_key}"
     
     try:
-        import urllib.request
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.loads(response.read().decode())
         
@@ -212,7 +215,6 @@ def search_channel_videos(channel_id: str = None, max_results: int = 50) -> List
     url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={channel_id}&type=video&order=date&maxResults={max_results}&key={api_key}"
     
     try:
-        import urllib.request
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.loads(response.read().decode())
         
@@ -282,8 +284,9 @@ def get_recent_uploads(days: int = 7, max_results: int = 50) -> List[Dict[str, A
         
         videos = []
         next_page_token = None
+        hit_cutoff = False
         
-        while len(videos) < max_results:
+        while len(videos) < max_results and not hit_cutoff:
             playlist_params = {
                 'playlistId': uploads_playlist_id,
                 'part': 'snippet',
@@ -299,7 +302,8 @@ def get_recent_uploads(days: int = 7, max_results: int = 50) -> List[Dict[str, A
                 published_at = snippet.get('publishedAt', '')
                 
                 if published_at < published_after_iso:
-                    return videos
+                    hit_cutoff = True
+                    break  # Stop collecting, but continue to stats fetch
                 
                 videos.append({
                     'video_id': snippet.get('resourceId', {}).get('videoId', ''),
@@ -314,7 +318,7 @@ def get_recent_uploads(days: int = 7, max_results: int = 50) -> List[Dict[str, A
                 })
             
             next_page_token = playlist_response.get('nextPageToken')
-            if not next_page_token:
+            if not next_page_token or hit_cutoff:
                 break
         
         if not videos:
@@ -374,7 +378,6 @@ def fetch_video_details(url_or_id: str) -> Optional[Dict[str, Any]]:
     url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id={video_id}&key={api_key}"
     
     try:
-        import urllib.request
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.loads(response.read().decode())
         
@@ -416,40 +419,6 @@ def fetch_video_details(url_or_id: str) -> Optional[Dict[str, Any]]:
         
     except Exception:
         return None
-
-
-def parse_duration(duration_str: str) -> int:
-    """Parse YouTube duration string to seconds (e.g., PT1M30S -> 90)."""
-    pattern = r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?'
-    match = re.match(pattern, duration_str)
-    
-    if not match:
-        return 0
-    
-    hours = int(match.group(1) or 0)
-    minutes = int(match.group(2) or 0)
-    seconds = int(match.group(3) or 0)
-    
-    return hours * 3600 + minutes * 60 + seconds
-
-
-def calculate_performance_score(views: int, engagement_ratio: float, duration: int = None) -> float:
-    """Calculate a combined performance score (0-100)."""
-    if views == 0:
-        return 0.0
-    
-    views_score = min(views / 100, 100) * 0.4
-    engagement_score = min(engagement_ratio * 10, 100) * 0.6
-    
-    score = views_score + engagement_score
-    
-    if duration:
-        optimal_duration = 45
-        duration_factor = 1.0 - abs(duration - optimal_duration) / 120
-        duration_factor = max(0.5, min(1.0, duration_factor))
-        score = score * (0.7 + 0.3 * duration_factor)
-    
-    return round(score, 2)
 
 
 def get_video_id_from_title(title: str, channel_id: str = None) -> Optional[str]:

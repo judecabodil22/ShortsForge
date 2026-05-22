@@ -35,9 +35,19 @@ export default function Metrics() {
 
   const baseline = summary?.baseline || {}
 
+  // Deduplicate by youtube_id — keep the latest metrics row per video
+  const seenIds = new Set<string>()
+  const uniqueVideos = (videos?.videos || [])
+    .sort((a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .filter((v: any) => {
+      if (seenIds.has(v.youtube_id)) return false
+      seenIds.add(v.youtube_id)
+      return true
+    })
+
   // Prepare chart data
   const titleCounts = new Map<string, number>()
-  const videoData = (videos?.videos || []).slice(0, 10).map((v: any) => {
+  const videoData = uniqueVideos.slice(0, 10).map((v: any) => {
     const baseTitle = v.title?.slice(0, 20) || 'Unknown'
     const count = titleCounts.get(baseTitle) || 0
     titleCounts.set(baseTitle, count + 1)
@@ -74,7 +84,7 @@ export default function Metrics() {
       <motion.div variants={{ hidden: { opacity: 0, y: -20 }, show: { opacity: 1, y: 0 } }} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-cyber-cyan">PERFORMANCE</span> METRICS
+            <span className="text-40k-gold">PERFORMANCE</span> METRICS
           </h1>
           <p className="text-gray-400 mt-1">Track video performance and analytics</p>
         </div>
@@ -206,7 +216,7 @@ export default function Metrics() {
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-cyber-border">
+              <tr className="border-b border-40k-border">
                 <th className="text-left py-3 px-4 text-gray-400 font-medium">Title</th>
                 <th className="text-right py-3 px-4 text-gray-400 font-medium">Views</th>
                 <th className="text-right py-3 px-4 text-gray-400 font-medium">Likes</th>
@@ -215,23 +225,23 @@ export default function Metrics() {
               </tr>
             </thead>
             <tbody>
-              {(videos?.videos || []).slice(0, 10).map((video: any, i: number) => (
-                <motion.tr 
+              {uniqueVideos.slice(0, 10).map((video: any, i: number) => (
+                <motion.tr
                   key={video.id || i}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: i * 0.05 }}
-                  className="border-b border-cyber-border/50 hover:bg-cyber-dark/50"
+                  className="border-b border-40k-border/50 hover:bg-40k-dark/50"
                 >
                   <td className="py-3 px-4 text-white truncate max-w-xs">{video.title}</td>
-                  <td className="py-3 px-4 text-right text-cyber-cyan">{formatNumber(video.views || 0)}</td>
-                  <td className="py-3 px-4 text-right text-cyber-magenta">{formatNumber(video.likes || 0)}</td>
-                  <td className="py-3 px-4 text-right text-cyber-yellow">{(video.engagement_ratio || 0).toFixed(2)}%</td>
+                  <td className="py-3 px-4 text-right text-40k-gold">{formatNumber(video.views || 0)}</td>
+                  <td className="py-3 px-4 text-right text-40k-crimson-bright">{formatNumber(video.likes || 0)}</td>
+                  <td className="py-3 px-4 text-right text-40k-gold-bright">{(video.engagement_ratio || 0).toFixed(2)}%</td>
                   <td className="py-3 px-4 text-right">
                     <span className={`px-2 py-1 rounded text-xs ${
-                      video.performance_score > 50 
-                        ? 'bg-cyber-green/20 text-cyber-green' 
-                        : 'bg-cyber-orange/20 text-cyber-orange'
+                      video.performance_score > 50
+                        ? 'bg-40k-gold-dim/20 text-40k-gold-dim'
+                        : 'bg-40k-bronze/20 text-40k-bronze'
                     }`}>
                       {(video.performance_score || 0).toFixed(0)}
                     </span>

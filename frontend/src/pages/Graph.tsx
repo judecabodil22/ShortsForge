@@ -4,7 +4,7 @@ import ForceGraph2D from 'react-force-graph-2d'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Network, ZoomIn, ZoomOut, Maximize2, RefreshCw, Pencil, Trash2, X, Save, Settings } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
-import { getGames, getGraphData, getSegmentRefs, updateContextItem, deleteContextItem } from '@/lib/api'
+import { getGames, getGraphData, getSegmentRefs, updateContextItem, deleteContextItem, getAllGamesGraph } from '@/lib/api'
 import {
   DEFAULT_GRAPH_SETTINGS,
   loadGraphSettings,
@@ -49,6 +49,7 @@ interface NodeData {
   links?: any[]
   aliases?: string[]
   tags?: string[]
+  game_key?: string
 }
 
 // interface LinkData {
@@ -68,6 +69,7 @@ export default function Graph() {
   const [editForm, setEditForm] = useState({ label: '', description: '' })
   const [showImplicitEdges, setShowImplicitEdges] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
+  const [hiddenGames, setHiddenGames] = useState<Set<string>>(new Set())
   const [graphSettings, setGraphSettings] = useState<GraphSettings>(() => loadGraphSettings())
   const [graphReady, setGraphReady] = useState(false)
   const initialFitKeyRef = useRef<string>('')
@@ -80,9 +82,20 @@ export default function Graph() {
 
   const { data: rawGraphData, refetch } = useQuery({
     queryKey: ['graph', selectedGame],
-    queryFn: () => getGraphData(selectedGame),
+    queryFn: () => selectedGame === '__all__' ? getAllGamesGraph() : getGraphData(selectedGame),
     enabled: !!selectedGame,
   })
+
+  const isAllMode = selectedGame === '__all__'
+
+  const toggleGame = useCallback((gameKey: string) => {
+    setHiddenGames(prev => {
+      const next = new Set(prev)
+      if (next.has(gameKey)) next.delete(gameKey)
+      else next.add(gameKey)
+      return next
+    })
+  }, [])
 
   const { data: segmentRefs } = useQuery({
     queryKey: ['segmentRefs', selectedGame],
@@ -90,10 +103,10 @@ export default function Graph() {
     enabled: !!selectedGame,
   })
   
-  // Auto-select franchise on mount
+  // Auto-select franchise on mount (skip if __all__ was the user's last choice)
   useEffect(() => {
-    if (selectedGame) return // Already selected
-    if (!games?.games?.length) return // No games loaded
+    if (selectedGame) return
+    if (!games?.games?.length) return
     
     const series = games.games.find((g: any) => g.is_series)
     if (series) {
@@ -102,6 +115,11 @@ export default function Graph() {
       setSelectedGame(games.games[0].name)
     }
   }, [games])
+
+  // Reset hidden games when switching out of All mode
+  useEffect(() => {
+    if (!isAllMode) setHiddenGames(new Set())
+  }, [isAllMode])
   
   const updateDimensions = useCallback(() => {
     if (containerRef.current) {
@@ -185,9 +203,11 @@ export default function Graph() {
     if (!rawGraphData?.nodes) return { nodes: [], links: [], implicitCount: 0, contextCount: 0 }
 
     const nodesMap = new Map<string, NodeData>()
-    const nodes = rawGraphData.nodes
+
+    let rawNodes = rawGraphData.nodes
       .filter((n: any) => n.data.type !== 'relationship')
       .map((n: any) => {
+        const gameKey = n.data.game_key || ''
         const node: NodeData = {
           id: n.data.id,
           label: n.data.label,
@@ -199,58 +219,78 @@ export default function Graph() {
           links: [],
           aliases: n.data.aliases || [],
           tags: n.data.tags || [],
+          game_key: gameKey,
         }
         nodesMap.set(node.id, node)
         return node
       })
 
+    // Filter hidden games in All mode
+    if (isAllMode && hiddenGames.size > 0) {
+      rawNodes = rawNodes.filter((n: NodeData) => n.game_key && !hiddenGames.has(n.game_key))
+    }
+    // Rebuild nodesMap from filtered nodes to remove hidden game entries
+    nodesMap.clear()
+    rawNodes.forEach((n: NodeData) => {
+      nodesMap.set(n.id, n)
+    })
+
+    const nodes = rawNodes
     let implicitCount = 0
     let contextCount = 0
-    const links = rawGraphData.edges
-      .map((e: any) => {
-        const source = e.data.source
-        const target = e.data.target
-        const isImplicit = e.data.implicit === true
-        const isContext = e.data.is_context === true
+    const links: Array<{
+      source: string
+      target: string
+      label: string
+      implicit: boolean
+      type: string
+      is_direct: boolean
+      is_context: boolean
+      game_key?: string
+    }> = []
 
-        const sNode = nodesMap.get(source)
-        const tNode = nodesMap.get(target)
-        if (!sNode || !tNode) return null
+    for (const e of (rawGraphData.edges || [])) {
+      const source = e.data.source
+      const target = e.data.target
+      const isImplicit = e.data.implicit === true
+      const isContext = e.data.is_context === true
+      const edgeGameKey = e.data.game_key || ''
 
-        const link = {
-          source,
-          target,
-          label: e.data.label,
-          implicit: isImplicit,
-          type: e.data.type,
-          is_direct: e.data.is_direct === true,
-          is_context: isContext,
-        }
-        sNode.neighbors?.push(target)
-        tNode.neighbors?.push(source)
-        sNode.links?.push(link)
-        tNode.links?.push(link)
+      // Filter edges from hidden games
+      if (isAllMode && hiddenGames.size > 0 && edgeGameKey && hiddenGames.has(edgeGameKey)) {
+        continue
+      }
 
-        if (isImplicit) implicitCount++
-        if (isContext) contextCount++
-        return link
-      })
-      .filter(Boolean) as Array<{
-        source: string
-        target: string
-        label: string
-        implicit: boolean
-        type: string
-        is_direct: boolean
-        is_context: boolean
-      }>
+      const sNode = nodesMap.get(source)
+      const tNode = nodesMap.get(target)
+      if (!sNode || !tNode) continue
+
+      const link = {
+        source,
+        target,
+        label: e.data.label || '',
+        implicit: isImplicit,
+        type: e.data.type || '',
+        is_direct: e.data.is_direct === true,
+        is_context: isContext,
+        game_key: edgeGameKey,
+      }
+      sNode.neighbors?.push(target)
+      tNode.neighbors?.push(source)
+      sNode.links?.push(link)
+      tNode.links?.push(link)
+
+      if (isImplicit) implicitCount++
+      if (isContext) contextCount++
+      links.push(link)
+    }
 
     nodes.forEach((n: NodeData) => {
       n.val = Math.min(10, 2 + (n.neighbors?.length || 0) * 0.5)
     })
 
     return { nodes, links, implicitCount, contextCount }
-  }, [rawGraphData])
+  }, [rawGraphData, isAllMode, hiddenGames])
 
   const graphInstanceKey = useMemo(
     () => `${selectedGame}:${graphData.nodes.length}:${graphData.links.length}`,
@@ -586,7 +626,8 @@ export default function Graph() {
             className="cyber-input w-56"
           >
             <option value="">Select Franchise</option>
-            {((games?.games || []) as any[]).map((game) => (
+            <option value="__all__">🌐 All Games</option>
+            {((games?.games || []) as any[]).map((game: any) => (
               <option key={game.name} value={game.name}>
                 {game.is_series ? '📁 ' : ''}{game.display_name}
               </option>
@@ -598,7 +639,7 @@ export default function Graph() {
         </div>
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex gap-4 flex-wrap">
         {Object.entries(NODE_COLORS).map(([type, color]) => (
           <div key={type} className="flex items-center gap-2">
             <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
@@ -620,6 +661,23 @@ export default function Graph() {
         >
           {showImplicitEdges ? 'Hide' : 'Show'} Co-occurrence
         </button>
+        {isAllMode && rawGraphData?.stats?.per_game && (
+          <>
+            <div className="w-px h-4 bg-gray-600" />
+            {Object.keys(rawGraphData.stats.per_game).map((gameKey) => (
+              <button
+                key={gameKey}
+                onClick={() => toggleGame(gameKey)}
+                className={`cyber-button text-xs px-3 py-1 ${
+                  hiddenGames.has(gameKey) ? 'opacity-40 line-through' : ''
+                }`}
+                title={hiddenGames.has(gameKey) ? `Show ${gameKey}` : `Hide ${gameKey}`}
+              >
+                {gameKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+              </button>
+            ))}
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -833,6 +891,16 @@ export default function Graph() {
                   {(rawGraphData.stats.sources.transcript_files || []).length}
                 </span>
               )}
+              {isAllMode && rawGraphData?.stats?.per_game && (
+                <span className="text-gray-500 ml-2">
+                  |{' '}
+                  {Object.entries(rawGraphData.stats.per_game).map(([key, s]: [string, any]) => (
+                    <span key={key} className={hiddenGames.has(key) ? 'opacity-40' : ''}>
+                      {key.replace(/_/g, ' ')}: {s.nodes} nodes ·{' '}
+                    </span>
+                  ))}
+                </span>
+              )}
             </motion.div>
             {graphData.nodes.length > 15 && graphData.contextCount < 3 && (
               <p className="text-xs text-amber-200/90 bg-cyber-dark/90 backdrop-blur px-3 py-2 rounded-lg border border-amber-500/30">
@@ -876,6 +944,11 @@ export default function Graph() {
                       {selectedNode.category && (
                         <span className="px-2 py-0.5 bg-cyber-dark/80 rounded text-xs text-gray-400">
                           {selectedNode.category}
+                        </span>
+                      )}
+                      {(selectedNode as NodeData).game_key && (
+                        <span className="px-2 py-0.5 bg-cyber-purple/20 text-cyber-purple rounded text-xs">
+                          {(selectedNode as NodeData).game_key?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                         </span>
                       )}
                     </div>

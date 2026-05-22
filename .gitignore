@@ -1,4 +1,4 @@
-# Lambda Cut - Git Ignore
+# ShortsForge - Git Ignore
 
 # Environment variables and secrets
 .env
@@ -33,6 +33,7 @@ scripts/
 shorts/
 tts/
 transcripts/
+media/
 
 # Content Studio
 content_studio/
@@ -51,6 +52,9 @@ generation_metrics.jsonl
 # IDE files
 .vscode/
 .idea/
+
+# Cursor IDE
+.git/cursor/
 
 # Application data
 .shortsforge/

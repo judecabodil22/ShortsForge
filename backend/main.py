@@ -6,14 +6,11 @@ FastAPI server for the cyberpunk web UI
 import os
 import sys
 import json
-import asyncio
 import time
 import secrets
 import re
 from datetime import datetime
 from typing import Optional, Any, Tuple
-from pathlib import Path
-from functools import wraps
 
 # Add parent directory to path for imports
 WORKSPACE = os.path.expanduser("~/ShortsForge")
@@ -37,6 +34,7 @@ from workflows.performance_database import (
 from workflows.metrics_fetcher import get_recent_uploads, is_oauth_configured
 from workflows.learning_engine import extract_script_features, get_virality_predictor
 from workflows.context_manager_v2 import ContextManagerV2, get_context_manager
+from workflows.constants import TTS_VOICES
 from workflows.context_manager import (
     SERIES_MAPPING,
     get_mempalace_text_chunks,
@@ -134,13 +132,20 @@ app.add_middleware(
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+        self.log_tailer = None
     
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        # Start log tailer for this connection if pipeline is running
+        if pipeline_status.get("running"):
+            self._start_log_tailer()
     
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        if not self.active_connections and self.log_tailer:
+            self.log_tailer = None
     
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
@@ -148,6 +153,38 @@ class ConnectionManager:
                 await connection.send_json(message)
             except Exception:
                 pass
+    
+    def _start_log_tailer(self):
+        """Start background task to tail pipeline log and broadcast over WebSocket."""
+        import threading
+        
+        if self.log_tailer:
+            return
+        
+        def tail_log():
+            log_file = "/tmp/pipeline.log"
+            if not os.path.exists(log_file):
+                self.log_tailer = None
+                return
+            
+            with open(log_file, "r") as f:
+                f.seek(0, 2)  # Seek to end
+                while self.active_connections and pipeline_status.get("running"):
+                    line = f.readline()
+                    if line:
+                        import asyncio
+                        try:
+                            asyncio.get_event_loop().run_until_complete(
+                                self.broadcast({"type": "log", "data": line.strip()})
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        time.sleep(0.5)
+            self.log_tailer = None
+        
+        self.log_tailer = threading.Thread(target=tail_log, daemon=True)
+        self.log_tailer.start()
 
 manager = ConnectionManager()
 
@@ -418,10 +455,8 @@ def run_pipeline_async(source: str = "youtube"):
         
         # Auto-sync YouTube metrics after pipeline completes
         try:
-            from workflows.metrics_fetcher import get_recent_uploads
-            from workflows.performance_database import auto_match_and_fetch
-            videos = get_recent_uploads(days=7, max_results=50)
-            result = auto_match_and_fetch(videos)
+            from workflows.performance_database import sync_youtube_metrics
+            result = sync_youtube_metrics()
             print(f"[METRICS] Auto-sync completed: {result.get('new_metrics', 0)} metrics updated")
         except Exception as e:
             print(f"[METRICS] Auto-sync failed: {e}")
@@ -537,10 +572,8 @@ async def get_content_performance():
 async def sync_youtube_metrics(request: Request, _: bool = Depends(verify_api_key)):
     """Trigger YouTube metrics sync - rate limited"""
     try:
-        videos = get_recent_uploads(days=7, max_results=50)
-        
-        from workflows.performance_database import auto_match_and_fetch
-        result = auto_match_and_fetch(videos)
+        from workflows.performance_database import sync_youtube_metrics
+        result = sync_youtube_metrics(days=7, max_results=50)
         
         await manager.broadcast({
             "type": "metrics:updated",
@@ -830,20 +863,32 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
     
     # Get entities from context manager
     cm = get_context_manager()
+    
+    # Determine game keys to load entities from — if franchise, include child games
+    game_keys_for_entities = [game_key]
+    if game_key in SERIES_MAPPING.values():
+        children = [
+            child_key
+            for child_key, series_val in SERIES_MAPPING.items()
+            if series_val == game_key
+        ]
+        game_keys_for_entities = [game_key] + children
+    
     entities = {
         'character': [],
         'location': [],
         'term': []
     }
     
-    for etype in entities:
-        for item in cm.get_context_items(game_key, etype):
-            entities[etype].append({
-                'id': item.id,
-                'name': item.name.lower(),
-                'original': item.name,
-                'type': etype
-            })
+    for gk in game_keys_for_entities:
+        for etype in entities:
+            for item in cm.get_context_items(gk, etype):
+                entities[etype].append({
+                    'id': item.id,
+                    'name': item.name.lower(),
+                    'original': item.name,
+                    'type': etype
+                })
     
     # Build entity name to ID map (include variations)
     name_to_id = {}
@@ -920,12 +965,13 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
             continue
 
     # MemPalace: split narrative chunks into sentence-like segments for co-occurrence
-    mempalace_chunks = get_mempalace_text_chunks(game_key)
-    for chunk_idx, chunk in enumerate(mempalace_chunks):
-        for part_idx, part in enumerate(re.split(r'[.!?\n]+', chunk)):
-            part = part.strip()
-            if len(part) > 20:
-                _process_text_segment(part, seg_offset + chunk_idx * 1000 + part_idx)
+    for gk in game_keys_for_entities:
+        mempalace_chunks = get_mempalace_text_chunks(gk)
+        for chunk_idx, chunk in enumerate(mempalace_chunks):
+            for part_idx, part in enumerate(re.split(r'[.!?\n]+', chunk)):
+                part = part.strip()
+                if len(part) > 20:
+                    _process_text_segment(part, seg_offset + chunk_idx * 1000 + part_idx)
     
     # Generate implicit edges from co-occurrences
     implicit_edges = []
@@ -1031,8 +1077,11 @@ def _resolve_graph_game_key(game_key: str) -> str:
 
 
 def _register_graph_node(item, nodes: list, node_id_map: dict, alias_map: dict) -> None:
-    """Register an entity node and all name aliases for edge resolution."""
+    """Register an entity node and all name aliases for edge resolution.
+    First registration wins for name collisions (character > location > term)."""
     norm = _normalize_entity_name(item.name)
+    if not norm:
+        return
     nodes.append({
         "data": {
             "id": item.id,
@@ -1042,7 +1091,8 @@ def _register_graph_node(item, nodes: list, node_id_map: dict, alias_map: dict) 
             "category": getattr(item, "category", "") or "",
         }
     })
-    node_id_map[norm] = item.id
+    if norm not in node_id_map:
+        node_id_map[norm] = item.id
     for alias in getattr(item, "aliases", []) or []:
         alias_norm = _normalize_entity_name(alias if isinstance(alias, str) else str(alias))
         if alias_norm:
@@ -1117,112 +1167,140 @@ def _iter_context_relationships(game_key: str, cm) -> list:
             pass
 
 
-@app.get("/api/context/{game}/graph")
-async def get_graph_data(game: str):
-    """Get graph data in Cytoscape.js format"""
-    game_title = sanitize_input(game, max_length=100)
-    game_key = _resolve_graph_game_key(game_title.lower().replace(" ", "_").strip())
-    cm = get_context_manager()
-    cm.load_all_contexts()
-
+def _build_single_game_graph(
+    game_key: str,
+    cm,
+    shared_node_id_map: dict | None = None,
+    shared_alias_map: dict | None = None,
+    shared_valid_ids: set | None = None,
+) -> dict:
+    """Build graph for one game. Optionally merge into shared maps for cross-game views.
+    If game_key is a franchise key, child game data is merged in automatically."""
     nodes = []
     edges = []
-    node_id_map: dict[str, str] = {}
-    alias_map: dict[str, str] = {}
-    valid_node_ids: set[str] = set()
+    node_id_map = {} if shared_node_id_map is None else shared_node_id_map
+    alias_map = {} if shared_alias_map is None else shared_alias_map
+    valid_node_ids: set[str] = shared_valid_ids if shared_valid_ids is not None else set()
 
-    for item_type in ("character", "location", "term", "game"):
-        for item in cm.get_context_items(game_key, item_type):
-            _register_graph_node(item, nodes, node_id_map, alias_map)
-            valid_node_ids.add(item.id)
+    # Determine which game keys to process — if franchise, include child games
+    # Only merge child data in individual mode (no shared maps), not in all-games mode
+    game_keys_to_process = [game_key]
+    if shared_node_id_map is None and shared_valid_ids is None:
+        is_franchise = game_key in SERIES_MAPPING.values()
+        if is_franchise:
+            children = [
+                child_key
+                for child_key, series_val in SERIES_MAPPING.items()
+                if series_val == game_key
+            ]
+            game_keys_to_process = [game_key] + children
 
-    # Direct entity-to-entity edges from verified context relationships
+    for current_game_key in game_keys_to_process:
+        for item_type in ("character", "location", "term", "game"):
+            for item in cm.get_context_items(current_game_key, item_type):
+                _register_graph_node(item, nodes, node_id_map, alias_map)
+                valid_node_ids.add(item.id)
+
     context_rel_count = 0
     added_pairs: set[tuple[str, str]] = set()
-    for rel in _iter_context_relationships(game_key, cm):
-        source_id = _resolve_entity_id(rel["from"], node_id_map, alias_map)
-        target_id = _resolve_entity_id(rel["to"], node_id_map, alias_map)
-        if not source_id or not target_id or source_id == target_id:
-            continue
-        pair_key = tuple(sorted([source_id, target_id]))
-        if pair_key in added_pairs:
-            continue
-        added_pairs.add(pair_key)
-        context_rel_count += 1
-        edges.append({
-            "data": {
-                "id": f"ctx_{source_id[:8]}_{target_id[:8]}_{context_rel_count}",
-                "source": source_id,
-                "target": target_id,
-                "label": rel.get("relationship") or "related",
-                "type": "context_relationship",
-                "implicit": False,
-                "is_direct": True,
-                "is_context": True,
-            }
-        })
+    for current_game_key in game_keys_to_process:
+        for rel in _iter_context_relationships(current_game_key, cm):
+            source_id = _resolve_entity_id(rel["from"], node_id_map, alias_map)
+            target_id = _resolve_entity_id(rel["to"], node_id_map, alias_map)
 
-    # Generate implicit edges - first try stored, then compute from transcripts
+            # Auto-create placeholder nodes for entities that don't exist as nodes
+            if not source_id:
+                placeholder_id = f"ph_{_normalize_entity_name(rel['from'])}_{current_game_key[:8]}"
+                norm_from = _normalize_entity_name(rel["from"])
+                nodes.append({
+                    "data": {
+                        "id": placeholder_id,
+                        "label": rel["from"],
+                        "type": "character",
+                        "description": "",
+                        "category": "",
+                    }
+                })
+                node_id_map[norm_from] = placeholder_id
+                valid_node_ids.add(placeholder_id)
+                source_id = placeholder_id
+
+            if not target_id:
+                placeholder_id = f"ph_{_normalize_entity_name(rel['to'])}_{current_game_key[:8]}"
+                norm_to = _normalize_entity_name(rel["to"])
+                nodes.append({
+                    "data": {
+                        "id": placeholder_id,
+                        "label": rel["to"],
+                        "type": "character",
+                        "description": "",
+                        "category": "",
+                    }
+                })
+                node_id_map[norm_to] = placeholder_id
+                valid_node_ids.add(placeholder_id)
+                target_id = placeholder_id
+
+            if source_id == target_id:
+                continue
+            pair_key = tuple(sorted([source_id, target_id]))
+            if pair_key in added_pairs:
+                continue
+            added_pairs.add(pair_key)
+            context_rel_count += 1
+            edges.append({
+                "data": {
+                    "id": f"ctx_{source_id[:8]}_{target_id[:8]}_{context_rel_count}",
+                    "source": source_id,
+                    "target": target_id,
+                    "label": rel.get("relationship") or "related",
+                    "type": "context_relationship",
+                    "implicit": False,
+                    "is_direct": True,
+                    "is_context": True,
+                    "game_key": current_game_key,
+                }
+            })
+
     try:
-        # First try to load from stored implicit_relationships
         stored_implicit = load_implicit_relationships(game_key)
-        
-        if stored_implicit:
-            # Use stored implicit relationships, resolving names to IDs
-            for ie in stored_implicit:
-                source_val = ie.get('source', '')
-                target_val = ie.get('target', '')
-                # Check if already valid node IDs
-                source_id = source_val if source_val in valid_node_ids else _resolve_entity_id(source_val, node_id_map, alias_map)
-                target_id = target_val if target_val in valid_node_ids else _resolve_entity_id(target_val, node_id_map, alias_map)
-                if not source_id or not target_id or source_id == target_id:
-                    continue
-                edges.append({
-                    "data": {
-                        "id": f"implicit_{source_id[:8]}_{target_id[:8]}",
-                        "source": source_id,
-                        "target": target_id,
-                        "label": ie.get("label", ""),
-                        "type": ie.get("type", "co_occurs"),
-                        "implicit": True,
-                        "weight": ie.get("weight", 1)
-                    }
-                })
+        cooccurrence_data = analyze_transcript_cooccurrence(game_key)
+        fresh_edges = cooccurrence_data.get("edges", [])
+
+        if fresh_edges:
+            save_implicit_relationships(game_key, fresh_edges)
+            implicit_edges_data = fresh_edges
+        elif stored_implicit:
+            implicit_edges_data = stored_implicit
         else:
-            # Fall back to computing from transcripts
-            cooccurrence_data = analyze_transcript_cooccurrence(game_key)
-            implicit_edges_data = cooccurrence_data.get("edges", [])
-            
-            # Store for future use
-            if implicit_edges_data:
-                save_implicit_relationships(game_key, implicit_edges_data)
-            
-            # Add implicit edges to the graph, resolving names to IDs
-            for ie in implicit_edges_data:
-                source_val = ie.get('source', '')
-                target_val = ie.get('target', '')
-                source_id = source_val if source_val in valid_node_ids else _resolve_entity_id(source_val, node_id_map, alias_map)
-                target_id = target_val if target_val in valid_node_ids else _resolve_entity_id(target_val, node_id_map, alias_map)
-                if not source_id or not target_id or source_id == target_id:
-                    continue
-                edges.append({
-                    "data": {
-                        "id": f"implicit_{source_id[:8]}_{target_id[:8]}",
-                        "source": source_id,
-                        "target": target_id,
-                        "label": ie.get("label", ""),
-                        "type": ie.get("type", "co_occurs"),
-                        "implicit": True,
-                        "weight": ie.get("weight", 1)
-                    }
-                })
+            implicit_edges_data = []
+
+        for ie in implicit_edges_data:
+            source_val = ie.get('source', '')
+            target_val = ie.get('target', '')
+            source_id = source_val if source_val in valid_node_ids else _resolve_entity_id(source_val, node_id_map, alias_map)
+            target_id = target_val if target_val in valid_node_ids else _resolve_entity_id(target_val, node_id_map, alias_map)
+            if not source_id or not target_id or source_id == target_id:
+                continue
+            edges.append({
+                "data": {
+                    "id": f"implicit_{source_id[:8]}_{target_id[:8]}",
+                    "source": source_id,
+                    "target": target_id,
+                    "label": ie.get("label", ""),
+                    "type": ie.get("type", "co_occurs"),
+                    "implicit": True,
+                    "weight": ie.get("weight", 1),
+                    "game_key": game_key,
+                }
+            })
     except Exception as e:
         print(f"Error generating implicit edges: {e}")
 
     sources = get_context_sources_summary(game_key)
     context_edges = sum(1 for e in edges if e.get("data", {}).get("is_context"))
     implicit_edges = sum(1 for e in edges if e.get("data", {}).get("implicit"))
-    
+
     return {
         "nodes": nodes,
         "edges": edges,
@@ -1231,8 +1309,140 @@ async def get_graph_data(game: str):
             "context_edges": context_edges,
             "implicit_edges": implicit_edges,
             "sources": sources,
+            "game_key": game_key,
         },
     }
+
+
+@app.get("/api/context/all/graph")
+async def get_all_games_graph():
+    """Get graph data for all games combined. Each game is isolated — no cross-game edges."""
+    cm = get_context_manager()
+    cm.load_all_contexts()
+
+    all_games = cm.get_games()
+    if not all_games:
+        return {"nodes": [], "edges": [], "stats": {"total_nodes": 0, "per_game": {}}}
+
+    all_nodes: list = []
+    all_edges: list = []
+    per_game_stats: dict = {}
+    shared_node_id_map: dict = {}
+    shared_alias_map: dict = {}
+    shared_valid_ids: set = set()
+
+    for game_key in all_games:
+        game_graph = _build_single_game_graph(
+            game_key, cm,
+            shared_node_id_map=shared_node_id_map,
+            shared_alias_map=shared_alias_map,
+            shared_valid_ids=shared_valid_ids,
+        )
+
+        game_nodes = game_graph.get("nodes", [])
+        game_stats = game_graph.get("stats", {})
+
+        if not game_nodes:
+            continue
+
+        display_name = game_key.replace("_", " ").title()
+        hub_id = f"hub_{game_key}"
+        all_nodes.append({
+            "data": {
+                "id": hub_id,
+                "label": display_name,
+                "type": "game",
+                "description": f"{len(game_nodes)} entities in {display_name}",
+            }
+        })
+
+        for node in game_nodes:
+            node["data"]["game_key"] = game_key
+            node["data"]["_hub_id"] = hub_id
+            all_nodes.append(node)
+            all_edges.append({
+                "data": {
+                    "id": f"hub_link_{node['data']['id']}",
+                    "source": hub_id,
+                    "target": node["data"]["id"],
+                    "label": "belongs to",
+                    "type": "hub",
+                    "implicit": False,
+                    "is_context": False,
+                    "game_key": game_key,
+                }
+            })
+
+        for edge in game_graph.get("edges", []):
+            edge["data"]["game_key"] = game_key
+            all_edges.append(edge)
+
+        per_game_stats[game_key] = {
+            "nodes": game_stats.get("nodes", 0),
+            "context_edges": game_stats.get("context_edges", 0),
+            "implicit_edges": game_stats.get("implicit_edges", 0),
+        }
+
+    return {
+        "nodes": all_nodes,
+        "edges": all_edges,
+        "stats": {
+            "total_nodes": len(all_nodes),
+            "total_edges": len(all_edges),
+            "per_game": per_game_stats,
+        },
+    }
+
+
+# Graph data cache (TTL: 60 seconds, invalidated on context file changes)
+_graph_cache: dict = {}
+_graph_cache_time: float = 0
+_GRAPH_CACHE_TTL = 60
+
+def _get_graph_cache_key() -> str:
+    """Generate cache key based on context file mtimes."""
+    context_dir = os.path.join(WORKSPACE, "Context")
+    if not os.path.exists(context_dir):
+        return "no_context"
+    mtimes = []
+    for root, dirs, files in os.walk(context_dir):
+        for f in files:
+            if f.endswith(('.json', '.md')):
+                mtimes.append(str(os.path.getmtime(os.path.join(root, f))))
+    return "|".join(sorted(mtimes))
+
+def _get_cached_graph(cache_key: str) -> dict | None:
+    """Get cached graph data if still valid."""
+    global _graph_cache_time
+    if _graph_cache and (time.time() - _graph_cache_time < _GRAPH_CACHE_TTL):
+        return _graph_cache.get(cache_key)
+    return None
+
+def _set_cached_graph(cache_key: str, data: dict) -> None:
+    """Cache graph data with current timestamp."""
+    global _graph_cache, _graph_cache_time
+    _graph_cache = {cache_key: data}
+    _graph_cache_time = time.time()
+
+
+@app.get("/api/context/{game}/graph")
+async def get_graph_data(game: str):
+    """Get graph data in Cytoscape.js format for a single game."""
+    game_title = sanitize_input(game, max_length=100)
+    game_key = _resolve_graph_game_key(game_title.lower().replace(" ", "_").strip())
+    
+    cache_key = _get_graph_cache_key()
+    cached = _get_cached_graph(f"single:{game_key}:{cache_key}")
+    if cached:
+        return cached
+
+    cm = get_context_manager()
+    cm.load_all_contexts()
+
+    graph = _build_single_game_graph(game_key, cm)
+    graph["stats"].pop("game_key", None)
+    _set_cached_graph(f"single:{game_key}:{cache_key}", graph)
+    return graph
 
 
 @app.get("/api/context/{game}/segments")
@@ -1291,12 +1501,7 @@ async def delete_context_item(request: Request, game: str, item_type: str, item_
 @app.get("/api/tts/voices")
 async def get_tts_voices():
     """Get available TTS voices"""
-    voices = [
-        "Vindemiatrix", "Aoede", "Callirrhoe", "Gacrux", "Sulafat", "Leda",
-        "Kore", "Enceladus", "Erinome", "Despina", "Alnilam", "Laomedeia",
-        "Achernar", "Pulcherrima", "Zephyr", "Puck", "Charon", "Fenrir"
-    ]
-    return {"voices": voices}
+    return {"voices": TTS_VOICES}
 
 
 @app.get("/api/tts/learnings")
@@ -1646,11 +1851,21 @@ async def websocket_endpoint(websocket: WebSocket):
 # SERVE FRONTEND
 # ============================================================================
 
+FRONTEND_DIST = os.path.join(WORKSPACE, "frontend", "dist")
+
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
-    """Serve the frontend build"""
-    # In development, this would be handled by Vite
-    # In production, would serve from frontend/dist
+    """Serve the frontend build in production, or proxy to Vite in development."""
+    # Try to serve from production build first
+    if os.path.exists(FRONTEND_DIST):
+        file_path = os.path.join(FRONTEND_DIST, full_path) if full_path else os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(file_path):
+            from fastapi.responses import FileResponse
+            return FileResponse(file_path)
+        # SPA fallback: serve index.html for any route
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+    
+    # Development fallback: return inline HTML that loads from Vite dev server
     return HTMLResponse(content="""
     <!DOCTYPE html>
     <html lang="en">

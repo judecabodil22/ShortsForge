@@ -189,7 +189,7 @@ Generate a 1500-word script that:
 
 | Aspect | Content Studio | Main Pipeline |
 |--------|---------------|---------------|
-| Location | `content_studio/` folder | `workflows/lambda_cut.py` |
+| Location | `content_studio/` folder | `workflows/shortsforge.py` |
 | Commands | `/content_studio`, `/theory`, etc. | `/run_pipeline`, `/run_phase` |
 | Triggers | Manual command | YouTube/Local trigger |
 | Output | New content | Video production |

@@ -1,12 +1,25 @@
-# Lambda Cut Requirements
-# Python dependencies for Lambda Cut - YouTube Shorts Pipeline
+# ShortsForge Requirements
+# Python dependencies for ShortsForge - YouTube Shorts Pipeline
 
 # Core
 yt-dlp>=2024.1.0
 
+# Web Backend
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+slowapi>=0.1.8
+jinja2>=3.1.0
+requests>=2.31.0
+
 # Transcription (faster-whisper is primary, with fallbacks)
 faster-whisper>=1.0.0
 stable-ts>=2.0.0
+
+# NLP & ML
+spacy>=3.7.0
+rapidfuzz>=3.5.0
+textblob>=0.18.0
+xgboost>=2.0.0
 
 # Security: System keychain for API keys
 keyring>=23.0.0
@@ -16,9 +29,6 @@ google-auth>=2.0.0
 google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.4.0
 google-api-python-client>=2.0.0
-
-# Learning & ML
-xgboost>=2.0.0
 
 # Optional: For better GPU acceleration
 # torch>=2.0.0
