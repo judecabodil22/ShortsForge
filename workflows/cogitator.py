@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ShortsForge — YouTube Shorts Pipeline
-Combines: shortsforge.sh, telegram_listener.sh, generate_script.sh, onboard.sh
+Cogitator — YouTube Shorts Pipeline
+Combines: cogitator.sh, telegram_listener.sh, generate_script.sh, onboard.sh
 """
 import argparse, base64, datetime, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
 from datetime import datetime
@@ -18,14 +18,8 @@ from update_manager import (
     perform_update,
     cleanup_old_backups,
 )
-try:
-    from constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score, parse_duration, get_next_groq_key
-except ImportError:
-    from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score, parse_duration, get_next_groq_key
-try:
-    from core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin, get_state as _rr_get_state
-except ImportError:
-    from workflows.core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin, get_state as _rr_get_state
+from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score, parse_duration, get_next_groq_key, dedupe_entity_list, fuzzy_dedup_against_list
+from workflows.core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin, get_state as _rr_get_state
 from performance_database import (
     store_script,
     backfill_script_titles,
@@ -114,6 +108,7 @@ try:
 except ImportError:
     AUDIO_ANALYSIS_AVAILABLE = False
     def enhance_scene_selection(*args, **kwargs): return args[0] if args else []
+
 from context_manager_v2 import (
     load_verified_context,
     save_verified_context,
@@ -128,9 +123,14 @@ from context_manager_v2 import (
 from context_manager import merge_context_dicts
 import requests
 from jinja2 import Environment, FileSystemLoader, BaseLoader
+try:
+    from rapidfuzz import fuzz as _fuzz
+except ImportError:
+    _fuzz = None
 
 # Groq configuration
-GROQ_KEY_INDEX = 0  # Track which key to use next
+GROQ_KEY_INDEX = 0  # Track which Groq key to use next
+GEMINI_KEY_INDEX = 0  # Track which Gemini key to use next
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # Dynamic model selection per content type
@@ -162,7 +162,7 @@ TEMPERATURE_BY_TYPE = {
 }
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-DEFAULT_WORKSPACE = os.path.expanduser("~/ShortsForge")
+DEFAULT_WORKSPACE = os.path.expanduser("~/Cogitator")
 
 def _find_workspace():
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
@@ -178,8 +178,9 @@ WORKFLOW_DIR = os.path.join(WORKSPACE, "workflows")
 ENV_FILE     = os.path.join(WORKSPACE, ".env")
 LOG_FILE     = os.path.join(WORKSPACE, "pipeline.log")
 METRICS_FILE = os.path.join(WORKSPACE, "generation_metrics.jsonl")
-STATUS_FILE  = "/tmp/pipeline_status"
-LAST_CALL    = "/tmp/gemini_last_call.txt"
+STATUS_FILE  = os.path.join(os.path.expanduser("~/.cogitator"), "pipeline_status")
+LAST_CALL    = os.path.join(os.path.expanduser("~/.cogitator"), "gemini_last_call.txt")
+
 
 TRANSCRIPTS_DIR  = os.path.join(WORKSPACE, "transcripts")
 SCRIPTS_DIR      = os.path.join(WORKSPACE, "scripts")
@@ -264,7 +265,7 @@ CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
 # Get game-specific context file based on current game title (called at runtime)
 def get_cs_context_file():
     """Get the context file path for current game."""
-    game_title = env("GAME_TITLE", "default") if 'env' in globals() else "default"
+    game_title = env("GAME_TITLE", "default")
     game_key = game_title.lower().replace(" ", "_")
     game_dir = os.path.join(CONTEXT_DIR, game_key)
     os.makedirs(game_dir, exist_ok=True)
@@ -277,9 +278,12 @@ STREAMING = False  # set True when called from listener
 PIPELINE_RUNNING = False
 LISTENER_RESTART = False  # set True when update requires restart
 PIPELINE_STOP_REQUESTED = False  # set True to request pipeline stop
+_pipeline_globals_lock = threading.Lock()
 LISTENER_RUNNING = True  # set False to stop listener
-PID_FILE = "/tmp/SHORTSFORGE_listener.pid"
-OFFSET_FILE = "/tmp/SHORTSFORGE_listener_offset"
+_SF_DIR = os.path.join(os.path.expanduser("~/.cogitator"))
+os.makedirs(_SF_DIR, exist_ok=True)
+PID_FILE = os.path.join(_SF_DIR, "listener.pid")
+OFFSET_FILE = os.path.join(_SF_DIR, "listener_offset")
 
 # Learning state (refreshed at pipeline start)
 _LEARNING_BASELINE = {}
@@ -290,6 +294,7 @@ _LEARNING_OPTIMIZED_PARAMS = {}
 
 # Context editing state
 CONTEXT_EDIT_STATE = {}
+_ctx_edit_lock = threading.Lock()
 
 # Shared state between phases (used for linking clips to scripts in DB)
 _SCRIPT_ID_MAP = {}  # {script_hour_index: script_id}
@@ -317,7 +322,7 @@ def _refresh_learning_state():
         return
 
     try:
-        oauth_file = os.path.join(WORKSPACE, ".shortsforge", "youtube_oauth.json")
+        oauth_file = os.path.join(WORKSPACE, ".cogitator", "youtube_oauth.json")
         if os.path.exists(oauth_file):
             try:
                 from performance_database import sync_youtube_metrics
@@ -333,12 +338,38 @@ def _refresh_learning_state():
         _LEARNING_TTS_WEIGHTS = get_weighted_tts_voices()
 
         try:
-            from learning_engine import get_optimized_params
+            from learning_engine import get_optimized_params, analyze_performance_patterns
             from performance_database import get_learnings as pdb_get_learnings
             learnings = pdb_get_learnings()
             _LEARNING_OPTIMIZED_PARAMS = get_optimized_params(learnings, _LEARNING_BASELINE)
         except Exception:
             _LEARNING_OPTIMIZED_PARAMS = {}
+
+        # Analyze performance patterns and wire up learning feedback
+        try:
+            from performance_database import get_successful_scripts
+            successful = get_successful_scripts(limit=20)
+            if len(successful) >= 3:
+                startup_metrics = getattr(_refresh_learning_state, '_metrics_cache', [])
+                analysis = analyze_performance_patterns(successful, startup_metrics)
+                if analysis and analysis.get('confidence', 0) >= 0.3:
+                    log(f"[LEARNING] Pattern analysis: {analysis.get('sample_count', 0)} scripts, confidence {analysis.get('confidence', 0):.0%}")
+        except Exception:
+            pass
+
+        # Train virality model if enough samples
+        try:
+            from learning_engine import train_virality_model
+            from performance_database import get_successful_scripts as _gss
+            all_scripts = _gss(limit=50)
+            if len(all_scripts) >= 5:
+                result = train_virality_model(all_scripts)
+                if result.get('success'):
+                    top_features = result.get('top_features', [])
+                    if top_features:
+                        log(f"[LEARNING] Virality model trained ({result.get('sample_count', 0)} samples). Top features: {top_features[:3]}")
+        except Exception:
+            pass
 
         sample_count = _LEARNING_BASELINE.get('sample_count', 0)
         log(f"[LEARNING] Refreshed: {sample_count} samples, {len(_LEARNING_VARIANT_WEIGHTS)} weighted variants, {len(_LEARNING_TTS_WEIGHTS)} TTS combos")
@@ -360,7 +391,7 @@ def _init_round_robin(num_scripts):
         variant_weights=_LEARNING_VARIANT_WEIGHTS,
         tts_weights=_LEARNING_TTS_WEIGHTS,
     )
-    log(f"[LEARNING] Round-robin: {len(list(SCRIPT_VARIANTS.keys()))} variants, {len(TTS_VOICES)*len(TTS_STYLE_OPTIONS)} TTS combos")
+    log(f"[LEARNING] Round-robin: {len(SCRIPT_VARIANTS)} variants, {len(TTS_VOICES)*len(TTS_STYLE_OPTIONS)} TTS combos")
 
 def _get_next_round_robin():
     """Get next round-robin item and advance index."""
@@ -562,12 +593,14 @@ def handle_context_callback(callback_data, game_title, cb_id):
         else:
             extracted = _cs_load_context()
         
-        # Store editing state
-        CONTEXT_EDIT_STATE = {
-            "game_title": game_title,
-            "step": "choose_field",
-            "extracted": extracted
-        }
+        # Store editing state (clear+update to preserve dict reference)
+        with _ctx_edit_lock:
+            CONTEXT_EDIT_STATE.clear()
+            CONTEXT_EDIT_STATE.update({
+                "game_title": game_title,
+                "step": "choose_field",
+                "extracted": extracted
+            })
         
         chars = extracted.get("characters", [])
         locs = extracted.get("locations", [])
@@ -588,7 +621,8 @@ def handle_context_callback(callback_data, game_title, cb_id):
     
     elif callback_data == "ctx_edit_characters":
         # Edit characters submenu
-        state = CONTEXT_EDIT_STATE
+        with _ctx_edit_lock:
+            state = dict(CONTEXT_EDIT_STATE)
         log(f"[DEBUG] ctx_edit_characters - CONTEXT_EDIT_STATE: {state}")
         if not state:
             log("[DEBUG] CONTEXT_EDIT_STATE is empty")
@@ -615,7 +649,8 @@ def handle_context_callback(callback_data, game_title, cb_id):
     
     elif callback_data == "ctx_edit_locations":
         # Edit locations submenu
-        state = CONTEXT_EDIT_STATE
+        with _ctx_edit_lock:
+            state = dict(CONTEXT_EDIT_STATE)
         log(f"[DEBUG] ctx_edit_locations called, state: {bool(state)}")
         if not state or "extracted" not in state:
             return "⚠️ No editing session active. Click Edit first to start."
@@ -637,7 +672,8 @@ def handle_context_callback(callback_data, game_title, cb_id):
     
     elif callback_data == "ctx_edit_relationships":
         # Edit relationships submenu
-        state = CONTEXT_EDIT_STATE
+        with _ctx_edit_lock:
+            state = dict(CONTEXT_EDIT_STATE)
         log(f"[DEBUG] ctx_edit_relationships called, state: {bool(state)}")
         if not state or "extracted" not in state:
             return "⚠️ No editing session active. Click Edit first to start."
@@ -663,7 +699,8 @@ def handle_context_callback(callback_data, game_title, cb_id):
     
     elif callback_data == "ctx_edit_done":
         # Save and proceed
-        state = CONTEXT_EDIT_STATE
+        with _ctx_edit_lock:
+            state = dict(CONTEXT_EDIT_STATE)
         if not state:
             return "⚠️ No editing session active."
         
@@ -674,13 +711,15 @@ def handle_context_callback(callback_data, game_title, cb_id):
             return "⚠️ No context to save."
         
         save_verified_context(game_title, extracted)
-        CONTEXT_EDIT_STATE.clear()
+        with _ctx_edit_lock:
+            CONTEXT_EDIT_STATE.clear()
         
         return "✅ Context saved!", None
     
     elif callback_data == "ctx_edit_back":
         # Go back to edit menu
-        state = CONTEXT_EDIT_STATE
+        with _ctx_edit_lock:
+            state = dict(CONTEXT_EDIT_STATE)
         if not state:
             return "⚠️ No editing session active. Start a new context confirmation first."
         
@@ -705,7 +744,8 @@ def handle_context_callback(callback_data, game_title, cb_id):
     
     elif callback_data.startswith("ctx_rem_char_"):
         idx = int(callback_data.replace("ctx_rem_char_", ""))
-        state = CONTEXT_EDIT_STATE
+        with _ctx_edit_lock:
+            state = dict(CONTEXT_EDIT_STATE)
         if not state or "extracted" not in state:
             return "⚠️ No editing session active."
         
@@ -744,16 +784,18 @@ def handle_context_edit_input(txt, chat_id):
     """Handle context editing flow via Telegram."""
     global CONTEXT_EDIT_STATE
     
-    step = CONTEXT_EDIT_STATE.get("step", "")
-    state = CONTEXT_EDIT_STATE
+    with _ctx_edit_lock:
+        step = CONTEXT_EDIT_STATE.get("step", "")
+        state = CONTEXT_EDIT_STATE
     
     if step == "choose_field":
         if txt == "1":
             # Edit characters
             chars = state.get("extracted", {}).get("characters", [])
-            state["step"] = "edit_characters"
-            state["current_items"] = chars
-            CONTEXT_EDIT_STATE.update(state)
+            with _ctx_edit_lock:
+                state["step"] = "edit_characters"
+                state["current_items"] = chars
+                CONTEXT_EDIT_STATE.update(state)
             
             items = "\n".join([f"{i+1}. {c}" for i, c in enumerate(chars)])
             tg_send(f"📝 Current Characters:\n{items}\n\nEnter the number to remove, or type a name to add:")
@@ -762,9 +804,10 @@ def handle_context_edit_input(txt, chat_id):
         elif txt == "2":
             # Edit locations
             locs = state.get("extracted", {}).get("locations", [])
-            state["step"] = "edit_locations"
-            state["current_items"] = locs
-            CONTEXT_EDIT_STATE.update(state)
+            with _ctx_edit_lock:
+                state["step"] = "edit_locations"
+                state["current_items"] = locs
+                CONTEXT_EDIT_STATE.update(state)
             
             items = "\n".join([f"{i+1}. {l}" for i, l in enumerate(locs)])
             tg_send(f"📍 Current Locations:\n{items}\n\nEnter the number to remove, or type a name to add:")
@@ -773,9 +816,10 @@ def handle_context_edit_input(txt, chat_id):
         elif txt == "3":
             # Edit relationships
             rels = state.get("extracted", {}).get("relationships", [])
-            state["step"] = "edit_relationships"
-            state["current_items"] = rels
-            CONTEXT_EDIT_STATE.update(state)
+            with _ctx_edit_lock:
+                state["step"] = "edit_relationships"
+                state["current_items"] = rels
+                CONTEXT_EDIT_STATE.update(state)
             
             items = "\n".join([f"{i+1}. {r}" for i, r in enumerate(rels[:10])])
             tg_send(f"👥 Current Relationships:\n{items}\n\nEnter the number to remove, or type in format 'Name1 -> Name2: relationship' to add:")
@@ -802,8 +846,9 @@ def handle_context_edit_input(txt, chat_id):
             state["current_items"] = items
             tg_send(f"✅ Added: {txt}")
         
-        state["extracted"]["characters"] = items
-        CONTEXT_EDIT_STATE.update(state)
+        with _ctx_edit_lock:
+            state["extracted"]["characters"] = items
+            CONTEXT_EDIT_STATE.update(state)
         tg_send("Done editing? Reply 'done' to save, or continue editing.")
         return True
         
@@ -823,8 +868,9 @@ def handle_context_edit_input(txt, chat_id):
             state["current_items"] = items
             tg_send(f"✅ Added: {txt}")
         
-        state["extracted"]["locations"] = items
-        CONTEXT_EDIT_STATE.update(state)
+        with _ctx_edit_lock:
+            state["extracted"]["locations"] = items
+            CONTEXT_EDIT_STATE.update(state)
         tg_send("Done editing? Reply 'done' to save, or continue editing.")
         return True
         
@@ -856,8 +902,9 @@ def handle_context_edit_input(txt, chat_id):
             tg_send("Invalid. Enter number to remove, or 'Name1 -> Name2: relationship' to add")
         
         items = state.get("current_items", [])
-        state["extracted"]["relationships"] = items
-        CONTEXT_EDIT_STATE.update(state)
+        with _ctx_edit_lock:
+            state["extracted"]["relationships"] = items
+            CONTEXT_EDIT_STATE.update(state)
         tg_send("Done editing? Reply 'done' to save, or continue editing.")
         return True
         
@@ -869,12 +916,14 @@ def handle_context_edit_input(txt, chat_id):
         # Save as verified
         save_verified_context(game_title, extracted)
         
-        CONTEXT_EDIT_STATE.clear()
+        with _ctx_edit_lock:
+            CONTEXT_EDIT_STATE.clear()
         tg_send(f"✅ Context saved for {game_title}!\n\nRun Phase 2 to verify, then Phase 4 for scripts.")
         return True
         
     elif txt.lower() == "cancel":
-        CONTEXT_EDIT_STATE.clear()
+        with _ctx_edit_lock:
+            CONTEXT_EDIT_STATE.clear()
         tg_send("❌ Edit cancelled.")
         return True
     
@@ -1270,7 +1319,7 @@ def handle_menu_callback(callback_data, cb_id=None):
     elif callback_data == "quick_clean":
         return "🧹 Cleaning up files...", "cleanup_files"
     elif callback_data == "run_update":
-        return "🔄 Updating Lambda Cut...", "do_update"
+        return "🔄 Updating Cogitator...", "do_update"
     elif callback_data == "set_voice_":
         return None, get_voice_menu()
     elif callback_data.startswith("set_voice_"):
@@ -1364,7 +1413,7 @@ def _get_rich_status():
     else:
         verified_info = "❌ Not verified"
     
-    status = f"""📊 Lambda Cut Status — v{local_ver}
+    status = f"""📊 Cogitator Status — v{local_ver}
 
 🔹 Pipeline: {status_line}
 
@@ -1568,10 +1617,10 @@ Transcripts:
     }).encode()
     
     key = keys[0]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
     
     _rate_limit()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
     
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -1606,6 +1655,129 @@ Transcripts:
     except Exception as e:
         log(f"Analysis error: {e}")
         return "Analysis", "Unknown", "General overview", "Documentary", [], []
+
+
+def _summarize_transcript(transcript_text, game_title):
+    """Multi-chunk transcript summarization for script generation.
+
+    For transcripts > 20k chars, splits into overlapping chunks,
+    summarizes each, then combines into a final structured summary.
+
+    Returns dict with: narrative_summary, key_events, characters_mentioned,
+                       themes, emotional_tone, recommended_delivery
+    or None on complete failure.
+    """
+    if not transcript_text or len(transcript_text.strip()) < 100:
+        return None
+
+    CHUNK_SIZE = 20000
+    OVERLAP = 2000
+
+    def _call_summary_gemini(prompt_text, system_hint="", temperature=0.4):
+        """Single Gemini JSON call with retry — returns parsed dict or None."""
+        keys = get_gemini_keys()
+        if not keys:
+            return None
+        body = json.dumps({
+            "contents": [{"parts": [{"text": prompt_text}]}],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": 2048,
+                "response_mime_type": "application/json"
+            }
+        }).encode()
+        for i in range(len(keys)):
+            key = keys[i]
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+            for attempt in range(3):
+                try:
+                    _rate_limit()
+                    req = urllib.request.Request(
+                        url, data=body,
+                        headers={"Content-Type": "application/json", "X-Goog-Api-Key": key}
+                    )
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        r = json.loads(resp.read())
+                        text = r["candidates"][0]["content"]["parts"][0]["text"]
+                        parsed = json.loads(text)
+                        if isinstance(parsed, dict) and "narrative_summary" in parsed:
+                            return parsed
+                        return parsed
+                except urllib.error.HTTPError as e:
+                    if e.code in (429, 500, 503):
+                        wait = (2 ** attempt) * 15 + random.uniform(0, 10)
+                        time.sleep(wait)
+                    else:
+                        break
+                except (json.JSONDecodeError, KeyError):
+                    time.sleep(2)
+                    break
+                except Exception:
+                    time.sleep(5)
+                    break
+        return None
+
+    # Single chunk case
+    if len(transcript_text) <= CHUNK_SIZE:
+        prompt = f"""Analyze this transcript from the game "{game_title}" and produce a structured narrative summary.
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+    "narrative_summary": "2-3 paragraph condensed summary of what happens — focus on the story, key moments, and emotional beats",
+    "key_events": ["specific event 1", "specific event 2"],
+    "characters_mentioned": ["character 1", "character 2"],
+    "themes": ["theme 1", "theme 2"],
+    "emotional_tone": "one short phrase describing the overall tone (e.g., tense, dramatic, humorous, action-packed, mysterious)",
+    "recommended_delivery": "one sentence describing the narrator delivery style (e.g., energetic and fast-paced, somber and reflective, suspenseful whispers)"
+}}
+
+Transcript:
+{transcript_text[:18000]}"""
+        return _call_summary_gemini(prompt)
+
+    # Multi-chunk: split into overlapping chunks
+    chunks = []
+    pos = 0
+    while pos < len(transcript_text):
+        end = min(pos + CHUNK_SIZE, len(transcript_text))
+        chunks.append(transcript_text[pos:end])
+        pos = end - OVERLAP
+        if pos >= len(transcript_text):
+            break
+
+    log(f"   Summarizing transcript ({len(chunks)} chunks, {len(transcript_text)} total chars)...")
+
+    chunk_summaries = []
+    for ci, chunk in enumerate(chunks):
+        cprompt = f"""Summarize this excerpt from the game "{game_title}". Focus on what happens, key characters, and the emotional tone.
+
+Keep it concise (2-4 sentences). Just describe the narrative content.
+
+Excerpt {ci+1}/{len(chunks)}:
+{chunk[:18000]}"""
+        result = _call_summary_gemini(cprompt, temperature=0.3)
+        if result:
+            chunk_summaries.append(result.get("narrative_summary", chunk[:500]))
+        else:
+            chunk_summaries.append(chunk[:500])
+
+    # Combine chunk summaries into final structured summary
+    combined_text = "\n\n".join(f"--- Chunk {i+1} ---\n{s}" for i, s in enumerate(chunk_summaries))
+    combine_prompt = f"""You are a narrative analyst. Below are chunk summaries from the game "{game_title}".
+Combine them into a single structured analysis of the FULL story.
+
+{combined_text}
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+    "narrative_summary": "2-3 paragraph condensed summary of the full story arc — cover the beginning, middle, and end",
+    "key_events": ["specific event 1", "specific event 2", "specific event 3"],
+    "characters_mentioned": ["character 1", "character 2"],
+    "themes": ["theme 1", "theme 2"],
+    "emotional_tone": "one short phrase describing the overall tone across the whole story",
+    "recommended_delivery": "one sentence describing the narrator delivery style for this content"
+}}"""
+    return _call_summary_gemini(combine_prompt, temperature=0.4)
 
 
 def _cs_generate_script(transcript_text, content_type, subject, angle, real_characters, key_plot_points):
@@ -1741,12 +1913,12 @@ Write the complete script now."""
             
             for i in range(len(keys)):
                 key = keys[i % len(keys)]
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+                url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
                 
                 for attempt in range(3):
                     try:
                         _rate_limit()
-                        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+                        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
                         with urllib.request.urlopen(req, timeout=60) as resp:
                             r = json.loads(resp.read())
                             gemini_script = r["candidates"][0]["content"]["parts"][0]["text"]
@@ -1755,12 +1927,12 @@ Write the complete script now."""
                             break
                     except urllib.error.HTTPError as e:
                         if e.code == 429:
-                            wait = (2 ** attempt) * 15
-                            log(f"Key ...{key[-6:]} rate limited (429), waiting {wait}s...")
+                            wait = (2 ** attempt) * 15 + random.uniform(0, 10)
+                            log(f"Key ...{key[-6:]} rate limited (429), retry {attempt+1}/3 in {wait:.0f}s...")
                             time.sleep(wait)
-                        elif e.code == 503:
-                            wait = (2 ** attempt) * 10
-                            log(f"Key ...{key[-6:]} service unavailable (503), retry {attempt+1}/3 in {wait}s...")
+                        elif e.code in (500, 503):
+                            wait = (2 ** attempt) * 10 + random.uniform(0, 5)
+                            log(f"Key ...{key[-6:]} server error ({e.code}), retry {attempt+1}/3 in {wait:.0f}s...")
                             time.sleep(wait)
                         elif e.code == 400:
                             log(f"Key ...{key[-6:]} bad request (400): {e.read().decode()[:200]}")
@@ -1854,8 +2026,8 @@ def _cs_generate_tts(script, voice_style):
         
         tts_success = False
         for key in api_keys:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={key}"
-            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
             
             for attempt in range(3):
                 try:
@@ -1956,15 +2128,8 @@ def _wrap_text_for_srt(text, max_words=10):
 
 
 def _get_voice_id(voice_name):
-    """Get Gemini TTS voice ID."""
-    voices = {
-        "Aoede": "Aoede", "Callirrhoe": "Callirrhoe", "Gacrux": "Gacrux",
-        "Kore": "Kore", "Leda": "Leda", "Puck": "Puck",
-        "Sao": "Sao", "Zephyr": "Zephyr", "Fenrir": "Fenrir",
-        "Charon": "Charon", "Orus": "Orus", "Umbriel": "Umbriel",
-        "Vindemiatrix": "Vindemiatrix", "Alnilam": "Alnilam", "Schedar": "Schedar",
-        "Sadachbia": "Sadachbia", "Rasalgethi": "Rasalgethi", "Algieba": "Algieba"
-    }
+    """Get Gemini TTS voice ID (maps from all 30 TTS_VOICES)."""
+    voices = {v: v for v in TTS_VOICES}
     return voices.get(voice_name)
 
 
@@ -1999,7 +2164,7 @@ def _cs_generate_script_only():
     ctx = _cs_load_context()
     if extracted:
         ctx = _cs_update_context(extracted, transcript_name)
-        _save_segment_references(game_key, transcript_name, extracted)
+        _save_segment_references(game_key, transcript_name, extracted, transcript_file=transcript)
         tg_send(f"📚 Context updated: {len(ctx['characters'])} characters, {len(ctx['locations'])} locations")
         
         # NEW: Also mine to MemPalace for persistent memory
@@ -2314,10 +2479,24 @@ def _cs_save_context(ctx):
     else:
         existing_rels = []
     
-    # Merge relationships
+    # Merge relationships with fuzzy dedup
     merged_rels = list(existing_rels)
     for rel in ctx.get("relationships", []):
-        if rel not in merged_rels:
+        if isinstance(rel, dict):
+            rel_text = f"{rel.get('from', '')}-{rel.get('to', '')}-{rel.get('relationship', '')}"
+        else:
+            rel_text = str(rel)
+        is_dup = False
+        for existing_rel in merged_rels:
+            if isinstance(existing_rel, dict):
+                existing_text = f"{existing_rel.get('from', '')}-{existing_rel.get('to', '')}-{existing_rel.get('relationship', '')}"
+            else:
+                existing_text = str(existing_rel)
+            ratio = _fuzz.token_sort_ratio(rel_text.lower(), existing_text.lower()) if _fuzz else 0
+            if rel_text.lower() == existing_text.lower() or ratio >= 75:
+                is_dup = True
+                break
+        if not is_dup:
             merged_rels.append(rel)
     
     # Rebuild relationships file preserving content
@@ -2627,11 +2806,20 @@ def _rebuild_relationships_preserving_content(file_path, relationships, characte
         if end > start:
             manual_notes = existing_content[start:end]
     
-    # Build proper relationship entries
+    # Build proper relationship entries (handle both dict and string formats)
     parsed_rels = []
     for rel in relationships:
-        # Parse "Character A and Character B are relationship"
-        if ' and ' in rel and ' are ' in rel:
+        if isinstance(rel, dict):
+            from_char = rel.get("from", "").strip()
+            to_char = rel.get("to", "").strip()
+            conn = rel.get("relationship", "related").strip()
+            if from_char and to_char and from_char.lower() != to_char.lower():
+                parsed_rels.append({"char_a": from_char, "char_b": to_char, "connection": conn})
+            elif from_char and conn:
+                parsed_rels.append({"char_a": from_char, "char_b": "", "connection": conn})
+            continue
+        rel_str = str(rel)
+        if ' and ' in rel_str and ' are ' in rel_str:
             left = rel.split(' are ')[0].strip()
             connection = rel.split(' are ')[1].strip() if ' are ' in rel else rel
             
@@ -2648,10 +2836,10 @@ def _rebuild_relationships_preserving_content(file_path, relationships, characte
                 "char_b": char_b,
                 "connection": connection
             })
-        elif ' is ' in rel:
+        elif ' is ' in rel_str:
             # Handle single character: "Allison is daughter"
-            left = rel.split(' is ')[0].strip()
-            connection = rel.split(' is ')[1].strip() if ' is ' in rel else ""
+            left = rel_str.split(' is ')[0].strip()
+            connection = rel_str.split(' is ')[1].strip() if ' is ' in rel_str else ""
             
             if left and connection:
                 parsed_rels.append({
@@ -2744,6 +2932,7 @@ graph TD
 def _detect_corrections(old_ctx, new_ctx):
     """
     Detect corrections by comparing old context vs newly extracted context.
+    Uses fuzzy matching to avoid false positives from alias variations.
     Returns a dict of corrections found.
     """
     corrections = {
@@ -2756,27 +2945,44 @@ def _detect_corrections(old_ctx, new_ctx):
         "removed_relationships": [],
         "added_relationships": []
     }
-    
-    old_chars = set(old_ctx.get("characters", []))
-    new_chars = set(new_ctx.get("characters", []))
-    corrections["removed_characters"] = list(old_chars - new_chars)
-    corrections["added_characters"] = list(new_chars - old_chars)
-    
-    old_locs = set(old_ctx.get("locations", []))
-    new_locs = set(new_ctx.get("locations", []))
-    corrections["removed_locations"] = list(old_locs - new_locs)
-    corrections["added_locations"] = list(new_locs - old_locs)
-    
+
+    def fuzzy_set_diff(old_items, new_items, threshold=80):
+        removed = []
+        added = []
+        for item in old_items:
+            is_dup, _ = fuzzy_dedup_against_list(item, new_items, threshold)
+            if not is_dup:
+                removed.append(item)
+        for item in new_items:
+            is_dup, _ = fuzzy_dedup_against_list(item, old_items, threshold)
+            if not is_dup:
+                added.append(item)
+        return removed, added
+
+    removed, added = fuzzy_set_diff(
+        old_ctx.get("characters", []),
+        new_ctx.get("characters", [])
+    )
+    corrections["removed_characters"] = removed
+    corrections["added_characters"] = added
+
+    removed, added = fuzzy_set_diff(
+        old_ctx.get("locations", []),
+        new_ctx.get("locations", [])
+    )
+    corrections["removed_locations"] = removed
+    corrections["added_locations"] = added
+
     old_terms = set(old_ctx.get("key_terms", []))
     new_terms = set(new_ctx.get("key_terms", []))
     corrections["removed_terms"] = list(old_terms - new_terms)
     corrections["added_terms"] = list(new_terms - old_terms)
-    
+
     old_rels_list = old_ctx.get("relationships", [])
     new_rels_list = new_ctx.get("relationships", [])
     corrections["removed_relationships"] = [r for r in old_rels_list if r not in new_rels_list]
     corrections["added_relationships"] = [r for r in new_rels_list if r not in old_rels_list]
-    
+
     return corrections
 
 
@@ -2856,13 +3062,111 @@ def _get_learned_constraints():
     return constraints
 
 
-def _cs_extract_context_from_transcript(transcript_text, game_title):
-    """Extract characters, locations, key terms from transcript using AI."""
+def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2048) -> dict | None:
+    """Send a prompt to Gemini and return parsed JSON response."""
     keys = get_gemini_keys()
     if not keys:
         return None
-    
-    # Get learned constraints from previous corrections
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+            "response_mime_type": "application/json"
+        }
+    }).encode()
+    key = keys[0]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+    _rate_limit()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            r = json.loads(resp.read())
+            text = r["candidates"][0]["content"]["parts"][0]["text"]
+            return json.loads(text)
+    except (json.JSONDecodeError, KeyError, urllib.error.HTTPError) as e:
+        log(f"Gemini JSON prompt failed: {e}")
+        return None
+
+
+def _extract_characters(transcript_text, game_title, constraints_text):
+    """Pass 1: Extract character names and aliases from transcript."""
+    prompt = f"""Analyze this transcript from "{game_title}" and extract CHARACTER NAMES only.
+
+List every named character mentioned in the transcript. For each character, list their full name and any aliases or nicknames used.
+
+{constraints_text}
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+    "characters": [
+        {{"name": "Full Character Name", "aliases": ["alias1", "alias2"]}}
+    ]
+}}
+
+Transcript excerpt:
+{transcript_text[:5000]}"""
+    return _gemini_json_prompt(prompt, temperature=0.2, max_tokens=1024)
+
+
+def _extract_locations_and_terms(transcript_text, game_title, constraints_text):
+    """Pass 2: Extract locations and key terms from transcript."""
+    transcript_mid = transcript_text[2500:7500] or transcript_text[:5000]
+    prompt = f"""Analyze this transcript from "{game_title}" and extract:
+
+1. LOCATIONS: Every place mentioned (towns, buildings, regions, rooms, landmarks)
+2. KEY_TERMS: Important story elements, themes, concepts, artifacts, or organizations
+
+{constraints_text}
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+    "locations": ["location1", "location2"],
+    "key_terms": ["term1", "term2"]
+}}
+
+Transcript excerpt:
+{transcript_mid[:5000]}"""
+    return _gemini_json_prompt(prompt, temperature=0.2, max_tokens=1024)
+
+
+def _extract_relationships(transcript_text, game_title, constraints_text):
+    """Pass 3: Extract relationships with confidence scores and evidence."""
+    transcript_end = transcript_text[-5000:] if len(transcript_text) > 5000 else transcript_text[:5000]
+    prompt = f"""Analyze this transcript from "{game_title}" and extract RELATIONSHIPS between characters.
+
+For every pair of characters that interact or are connected, provide:
+- The two characters involved
+- The type of relationship (allies, enemies, family, mentor, rival, friends, associates)
+- A confidence score from 0.0 to 1.0 (how certain you are based on the transcript)
+- A brief piece of evidence text from the transcript supporting this relationship
+
+{constraints_text}
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+    "relationships": [
+        {{
+            "from": "Character A",
+            "to": "Character B",
+            "relationship": "friends",
+            "confidence": 0.9,
+            "evidence": "brief quote or context from transcript"
+        }}
+    ]
+}}
+
+Transcript excerpt:
+{transcript_end[:5000]}"""
+    return _gemini_json_prompt(prompt, temperature=0.4, max_tokens=2048)
+
+
+def _cs_extract_context_from_transcript(transcript_text, game_title):
+    """Multi-pass context extraction: 3 specialized passes for characters, locations, and relationships."""
+    keys = get_gemini_keys()
+    if not keys:
+        return None
+
     constraints = _get_learned_constraints()
     constraints_text = ""
     if constraints:
@@ -2874,79 +3178,64 @@ IMPORTANT: The above items are known mistakes from previous extractions.
 Do NOT repeat these errors. Be especially careful not to include characters 
 or relationships that were previously flagged as incorrect.
 """
-    
-    prompt = f"""Analyze this transcript from "{game_title}" and extract:
 
-1. CHARACTERS: List character names that appear in the transcript
-2. LOCATIONS: List places mentioned (e.g., dorm room, school, town)
-3. KEY_TERMS: Important story elements, themes, or concepts
-4. RELATIONSHIPS: Every meaningful link between characters (allies, enemies, family, mentors, rivals, etc.).
-   Include every pair you can infer from the transcript. Prefer structured objects over vague "associated_with".
+    result = {"title": "", "characters": [], "locations": [], "key_terms": [], "relationships": []}
 
-{constraints_text}
+    # Pass 1: Characters
+    char_data = _extract_characters(transcript_text, game_title, constraints_text)
+    if char_data:
+        # Extract flat character names from the structured format
+        raw_chars = []
+        alias_map = {}
+        for entry in char_data.get("characters", []):
+            if isinstance(entry, dict):
+                name = entry.get("name", "")
+                if name:
+                    raw_chars.append(name)
+                    for alias in entry.get("aliases", []):
+                        if alias and alias != name:
+                            alias_map[alias] = name
+            elif isinstance(entry, str):
+                raw_chars.append(entry)
+        result["characters"] = raw_chars
+        result["character_aliases"] = alias_map
+        result["title"] = char_data.get("title", "")
 
-TITLE STRATEGY: Create a compelling YouTube title that:
-- Uses curiosity gap: tease without revealing too much
-- Incorporates power words: Secret, Truth, Revealed, Shocking, etc. when appropriate
-- Considers question format when it creates genuine intrigue
-- Uses numbers for list-based content when relevant (e.g., "3 Secrets", "5 Things")
-- Creates emotional hook (surprise, wonder, controversy, warmth)
-- Matches video content accurately (no bait-and-switch)
-- Optimizes for watch time: promise delivery in the content
+    # Pass 2: Locations and key terms
+    loc_data = _extract_locations_and_terms(transcript_text, game_title, constraints_text)
+    if loc_data:
+        result["locations"] = loc_data.get("locations", [])
+        result["key_terms"] = loc_data.get("key_terms", [])
+        if not result["title"]:
+            result["title"] = loc_data.get("title", "")
 
-Respond ONLY with a valid JSON object matching this exact schema:
-{{
-    "title": "engaging YouTube title following the strategies above",
-    "characters": ["character1", "character2"],
-    "locations": ["location1", "location2"],
-    "key_terms": ["term1", "term2"],
-    "relationships": [
-        {{"from": "Character A", "to": "Character B", "relationship": "friends"}}
-    ]
-}}
+    # Pass 3: Relationships with confidence
+    rel_data = _extract_relationships(transcript_text, game_title, constraints_text)
+    if rel_data:
+        rels = rel_data.get("relationships", [])
+        # Filter by confidence threshold
+        filtered_rels = []
+        for rel in rels:
+            if isinstance(rel, dict):
+                confidence = rel.get("confidence", 0.5)
+                if isinstance(confidence, str):
+                    try:
+                        confidence = float(confidence)
+                    except (ValueError, TypeError):
+                        confidence = 0.5
+                if confidence >= 0.5:
+                    filtered_rels.append(rel)
+            else:
+                filtered_rels.append(rel)
+        result["relationships"] = filtered_rels
+        if not result["title"]:
+            result["title"] = rel_data.get("title", "")
 
-Transcript excerpt:
-{transcript_text[:5000]}"""
-    
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 2048,
-            "response_mime_type": "application/json"
-        }
-    }).encode()
-    
-    key = keys[0]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
-    
-    _rate_limit()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            r = json.loads(resp.read())
-            text = r["candidates"][0]["content"]["parts"][0]["text"]
-
-            try:
-                data = json.loads(text)
-                return {
-                    "title": data.get("title", ""),
-                    "characters": data.get("characters", []),
-                    "locations": data.get("locations", []),
-                    "key_terms": data.get("key_terms", []),
-                    "relationships": data.get("relationships", [])
-                }
-            except json.JSONDecodeError:
-                log(f"Failed to parse JSON context from LLM output: {text}")
-                return None
-    except Exception as e:
-        log(f"Context extraction error: {e}")
-        return None
+    return result
 
 
-def _save_segment_references(game_key, transcript_name, extracted_context):
-    """Save segment references for context nodes."""
+def _save_segment_references(game_key, transcript_name, extracted_context, transcript_file=None):
+    """Save segment references for context nodes with timestamps."""
     import uuid
     SEGMENT_REF_FILE = os.path.join(WORKSPACE, "Context", "segment_references.json")
     
@@ -2962,23 +3251,64 @@ def _save_segment_references(game_key, transcript_name, extracted_context):
         
         transcript_key = transcript_name.replace(".json", "")
         
+        # Load transcript segments for timestamp matching
+        segments = []
+        if transcript_file and os.path.exists(transcript_file):
+            try:
+                with open(transcript_file) as f:
+                    data = json.load(f)
+                segments = data.get("segments", [])
+            except Exception:
+                pass
+        
+        def find_timestamp_ranges(entity_name, segments):
+            """Find start/end timestamps where entity is mentioned."""
+            ranges = []
+            entity_lower = entity_name.lower()
+            for seg in segments:
+                text = seg.get("text", "").lower()
+                if entity_lower in text:
+                    ranges.append({
+                        "start": seg.get("start", 0),
+                        "end": seg.get("end", 0)
+                    })
+            return ranges
+        
         node_refs = []
         for char in extracted_context.get("characters", []):
-            node_refs.append({"node": char, "type": "character", "transcript": transcript_key})
+            timestamps = find_timestamp_ranges(char, segments)
+            ref_entry = {"node": char, "type": "character", "transcript": transcript_key}
+            if timestamps:
+                ref_entry["timestamps"] = timestamps[:5]  # Keep first 5 mentions
+            node_refs.append(ref_entry)
         for loc in extracted_context.get("locations", []):
-            node_refs.append({"node": loc, "type": "location", "transcript": transcript_key})
+            timestamps = find_timestamp_ranges(loc, segments)
+            ref_entry = {"node": loc, "type": "location", "transcript": transcript_key}
+            if timestamps:
+                ref_entry["timestamps"] = timestamps[:5]
+            node_refs.append(ref_entry)
         for term in extracted_context.get("key_terms", []):
-            node_refs.append({"node": term, "type": "term", "transcript": transcript_key})
+            timestamps = find_timestamp_ranges(term, segments)
+            ref_entry = {"node": term, "type": "term", "transcript": transcript_key}
+            if timestamps:
+                ref_entry["timestamps"] = timestamps[:5]
+            node_refs.append(ref_entry)
         for rel in extracted_context.get("relationships", []):
             if isinstance(rel, dict):
-                node_refs.append({"node": f"{rel.get('from')}-{rel.get('to')}", "type": "relationship", "transcript": transcript_key})
+                rel_key = f"{rel.get('from')}-{rel.get('to')}-{rel.get('relationship', '')}"
+                timestamps = find_timestamp_ranges(rel.get("from", ""), segments)
+                timestamps += find_timestamp_ranges(rel.get("to", ""), segments)
+                ref_entry = {"node": rel_key, "type": "relationship", "transcript": transcript_key}
+                if timestamps:
+                    ref_entry["timestamps"] = timestamps[:5]
+                node_refs.append(ref_entry)
         
         refs[game_key][transcript_key] = node_refs
         
         with open(SEGMENT_REF_FILE, "w") as f:
             json.dump(refs, f, indent=2)
         
-        log(f"[CONTEXT] Saved segment references for {transcript_key}")
+        log(f"[CONTEXT] Saved segment references with timestamps for {transcript_key}")
     except Exception as e:
         log(f"[CONTEXT] Failed to save segment references: {e}")
 
@@ -3004,14 +3334,26 @@ def _cs_update_context(extracted, transcript_name, script_summary=None):
     if extracted_title and (not ctx.get("title") or len(extracted_title) > len(ctx.get("title", ""))):
         ctx["title"] = extracted_title
 
-    # Merge characters (avoid duplicates)
+    # Merge characters with fuzzy dedup and alias resolution
     for char in extracted.get("characters", []):
-        if char not in ctx["characters"]:
+        is_dup, canonical = fuzzy_dedup_against_list(char, ctx["characters"])
+        if is_dup:
+            if canonical and canonical != char:
+                if "character_aliases" not in ctx:
+                    ctx["character_aliases"] = {}
+                ctx["character_aliases"][char] = canonical
+        else:
             ctx["characters"].append(char)
 
-    # Merge locations
+    # Merge locations with fuzzy dedup
     for loc in extracted.get("locations", []):
-        if loc not in ctx["locations"]:
+        is_dup, canonical = fuzzy_dedup_against_list(loc, ctx["locations"])
+        if is_dup:
+            if canonical and canonical != loc:
+                if "location_aliases" not in ctx:
+                    ctx["location_aliases"] = {}
+                ctx["location_aliases"][loc] = canonical
+        else:
             ctx["locations"].append(loc)
 
     # Merge key terms
@@ -3019,9 +3361,23 @@ def _cs_update_context(extracted, transcript_name, script_summary=None):
         if term not in ctx["key_terms"]:
             ctx["key_terms"].append(term)
 
-    # Merge relationships
+    # Merge relationships (avoid duplicates by fuzzy matching on text)
     for rel in extracted.get("relationships", []):
-        if rel not in ctx["relationships"]:
+        is_dup = False
+        if isinstance(rel, dict):
+            rel_text = f"{rel.get('from', '')}-{rel.get('to', '')}-{rel.get('relationship', '')}"
+        else:
+            rel_text = str(rel)
+        for existing_rel in ctx["relationships"]:
+            if isinstance(existing_rel, dict):
+                existing_text = f"{existing_rel.get('from', '')}-{existing_rel.get('to', '')}-{existing_rel.get('relationship', '')}"
+            else:
+                existing_text = str(existing_rel)
+            ratio = _fuzz.token_sort_ratio(rel_text.lower(), existing_text.lower()) if _fuzz else 0
+            if ratio >= 75:
+                is_dup = True
+                break
+        if not is_dup:
             ctx["relationships"].append(rel)
     
     # Add processed transcript
@@ -3109,18 +3465,17 @@ def delete_partial_files():
     return count
 
 def cleanup_all_files():
-    """Delete generated files but keep scripts and shortsforge data for learning."""
+    """Delete generated files but keep scripts and cogitator data for learning."""
     count = 0
     for d in [MEDIA_DIR, TRANSCRIPTS_DIR, TTS_DIR, SHORTS_DIR]:
-        for f in glob.glob(os.path.join(d, "*")):
-            if os.path.isfile(f):
-                os.remove(f)
-                count += 1
         for f in glob.glob(os.path.join(d, "**/*"), recursive=True):
             if os.path.isfile(f):
-                os.remove(f)
-                count += 1
-    log("Cleanup complete (scripts and shortsforge data preserved for learning)")
+                try:
+                    os.remove(f)
+                    count += 1
+                except OSError:
+                    pass
+    log("Cleanup complete (scripts and cogitator data preserved for learning)")
     return count
 
 def run(cmd, check=True):
@@ -3172,6 +3527,8 @@ def download_from_url(url: str) -> bool:
         return False
 
 # ─── Phase 1: Download ────────────────────────────────────────────────────────
+# ─── Phase 1: Download ─────────────────────────────────────────────────────────
+
 def phase_download():
     set_status("Phase 1: Downloading video...")
     log("Phase 1: Downloading 1440p stream...")
@@ -3184,6 +3541,12 @@ def phase_download():
         set_status("Phase 1 FAILED")
         raise RuntimeError("PLAYLIST_URL not configured")
 
+    if playlist_url.lstrip().startswith("--"):
+        log_error("Phase 1 Failed: PLAYLIST_URL starts with '--' (possible injection)")
+        notify("Phase 1 Failed: PLAYLIST_URL is invalid")
+        set_status("Phase 1 FAILED")
+        raise RuntimeError("PLAYLIST_URL starts with '--'")
+
     cookies_ok = run(["yt-dlp", "--cookies-from-browser", "chrome", "--dump-single-json", "https://youtube.com"], check=False)
     if cookies_ok.returncode != 0:
         log_error("Phase 1 Failed: Chrome cookies not available. Run 'yt-dlp --cookies-from-browser chrome --dummy https://youtube.com' to create cookies.")
@@ -3192,20 +3555,56 @@ def phase_download():
         raise RuntimeError("Chrome cookies not available")
 
     set_progress(1, 10, "Downloading video")
-    
+
+    # Check for a pending download URL (set by UI/backend)
+    pending_file = os.path.join(os.path.expanduser("~/.cogitator"), "pending_download.txt")
+    pending_url = ""
+    if os.path.exists(pending_file):
+        try:
+            with open(pending_file) as f:
+                pending_url = f.read().strip()
+        except OSError:
+            pass
+        if pending_url:
+            log(f"Using pending download URL: {pending_url}")
+        else:
+            log("Pending download file is empty, ignoring")
+
     def do_dl():
-        playlist_index = env("PLAYLIST_INDEX", "1")
-        os.makedirs(MEDIA_DIR, exist_ok=True)
-        set_progress(1, 30, "Downloading video")
-        r = run(["yt-dlp", "--playlist-items", playlist_index,
-                 "--cookies-from-browser", "chrome",
-                 "-f", "bestvideo+bestaudio",
-                 "-o", f"{MEDIA_DIR}/%(title)s.%(ext)s",
-                 playlist_url])
-        log(r.stdout[-500:] if r.stdout else "")
-        if r.returncode != 0 and r.stderr:
-            log_error(f"yt-dlp error: {r.stderr[-300:]}")
-        set_progress(1, 80, "Downloading video")
+        if pending_url:
+            os.makedirs(MEDIA_DIR, exist_ok=True)
+            log(f"Downloading from URL: {pending_url}")
+            set_progress(1, 30, "Downloading video")
+            r = run(["yt-dlp",
+                     "--cookies-from-browser", "chrome",
+                     "-f", "bestvideo+bestaudio",
+                     "-o", f"{MEDIA_DIR}/%(title)s.%(ext)s",
+                     pending_url])
+            log(r.stdout[-500:] if r.stdout else "")
+            if r.returncode != 0 and r.stderr:
+                log_error(f"yt-dlp error: {r.stderr[-300:]}")
+            set_progress(1, 80, "Downloading video")
+        elif playlist_url:
+            raw_index = env("PLAYLIST_INDEX", "1")
+            try:
+                playlist_index = str(int(raw_index))
+            except (ValueError, TypeError):
+                log_error(f"Phase 1 Failed: Invalid PLAYLIST_INDEX '{raw_index}'")
+                raise RuntimeError("Invalid PLAYLIST_INDEX")
+            os.makedirs(MEDIA_DIR, exist_ok=True)
+            set_progress(1, 30, "Downloading video")
+            r = run(["yt-dlp", "--playlist-items", playlist_index,
+                     "--cookies-from-browser", "chrome",
+                     "-f", "bestvideo+bestaudio",
+                     "-o", f"{MEDIA_DIR}/%(title)s.%(ext)s",
+                     playlist_url])
+            log(r.stdout[-500:] if r.stdout else "")
+            if r.returncode != 0 and r.stderr:
+                log_error(f"yt-dlp error: {r.stderr[-300:]}")
+            set_progress(1, 80, "Downloading video")
+        else:
+            log_error("Phase 1 Failed: No URL to download")
+            raise RuntimeError("No URL to download")
 
     if not retry(do_dl, 3, 10, "Download video"):
         log_error("Phase 1 failed after 3 attempts")
@@ -3219,6 +3618,14 @@ def phase_download():
         notify("Phase 1 Failed: No video downloaded")
         set_status("Phase 1 FAILED")
         raise RuntimeError("No video found after download")
+
+    # Clean up pending download file
+    if pending_url:
+        try:
+            if os.path.exists(pending_file):
+                os.remove(pending_file)
+        except OSError:
+            pass
 
     set_status("Phase 1 Complete")
     notify("Phase 1 Complete: Video downloaded")
@@ -3508,52 +3915,52 @@ SCRIPT_VARIANTS = {
     "mystery_recap": {
         "style": "Mystery Recap",
         "voice_style": "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments. Build suspense through the story flow.",
-        "instruction": """Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity in the first sentence. Tell the story chronologically while hinting at secrets. Include a pattern interrupt mid-way using 'but here's the thing' or 'what nobody realizes'. End by looping back to your opening and include a CTA like 'follow for more'. Target 75-150 words.""",
+        "instruction": """Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity in the first sentence. Tell the story chronologically while hinting at secrets. Include a pattern interrupt mid-way using 'but here's the thing' or 'what nobody realizes'. End by looping back to your opening and include a CTA like 'follow for more'. Target 150-300 words.""",
     },
     "breakdown": {
         "style": "Breakdown",
         "voice_style": "Speak confidently and authoritatively. Explain causes and effects clearly, like an expert sharing knowledge.",
-        "instruction": """Write an analytical breakdown. Start with a hook that states a surprising insight in the first sentence. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Include a pattern interrupt with 'here is why that matters' or 'but the real story is'. End with a takeaway and CTA. Target 75-150 words.""",
+        "instruction": """Write an analytical breakdown. Start with a hook that states a surprising insight in the first sentence. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Include a pattern interrupt with 'here is why that matters' or 'but the real story is'. End with a takeaway and CTA. Target 150-300 words.""",
     },
     "timeline": {
         "style": "Timeline",
         "voice_style": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-        "instruction": """Write a chronological timeline. Hook viewers immediately with a dramatic moment or outcome. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. Include a 'but then came' pattern interrupt. End with resolution and CTA. Target 75-150 words.""",
+        "instruction": """Write a chronological timeline. Hook viewers immediately with a dramatic moment or outcome. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. Include a 'but then came' pattern interrupt. End with resolution and CTA. Target 150-300 words.""",
     },
     "lesson": {
         "style": "Moral/Lesson",
         "voice_style": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-        "instruction": """Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. Use complete sentences that flow naturally. Include a pattern interrupt with 'but the biggest lesson' or 'here is what nobody tells you'. End with a thought-provoking question and CTA. Target 75-150 words.""",
+        "instruction": """Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. Use complete sentences that flow naturally. Include a pattern interrupt with 'but the biggest lesson' or 'here is what nobody tells you'. End with a thought-provoking question and CTA. Target 150-300 words.""",
     },
     "narrative": {
         "style": "Narrative",
         "voice_style": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-        "instruction": """Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid but natural descriptions. Flow from one moment to the next. Include a pattern interrupt like 'but what happened next changed everything'. Loop the ending back to the hook and add a CTA. Target 75-150 words.""",
+        "instruction": """Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid but natural descriptions. Flow from one moment to the next. Include a pattern interrupt like 'but what happened next changed everything'. Loop the ending back to the hook and add a CTA. Target 150-300 words.""",
     },
     "news_report": {
         "style": "News Report",
         "voice_style": "Speak like a professional news reporter. Clear, factual, objective. Present information in order of importance.",
-        "instruction": """Write a professional news report. Lead with the key fact or breaking news in the first sentence - no introductions. Add context in flowing paragraphs. Use objective, factual language. Include a pattern interrupt with 'but what this means is' or 'the deeper story involves'. End with impact and CTA. Target 75-150 words.""",
+        "instruction": """Write a professional news report. Lead with the key fact or breaking news in the first sentence - no introductions. Add context in flowing paragraphs. Use objective, factual language. Include a pattern interrupt with 'but what this means is' or 'the deeper story involves'. End with impact and CTA. Target 150-300 words.""",
     },
     "documentary": {
         "style": "Documentary",
         "voice_style": "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
-        "instruction": """Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context naturally through flowing paragraphs. Include a pattern interrupt with 'but what most miss' or 'here is what the cameras captured'. End with a lasting insight and CTA. Target 75-150 words.""",
+        "instruction": """Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context naturally through flowing paragraphs. Include a pattern interrupt with 'but what most miss' or 'here is what the cameras captured'. End with a lasting insight and CTA. Target 150-300 words.""",
     },
     "true_crime": {
         "style": "True Crime",
         "voice_style": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-        "instruction": """Write a true crime story. Hook with a shocking detail or question in the first sentence. Build investigation and tension through natural sentences. Include a pattern interrupt with 'but the twist came when' or 'here is where it gets darker'. End with revelation and CTA. Target 75-150 words.""",
+        "instruction": """Write a true crime story. Hook with a shocking detail or question in the first sentence. Build investigation and tension through natural sentences. Include a pattern interrupt with 'but the twist came when' or 'here is where it gets darker'. End with revelation and CTA. Target 150-300 words.""",
     },
     "character_pov": {
         "style": "Character POV",
         "voice_style": "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
-        "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Include a pattern interrupt with 'but what I never told anyone was' or 'and then it hit me'. End with emotional payoff and CTA. Target 75-150 words.""",
+        "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Include a pattern interrupt with 'but what I never told anyone was' or 'and then it hit me'. End with emotional payoff and CTA. Target 150-300 words.""",
     },
     "true_story": {
         "style": "True Story",
         "voice_style": "Speak like sharing an incredible story with a friend. Conversational, engaging, hook them early.",
-        "instruction": """Write like sharing an amazing true story with a friend. Hook immediately with something incredible or unexpected. Build naturally with vivid details. Include a pattern interrupt with 'but here is the crazy part' or 'and that is when everything changed'. End with impact, loop back to the hook, and add CTA. Target 75-150 words.""",
+        "instruction": """Write like sharing an amazing true story with a friend. Hook immediately with something incredible or unexpected. Build naturally with vivid details. Include a pattern interrupt with 'but here is the crazy part' or 'and that is when everything changed'. End with impact, loop back to the hook, and add CTA. Target 150-300 words.""",
     },
 }
 
@@ -3657,6 +4064,15 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
                     context_info += f"Key Terms: {', '.join(terms)}\n"
                 if rels:
                     context_info += f"Relationships: {'; '.join(rels)}\n"
+                key_events = context.get("key_events", [])
+                if key_events:
+                    context_info += f"Key Events: {'; '.join(key_events)}\n"
+                themes = context.get("themes", [])
+                if themes:
+                    context_info += f"Themes: {', '.join(themes)}\n"
+                tone = context.get("emotional_tone", "")
+                if tone:
+                    context_info += f"Emotional Tone: {tone}\n"
 
             prompt = template.render(
                 game_title=game_title,
@@ -3687,23 +4103,30 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
             context_info += f"Key Terms: {', '.join(terms)}\n"
         if rels:
             context_info += f"Relationships: {'; '.join(rels)}\n"
+        key_events = context.get("key_events", [])
+        if key_events:
+            context_info += f"Key Events: {'; '.join(key_events)}\n"
+        themes = context.get("themes", [])
+        if themes:
+            context_info += f"Themes: {', '.join(themes)}\n"
+        tone = context.get("emotional_tone", "")
+        if tone:
+            context_info += f"Emotional Tone: {tone}\n"
     
-    # Title generation guidance for more engaging YouTube titles
+    # Title generation guidance for diverse, non-repetitive titles
     title_guidance = """
-TITLE STRATEGY: Create a compelling YouTube title that:
-- Uses curiosity gap: tease without revealing too much
-- Incorporates power words: Secret, Truth, Revealed, Shocking, etc. when appropriate
-- Considers question format when it creates genuine intrigue
-- Uses numbers for list-based content when relevant (e.g., "3 Secrets", "5 Things")
-- Creates emotional hook (surprise, wonder, controversy, warmth)
-- Matches video content accurately (no bait-and-switch)
-- Optimizes for watch time: promise delivery in the content
+TITLE DIVERSITY: Create varied YouTube titles — do NOT repeat the same patterns.
+- Vary the title structure across scripts (question, statement, contrast, etc.)
+- Avoid overused words: Uncovered, Secrets, Revealed, Hidden, Protocol, Truth, Exposed
+- Do NOT use "The [Noun] of [Noun]" structure more than once
+- Each title should feel distinct from previous ones
 """
 
     return f"""You are an expert YouTube Shorts scriptwriter specializing in gaming content. {game_line}{context_info}
 {learned_constraints_text}
 {perf_context}
 {mempalace_hints}
+{title_guidance}
 Style: {variant['style']}
 Perspective: {perspective}
 
@@ -3736,13 +4159,19 @@ Line 2: (blank)
 Line 3+: The spoken script — pure text, no labels, no headers, no formatting
 
 TITLE RULES:
-- 5-12 words optimal (flexible range for impact)
-- Strategic punctuation allowed: ?, !, :, ... (use purposefully)
-- Power words encouraged: Secret, Truth, Revealed, Shocking, etc.
-- Questions highly effective (create curiosity gap)
-- Numbers perform well: "3 Secrets", "Why You", "How to"
-- Hint at topic without full reveal (maintain intrigue)
-- Avoid: Excessive clickbait, misleading claims, ALL CAPS overuse
+- 6-10 words maximum, no punctuation, no ALL CAPS
+- Hint at topic without spoiling the ending
+- VARY the title structure — not every title should follow the same formula
+- Avoid overused patterns: Uncovered, Secrets, Revealed, Hidden, Protocol, Truth, Exposed
+- Do NOT use "The [Noun] of [Noun]" structure more than once
+
+TITLE STRUCTURE EXAMPLES (rotate through different formats):
+- Character focus: "The Pilot Who Landed Without Wings"
+- Question statement: "Why Russia Fears One Ukrainian Drone"
+- Turning point: "One Decision That Changed the Battle"
+- Mystery/consequence: "The Weapon NATO Refused to Deploy"
+- Unexpected angle: "How a Typo Caused a Nuclear Scare"
+- Impact focus: "Three Seconds That Saved a Battalion"
 
 Transcript:
 {transcript}"""
@@ -3841,7 +4270,7 @@ def _gemini_script(text, script_num, context=None):
     temperature = _get_temperature(variant_key)
     prompt = _build_script_prompt(variant_key, perspective, game_title, text[:3000], context)
     log(f"   Variant: {SCRIPT_VARIANTS[variant_key]['style']}, Perspective: {perspective[:50]}...")
-    log(f"   Temperature: {temperature}, Context items: {len(context.get('characters', [])) if context else 0} chars")
+    log(f"   Temperature: {temperature}, Context entities: {len(context.get('characters', [])) if context else 0} characters")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": temperature, "maxOutputTokens": 3072}
@@ -3861,13 +4290,16 @@ def _gemini_script(text, script_num, context=None):
                     r = json.loads(resp.read())
                     return r["candidates"][0]["content"]["parts"][0]["text"]
             except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    time.sleep((2 ** attempt) * 15)
+                if e.code in (429, 500, 503):
+                    wait = (2 ** attempt) * 15 + random.uniform(0, 10)
+                    log(f"   HTTP {e.code} with key ...{key[-6:]}, retry {attempt+1}/3 in {wait:.0f}s")
+                    time.sleep(wait)
                 else:
                     log(f"   HTTP {e.code} with key ...{key[-6:]}")
                     break
             except Exception as e:
                 log(f"   Error: {e}")
+                time.sleep(5)
                 break
         log(f"   Key ...{key[-6:]} failed, next...")
     return None
@@ -3876,7 +4308,7 @@ def _extract_hour(json_file, start, end):
     with open(json_file) as f:
         data = json.load(f)
     parts = []
-    for seg in data["segments"]:
+    for seg in data.get("segments", []):
         if seg["start"] >= start and seg["end"] <= end:
             t = re.sub(r"<[^>]*>", "", seg["text"]).strip()
             if t and len(t.split()) >= 3:
@@ -3884,6 +4316,7 @@ def _extract_hour(json_file, start, end):
     return "\n".join(parts)
 
 def phase_scripts(json_file, duration, num_hours, video=None):
+    _RECENT_TITLES = []
     video_basename = os.path.splitext(os.path.basename(video))[0] if video else "script"
     if not json_file or not os.path.exists(json_file):
         log_error("Phase 4 Failed: Transcript file not found")
@@ -3955,8 +4388,37 @@ def phase_scripts(json_file, duration, num_hours, video=None):
 
             # Phase 4: Optimize context relevance for this specific transcript
             relevant_ctx = score_context_relevance(ctx, transcript_text, max_items=8)
-            
-            # NEW: Inject MemPalace memory into context
+
+            # Structured transcript summarization — replaces raw truncated text with a
+            # condensed narrative summary, also providing key_events, themes, tone
+            script_summary = None
+            if len(text) > 500:
+                log(f"   Summarizing transcript ({len(text)} chars)...")
+                try:
+                    script_summary = _summarize_transcript(text, env("GAME_TITLE", ""))
+                    if script_summary:
+                        narrative = script_summary.get("narrative_summary", "")
+                        if narrative and len(narrative) > 100:
+                            transcript_text = narrative
+                            log(f"   Using narrative summary ({len(narrative)} chars)")
+                            # Inject structured summary fields into context for the prompt builder
+                            ke = script_summary.get("key_events", [])
+                            if ke:
+                                relevant_ctx["key_events"] = ke
+                            th = script_summary.get("themes", [])
+                            if th:
+                                relevant_ctx["themes"] = th
+                            tone = script_summary.get("emotional_tone", "")
+                            if tone:
+                                relevant_ctx["emotional_tone"] = tone
+                        else:
+                            log(f"   Summary too short, falling back to raw transcript")
+                            script_summary = None
+                except Exception as sum_err:
+                    log(f"   Transcript summarization failed: {sum_err}")
+                    script_summary = None
+
+            # Inject MemPalace memory into context
             if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
                 game_title = env("GAME_TITLE", "")
                 if game_title and game_title != "Unknown Game":
@@ -3969,8 +4431,6 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                     except Exception as mp_err:
                         log(f"MemPalace: Memory injection failed - {mp_err}")
 
-            # Phase 5: Dynamic model selection + adaptive temperature
-            # Phase 2: Multi-attempt generation with validation
             best_script = None
             best_metadata = None
             candidates = []
@@ -3985,14 +4445,23 @@ def phase_scripts(json_file, duration, num_hours, video=None):
             except Exception as e:
                 log(f"   Groq generation failed: {e}, falling back to Gemini")
 
-            # Attempt 2: Gemini (fallback) with validation
+            # Attempt 2: Groq (second pass, slightly different temperature)
+            try:
+                prompt2 = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx)
+                groq_script2 = _groq_generate(prompt2, max_tokens=500, model=groq_model, temperature=min(temperature + 0.15, 1.0))
+                if groq_script2:
+                    candidates.append((groq_script2, {"source": "groq", "model": groq_model, "temperature": min(temperature + 0.15, 1.0)}))
+                    log(f"   Groq pass 2 generated ({len(groq_script2.split())} words)")
+            except Exception:
+                pass
+
+            # Attempt 3: Gemini (fallback) with validation
             if not candidates:
                 gemini_script = _gemini_script(transcript_text, i, relevant_ctx)
                 if gemini_script:
                     candidates.append((gemini_script, {"source": "gemini", "model": "gemini-2.5-flash-lite", "temperature": temperature}))
                     log(f"   Gemini script generated ({len(gemini_script.split())} words)")
 
-            # Phase 2: Validate and select best script
             if candidates:
                 best_script, best_metadata, scores = select_best_script(candidates, ctx)
                 if scores and len(scores) > 1:
@@ -4004,7 +4473,6 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                 best_script = transcript_text
                 best_metadata = {"source": "raw_transcript"}
 
-            # Log quality metrics (Phase 6)
             if best_script and best_metadata.get("source") != "raw_transcript":
                 fact_check = validate_script_factuality(best_script, validation_ctx)
                 engagement = score_engagement(best_script)
@@ -4013,14 +4481,26 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                     for issue in fact_check["issues"]:
                         log(f"   WARNING: {issue}")
 
-                # Write structured metrics to JSONL file
+                # Retry on low factuality — one regeneration attempt with stricter guidance
+                if fact_check["score"] < 0.5 and best_metadata.get("source") in ("groq", "gemini"):
+                    log(f"   Retrying script {i} due to low factuality ({fact_check['score']})...")
+                    retry_prompt = prompt + "\n\nCRITICAL: The previous script contained factual errors. ONLY use information from the transcript above. Do NOT invent any characters, events, or locations."
+                    try:
+                        retry_script = _groq_generate(retry_prompt, max_tokens=500, model=groq_model, temperature=temperature * 0.8)
+                        if retry_script:
+                            retry_fact = validate_script_factuality(retry_script, validation_ctx)
+                            if retry_fact["score"] > fact_check["score"]:
+                                best_script = retry_script
+                                fact_check = retry_fact
+                                log(f"   Retry improved factuality to {retry_fact['score']}")
+                    except Exception as retry_err:
+                        log(f"   Retry generation failed: {retry_err}")
+
                 log_generation_metrics(best_script, best_metadata, fact_check, engagement, METRICS_FILE)
                 
-                # Store failure data for self-improvement
                 game_title = env("GAME_TITLE", "")
                 store_generation_failure(best_script, best_metadata, fact_check, engagement, game_title=game_title, content_type=variant_key)
                 
-                # NEW: Also log to MemPalace for quality tracking
                 if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
                     try:
                         mp_manager = get_mempalace_manager()
@@ -4041,6 +4521,19 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                             log(f"MemPalace: Logged quality metric for script {i}")
                     except Exception as mp_err:
                         log(f"MemPalace: Quality logging failed - {mp_err}")
+
+            # Word count enforcement — trim body to max 300 words
+            wc = len(best_script.split())
+            if wc > 300:
+                log(f"   Script {i} exceeds 300 words ({wc}), trimming...")
+                title_line_match = re.search(r'^TITLE:.*$', best_script, re.MULTILINE)
+                if title_line_match:
+                    title_text = title_line_match.group(0)
+                    body = best_script[title_line_match.end():].strip()
+                    body_words = body.split()
+                    trimmed_body = ' '.join(body_words[:280])
+                    best_script = title_text + '\n\n' + trimmed_body
+                    log(f"   Trimmed to {len(best_script.split())} words")
 
             with open(out, "w") as f:
                 f.write(best_script)
@@ -4063,8 +4556,63 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                             f.write(best_script)
                         break
             else:
-                log(f"   Script title: {title_match.group(1)}")
-            
+                script_title = title_match.group(1)
+                log(f"   Script title: {script_title}")
+                # Title diversity tracking
+                normalized = script_title.lower().strip()
+                for prev_title in _RECENT_TITLES:
+                    prev_words = set(prev_title.split())
+                    curr_words = set(normalized.split())
+                    overlap = len(prev_words & curr_words)
+                    if overlap > 0 and overlap / max(len(prev_words), len(curr_words)) > 0.7:
+                        log(f"   WARNING: Title '{script_title}' overlaps heavily with recent '{prev_title}'")
+                        break
+                _RECENT_TITLES.append(normalized)
+
+            # ── Metadata extraction (title, description, hashtags, tags) ──
+            script_metadata = {"title": "", "description": "", "hashtags": [], "tags": []}
+            if title_match:
+                script_metadata["title"] = title_match.group(1).strip()
+            desc_match = re.search(r'^DESCRIPTION:\s*(.+)$', best_script, re.MULTILINE)
+            if desc_match:
+                desc_text = desc_match.group(1).strip()
+                hashtags = re.findall(r'#\w+', desc_text)
+                clean_desc = re.sub(r'#\w+\s*', '', desc_text).strip()
+                script_metadata["description"] = clean_desc
+                script_metadata["hashtags"] = hashtags
+            tags_match = re.search(r'^TAGS:\s*(.+)$', best_script, re.MULTILINE)
+            if tags_match:
+                raw_tags = tags_match.group(1).strip()
+                script_metadata["tags"] = [t.strip() for t in raw_tags.split(",") if t.strip()]
+            # Fallback when LLM didn't produce DESCRIPTION/TAGS
+            if not script_metadata.get("description") or not script_metadata.get("tags"):
+                body = best_script
+                for prefix in ["TITLE:", "DESCRIPTION:", "TAGS:"]:
+                    body = re.sub(rf'^{prefix}.*$', '', body, flags=re.MULTILINE).strip()
+                if not script_metadata.get("description") and len(body) > 20:
+                    sentences = re.split(r'(?<=[.!?])\s+', body)
+                    desc = " ".join(sentences[:2])
+                    script_metadata["description"] = desc[:300]
+                if not script_metadata.get("tags"):
+                    game_title = env("GAME_TITLE", "")
+                    game_words = [w for w in re.sub(r'[^a-zA-Z0-9\s]', '', game_title).split() if w]
+                    script_metadata["tags"] = game_words + ["gaming", "shorts", "videogames"]
+                if not script_metadata.get("hashtags"):
+                    script_metadata["hashtags"] = [w.lower() for w in script_metadata["tags"] if w not in ("gaming", "shorts", "videogames")][:5]
+            # Inject transcript summary (if generated) into metadata
+            if script_summary:
+                for _sf_key in ("narrative_summary", "key_events", "characters_mentioned", "themes", "emotional_tone", "recommended_delivery"):
+                    _sf_val = script_summary.get(_sf_key)
+                    if _sf_val:
+                        script_metadata[_sf_key] = _sf_val
+            # Save .meta.json alongside script
+            meta_path = out.replace(".txt", ".meta.json")
+            try:
+                with open(meta_path, "w") as f:
+                    json.dump(script_metadata, f, indent=2)
+            except Exception as e:
+                log(f"   Failed to save metadata: {e}")
+
             # Store script in performance database for learning
             if PERFORMANCE_DB_AVAILABLE and LEARNING_ENGINE_AVAILABLE:
                 try:
@@ -4074,7 +4622,10 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                         content_type=variant_key,
                         script_text=best_script,
                         features=features,
-                        variants=candidates if len(candidates) > 1 else []
+                        variants=candidates if len(candidates) > 1 else [],
+                        description=script_metadata.get("description", ""),
+                        hashtags=",".join(script_metadata.get("hashtags", [])),
+                        tags=",".join(script_metadata.get("tags", [])),
                     )
                     log(f"Performance: Script stored (ID: {script_id[:8]}...)")
                     _SCRIPT_ID_MAP[i] = script_id
@@ -4115,10 +4666,10 @@ def _extract_scenes(json_file, h_start, h_end):
             return re.sub(r"\s+", " ", re.sub(r"<[^>]*>", "", t)).strip()
 
         entries = []
-        for seg in data["segments"]:
+        for seg in data.get("segments", []):
             if seg["start"] < h_start or seg["end"] > h_end:
                 continue
-            t = clean(seg["text"])
+            t = clean(seg.get("text", ""))
             if len(t.split()) < 3:
                 continue
             entries.append({"start": seg["start"], "end": seg["end"],
@@ -4208,13 +4759,12 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
         h_start = (i - 1) * 3600
         h_end   = min(i * 3600, duration)
         padded  = f"{i:03d}"
+        video_basename = os.path.splitext(os.path.basename(video))[0]
 
         scenes = _extract_scenes(json_file, h_start, h_end)
         if not scenes:
             log(f"   Hour {i}: No scenes found")
             continue
-        
-        video_basename = os.path.splitext(os.path.basename(video))[0]
         
         if AUDIO_ANALYSIS_AVAILABLE:
             try:
@@ -4238,18 +4788,26 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                 continue
 
             try:
-                s, e = int(sc["start"]), int(sc["end"])
+                s, e = float(sc["start"]), float(sc["end"])
                 dur  = e - s
                 if dur <= 0:
                     log_error(f"   Skipping {name}: invalid duration ({dur}s)")
                     continue
-                log(f"   Hour {i}, scene {idx}: {s}s-{e}s ({dur}s)")
+                log(f"   Hour {i}, scene {idx}: {s:0.1f}s-{e:0.1f}s ({dur:0.1f}s)")
+
+                portrait = env("PORTRAIT_CLIPS", "true").lower() == "true"
+                vf_parts = []
 
                 if vaapi:
+                    vf_parts.append("format=nv12")
+                    if portrait:
+                        vf_parts.append("scale=-2:1920")
+                        vf_parts.append("crop=1080:1920")
+                    vf_parts.append("hwupload")
                     cmd = ["ffmpeg", "-y",
                            "-vaapi_device", "/dev/dri/renderD128",
-                           "-ss", str(s), "-i", video, "-t", str(dur),
-                           "-vf", "format=nv12,hwupload",
+                           "-ss", f"{s:.3f}", "-i", video, "-t", f"{dur:.3f}",
+                           "-vf", ",".join(vf_parts),
                            "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-global_quality", "10",
                            "-compression_level", "1",
                            "-af", "loudnorm",
@@ -4257,10 +4815,15 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                            out]
                     enc = "VAAPI"
                 else:
-                    cmd = ["ffmpeg", "-y", "-ss", str(s), "-i", video, "-t", str(dur),
-                           "-c:v", "libx264", "-preset", "slow", "-crf", "18",
-                           "-profile:v", "high", "-level", "4.2", "-pix_fmt", "yuv420p",
-                           "-c:a", "aac", "-b:a", "192k", out]
+                    if portrait:
+                        vf_parts.append("scale=-2:1920")
+                        vf_parts.append("crop=1080:1920")
+                    cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", video, "-t", f"{dur:.3f}"]
+                    if vf_parts:
+                        cmd += ["-vf", ",".join(vf_parts)]
+                    cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", "18",
+                            "-profile:v", "high", "-level", "4.2", "-pix_fmt", "yuv420p",
+                            "-c:a", "aac", "-b:a", "192k", out]
                     enc = "CPU"
 
                 r = run(cmd, check=False)
@@ -4319,10 +4882,7 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
 # ─── Phase 6: TTS ─────────────────────────────────────────────────────────────
 def _load_api_keys():
     """Load API keys from keychain (fallback to empty list)."""
-    try:
-        from keychain_manager import get_gemini_keys
-    except ImportError:
-        from workflows.keychain_manager import get_gemini_keys
+    from workflows.keychain_manager import get_gemini_keys
     return get_gemini_keys()
 
 def _tts_api(text, out_pcm, voice, style, retries=3, delay=60):
@@ -4355,9 +4915,9 @@ def _tts_api(text, out_pcm, voice, style, retries=3, delay=60):
                         f.write(base64.b64decode(audio))
                     return True
             except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < retries - 1:
-                    wait = delay * (2 ** attempt)
-                    log(f"   Key {key[:20]}... rate limited, waiting {wait}s...")
+                if e.code in (429, 500, 503) and attempt < retries - 1:
+                    wait = delay * (2 ** attempt) + random.uniform(0, 15)
+                    log(f"   Key {key[:20]}... HTTP {e.code}, retry {attempt+1}/{retries} in {wait:.0f}s...")
                     time.sleep(wait)
                 else:
                     log(f"   Key {key[:20]}... failed: {e.code}")
@@ -4421,8 +4981,46 @@ def phase_tts(duration, num_hours, video=None):
                 pcm = os.path.join(TTS_DIR, f"tts_{padded}.pcm")
                 tts_text = _strip_title(txt)
                 
-                # Use round-robin voice and style
+                # Use round-robin voice and style (default)
                 rr_voice, rr_style = get_next_voice_style()
+
+                # Check if .meta.json has an emotional_tone to bias style selection
+                meta_path = script_file.replace(".txt", ".meta.json")
+                if os.path.exists(meta_path):
+                    try:
+                        with open(meta_path) as _mf:
+                            _meta = json.load(_mf)
+                        _tone = _meta.get("emotional_tone", "").lower().strip()
+                        if _tone:
+                            # Map emotional tone to a delivery style
+                            _tone_styles = {
+                                "tense": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
+                                "suspenseful": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
+                                "dramatic": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
+                                "somber": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
+                                "emotional": "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
+                                "action": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
+                                "energetic": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
+                                "exciting": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
+                                "humorous": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
+                                "lighthearted": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
+                                "mysterious": "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments.",
+                                "educational": "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
+                                "informative": "Speak like a professional news reporter. Clear, factual, objective. Present information in order.",
+                                "investigative": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
+                            }
+                            _matched = False
+                            for _keyword, _style in _tone_styles.items():
+                                if _keyword in _tone:
+                                    rr_style = _style
+                                    log(f"   Tone '{_tone}' matched '{_keyword}' → style overridden")
+                                    _matched = True
+                                    break
+                            if not _matched:
+                                log(f"   Tone '{_tone}' (no style override, using round-robin)")
+                    except Exception:
+                        pass
+
                 log(f"   Using voice: {rr_voice}, style: {rr_style[:40]}...")
                 
                 _tts_api(tts_text, pcm, rr_voice, rr_style)
@@ -4597,7 +5195,7 @@ def run_local_recordings(recording_path):
                 log_error(f"Invalid video: {video_name}")
                 continue
 
-            num_hours = max(1, duration // 3600)
+            num_hours = max(1, duration // 3600 + (1 if duration % 3600 > 1800 else 0))
             log(f"Video: {duration}s = {num_hours} hour(s)")
 
             json_file = phase_transcribe(video_file)
@@ -4703,7 +5301,7 @@ def run_pipeline(skip=None):
         except Exception as e:
             log(f"Warning: Could not extract context: {e}")
     
-    num_hours = max(1, duration // 3600)
+    num_hours = max(1, duration // 3600 + (1 if duration % 3600 > 1800 else 0))
     log(f"Video: {duration}s = {num_hours} hour(s)")
 
     if 4 not in skip and json_file:
@@ -4764,7 +5362,7 @@ def process_cmd(text, chat_id):
 
     if cmd in ("/run_pipeline", "/runpipeline"):
         if not _check_configured():
-            tg_send("Not configured yet. Run onboarding first:\n  python3 shortsforge.py onboard")
+            tg_send("Not configured yet. Run onboarding first:\n  python3 cogitator.py onboard")
         else:
             tg_send("Pipeline triggered! Source: YouTube playlist")
             def _run():
@@ -4780,7 +5378,7 @@ def process_cmd(text, chat_id):
 
     elif cmd in ("/run_local", "/runlocal"):
         if not _check_configured():
-            tg_send("Not configured yet. Run onboarding first:\n  python3 shortsforge.py onboard")
+            tg_send("Not configured yet. Run onboarding first:\n  python3 cogitator.py onboard")
         else:
             recording_path = env("RECORDING_PATH", os.path.expanduser("~/Videos/Recordings"))
             tg_send(f"Current source: YouTube playlist (default)\nProcessing local recordings from: {recording_path}")
@@ -5019,7 +5617,7 @@ Example: /set_voice Vindemiatrix""")
         context_dir = os.path.join(WORKSPACE, "Context")
         game_data_dir = os.path.join(WORKSPACE, "game_data")
         
-        msg = "🎮 ShortsForge Games:\n\n"
+        msg = "🎮 Cogitator Games:\n\n"
         
         # Current game
         current_game = env("GAME_TITLE", "None")
@@ -5049,7 +5647,7 @@ Example: /set_voice Vindemiatrix""")
 
 
     elif cmd == "/help":
-        tg_send("""Lambda Cut — YouTube Shorts Pipeline
+        tg_send("""Cogitator — YouTube Shorts Pipeline
 Converts long-form YouTube videos into shorts with AI scripts and TTS.
 
 Pipeline Phases:
@@ -5095,7 +5693,7 @@ Commands:
 
     elif cmd == "/menu":
         main_menu = get_main_menu()
-        tg_send_menu("📋 Lambda Cut Menu — Select an action:", main_menu)
+        tg_send_menu("📋 Cogitator Menu — Select an action:", main_menu)
 
     elif cmd in ("/cs", "/content_studio"):
         cs_menu = get_content_studio_menu()
@@ -5143,7 +5741,7 @@ Commands:
             
             status_emoji = "🟢" if summary.get("learning_status") == "active" else "🟡"
             
-            msg = f"""🧠 ShortsForge Learning Stats
+            msg = f"""🧠 Cogitator Learning Stats
 
 {status_emoji} Status: {summary.get('learning_status', 'unknown').replace('_', ' ').title()}
 
@@ -5260,7 +5858,7 @@ def listen():
             svc_content = f.read()
         python = sys.executable
         new_svc = f"""[Unit]
-Description=Lambda Cut Telegram Listener
+Description=Cogitator Telegram Listener
 After=network.target
 
 [Service]
@@ -5291,7 +5889,7 @@ WantedBy=default.target
     STREAMING = True
 
     me = tg_api("getMe")
-    print(f"Lambda Cut Listener — @{me['result']['username']}")
+    print(f"Cogitator Listener — @{me['result']['username']}")
     
     # Check for updates
     print("Checking for updates...")
@@ -5317,9 +5915,9 @@ WantedBy=default.target
     print(f"Voice rotated to: {rotated_voice}")
     print(f"Style rotated to: {rotated_style[:50]}...")
 
-    tg_send(f"Lambda Cut listener started (v{local_ver}).\nVoice: {rotated_voice}\nStyle: {rotated_style[:50]}...")
+    tg_send(f"Cogitator listener started (v{local_ver}).\nVoice: {rotated_voice}\nStyle: {rotated_style[:50]}...")
 
-    oauth_file = os.path.join(WORKSPACE, ".shortsforge", "youtube_oauth.json")
+    oauth_file = os.path.join(WORKSPACE, ".cogitator", "youtube_oauth.json")
     if os.path.exists(oauth_file):
         print("[BACKGROUND] Syncing YouTube metrics...")
         try:
@@ -5487,7 +6085,7 @@ WantedBy=default.target
             print(f"Error: {e}")
             time.sleep(5)
 
-    tg_send("Lambda Cut listener stopped.")
+    tg_send("Cogitator listener stopped.")
 
 # ─── Onboard ──────────────────────────────────────────────────────────────────
 def onboard():
@@ -5497,7 +6095,7 @@ def onboard():
     warn = lambda: f"{Y}!{X}"
 
     print(f"\n{B}{'='*40}")
-    print(f" Lambda Cut — Setup")
+    print(f" Cogitator — Setup")
     print(f"{'='*40}{X}\n")
 
     # ── Installation directory ──
@@ -5518,7 +6116,7 @@ def onboard():
 
     # Copy this script into the workspace
     src = os.path.abspath(__file__)
-    dst = os.path.join(wf_dir, "shortsforge.py")
+    dst = os.path.join(wf_dir, "cogitator.py")
     if src != dst:
         shutil.copy2(src, dst)
         os.chmod(dst, 0o755)
@@ -5749,7 +6347,7 @@ def onboard():
         try:
             data = urllib.parse.urlencode({
                 "chat_id": env("TELEGRAM_CHAT_ID"),
-                "text": "Lambda Cut configured!"
+                "text": "Cogitator configured!"
             }).encode()
             req = urllib.request.Request(
                 f"https://api.telegram.org/bot{env('TELEGRAM_BOT_TOKEN')}/sendMessage",
@@ -5777,7 +6375,7 @@ def onboard():
         all_ok = False
 
     # Make scripts executable
-    for s in ("shortsforge.py",):
+    for s in ("cogitator.py",):
         p = os.path.join(WORKFLOW_DIR, s)
         if os.path.exists(p):
             os.chmod(p, 0o755)
@@ -5797,7 +6395,7 @@ def onboard():
             os.makedirs(svc_dir, exist_ok=True)
             python = sys.executable
             svc = f"""[Unit]
-Description=Lambda Cut Telegram Listener
+Description=Cogitator Telegram Listener
 After=network.target
 
 [Service]
@@ -5831,8 +6429,8 @@ WantedBy=default.target
             print(f"    python3 {dst} listen\n")
 
         # Shell alias
-        if input("  Set up alias so you can run `SHORTSFORGE` from anywhere? [y/N]: ").strip().lower() == "y":
-            alias_line = f"alias SHORTSFORGE='python3 {dst}'"
+        if input("  Set up alias so you can run `COGITATOR` from anywhere? [y/N]: ").strip().lower() == "y":
+            alias_line = f"alias COGITATOR='python3 {dst}'"
 
             # Detect shell rc file
             shell = os.environ.get("SHELL", "")
@@ -5864,7 +6462,7 @@ WantedBy=default.target
             if os.path.exists(rc_file):
                 with open(rc_file) as f:
                     for line in f:
-                        if line.strip().startswith("alias SHORTSFORGE="):
+                        if line.strip().startswith("alias COGITATOR="):
                             alias_exists = True
                             break
 
@@ -5872,15 +6470,15 @@ WantedBy=default.target
                 print(f"  {warn()} Alias already exists in {rc_file}")
             else:
                 with open(rc_file, "a") as f:
-                    f.write(f"\n# Lambda Cut\n{alias_line}\n")
+                    f.write(f"\n# Cogitator\n{alias_line}\n")
                 print(f"  {ok()} Alias added to {rc_file}")
                 print(f"    Run: source {rc_file}")
                 print(f"    Or open a new terminal.\n")
 
             print(f"  {B}Ready!{X}")
-            print(f"    SHORTSFORGE run")
-            print(f"    SHORTSFORGE run -phase 2,3")
-            print(f"    SHORTSFORGE listen\n")
+            print(f"    COGITATOR run")
+            print(f"    COGITATOR run -phase 2,3")
+            print(f"    COGITATOR listen\n")
         else:
             print(f"  {B}Ready!{X}")
             print(f"    python3 {dst} run")
@@ -5910,7 +6508,7 @@ def _telegram_configured():
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(prog="SHORTSFORGE", description="Lambda Cut — YouTube Shorts Pipeline")
+    parser = argparse.ArgumentParser(prog="COGITATOR", description="Cogitator — YouTube Shorts Pipeline")
     sub = parser.add_subparsers(dest="command")
 
     p_run = sub.add_parser("run", help="Run the pipeline")

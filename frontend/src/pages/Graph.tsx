@@ -67,13 +67,13 @@ export default function Graph() {
   const [hoverNode, setHoverNode] = useState<NodeData | null>(null)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editForm, setEditForm] = useState({ label: '', description: '' })
-  const [showImplicitEdges, setShowImplicitEdges] = useState(true)
+  const [showImplicitEdges, setShowImplicitEdges] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [hiddenGames, setHiddenGames] = useState<Set<string>>(new Set())
   const [graphSettings, setGraphSettings] = useState<GraphSettings>(() => loadGraphSettings())
   const [graphReady, setGraphReady] = useState(false)
   const initialFitKeyRef = useRef<string>('')
-  const [animationTime, setAnimationTime] = useState(0)
+  const animationTimeRef = useRef(0)
   
   const { data: games } = useQuery({
     queryKey: ['games'],
@@ -139,11 +139,11 @@ export default function Graph() {
     return () => window.removeEventListener('resize', updateDimensions)
   }, [updateDimensions])
 
-  // Animation loop for theme effects
+  // Animation loop for theme effects (ref-based, no re-renders)
   useEffect(() => {
     let animId: number
     const animate = () => {
-      setAnimationTime(Date.now() / 1000)
+      animationTimeRef.current = performance.now() / 1000
       animId = requestAnimationFrame(animate)
     }
     animId = requestAnimationFrame(animate)
@@ -370,7 +370,7 @@ export default function Graph() {
     } 
     else if (theme === 'brain') {
       // Brain neurons - gradient circles with pulse
-      const pulse = Math.sin(animationTime * 3 + node.id.charCodeAt(0)) * 0.3 + 0.7
+      const pulse = Math.sin(animationTimeRef.current * 3 + node.id.charCodeAt(0)) * 0.3 + 0.7
       const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, node.val * 2)
       gradient.addColorStop(0, isHighlight ? `${color}${Math.floor(pulse * 255).toString(16).padStart(2, '0')}` : `${color}33`)
       gradient.addColorStop(0.7, `${color}22`)
@@ -406,7 +406,7 @@ export default function Graph() {
     }
     else if (theme === 'hologram') {
       // Hologram - circles with scan line
-      const flicker = Math.sin(animationTime * 20) * 0.1 + 0.9
+      const flicker = Math.sin(animationTimeRef.current * 20) * 0.1 + 0.9
       // Outer glow
       const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, node.val * 2)
       gradient.addColorStop(0, `${color}60`)
@@ -421,7 +421,7 @@ export default function Graph() {
       ctx.fillStyle = `${color}${Math.floor(opacity * flicker * 255).toString(16).padStart(2, '0')}`
       ctx.fill()
       // Scan line
-      const scanY = node.y - node.val + ((animationTime * 50) % (node.val * 2))
+      const scanY = node.y - node.val + ((animationTimeRef.current * 50) % (node.val * 2))
       ctx.beginPath()
       ctx.moveTo(node.x - node.val, scanY)
       ctx.lineTo(node.x + node.val, scanY)
@@ -442,7 +442,7 @@ export default function Graph() {
       ctx.lineWidth = isSelected ? 2 : 1
       ctx.strokeRect(node.x - node.val * 1.5, node.y - node.val, node.val * 3, node.val * 2)
       // Cursor
-      const cursorBlink = Math.sin(animationTime * 4) > 0
+      const cursorBlink = Math.sin(animationTimeRef.current * 4) > 0
       if (cursorBlink && (isSelected || isHovered)) {
         ctx.fillStyle = '#00ff00'
         ctx.fillRect(node.x - node.val * 1.5 + 2, node.y - node.val + 2, 2, node.val * 2 - 4)
@@ -486,7 +486,7 @@ export default function Graph() {
       ctx.fillStyle = `rgba(255, 255, 255, ${isSelected ? 1 : 0.9})`
       ctx.fillText(node.label ?? '', node.x, node.y + node.val + fontSize + 2)
     }
-  }, [highlightNodes, selectedNode, hoverNode, graphSettings.visualTheme, animationTime])
+  }, [highlightNodes, selectedNode, hoverNode, graphSettings.visualTheme])
   
   const paintLink = useCallback((link: any, ctx: CanvasRenderingContext2D) => {
     if (link.source?.x == null || link.source?.y == null || link.target?.x == null || link.target?.y == null) return
@@ -527,7 +527,7 @@ export default function Graph() {
     }
     else if (theme === 'brain') {
       // Pulsing neural pathways
-      const pulse = Math.sin(animationTime * 2 + link.source.id.charCodeAt(0)) * 0.3 + 0.7
+      const pulse = Math.sin(animationTimeRef.current * 2 + link.source.id.charCodeAt(0)) * 0.3 + 0.7
       ctx.setLineDash([])
       ctx.lineWidth = isHighlight ? 2 : (isImplicit ? 0.5 : 1)
       ctx.strokeStyle = isHighlight ? `${colors.character}${Math.floor(pulse * 200).toString(16).padStart(2, '0')}` : `${baseColor}40`
@@ -547,7 +547,7 @@ export default function Graph() {
     }
     else if (theme === 'hologram') {
       // Hologram dashed cyan lines
-      const flicker = Math.sin(animationTime * 10) * 0.2 + 0.8
+      const flicker = Math.sin(animationTimeRef.current * 10) * 0.2 + 0.8
       ctx.setLineDash([8, 4])
       ctx.lineWidth = isHighlight ? 2 : 1
       ctx.strokeStyle = isHighlight ? `rgba(0, 255, 255, ${flicker})` : `${colors.character}44`
@@ -558,7 +558,7 @@ export default function Graph() {
       ctx.lineWidth = isHighlight ? 2.5 : 1
       ctx.strokeStyle = isHighlight ? '#00ff00' : `${baseColor}33`
       // Add flowing effect
-      const flowPos = (animationTime * 30) % 40
+      const flowPos = (animationTimeRef.current * 30) % 40
       if (isHighlight) {
         ctx.setLineDash([flowPos, 40 - flowPos])
       }
@@ -577,7 +577,7 @@ export default function Graph() {
 
     ctx.stroke()
     ctx.setLineDash([])
-  }, [highlightLinks, showImplicitEdges, graphSettings.visualTheme, animationTime])
+  }, [highlightLinks, showImplicitEdges, graphSettings.visualTheme])
 
   const updateMutation = useMutation({
     mutationFn: ({ itemType, itemId, data }: { itemType: string; itemId: string; data: any }) =>
@@ -615,7 +615,7 @@ export default function Graph() {
             <span className="text-cyber-cyan">KNOWLEDGE</span> GRAPH
           </h1>
           <p className="text-gray-400 mt-1">
-            Nodes are entities; edges are saved relationships and transcript co-occurrence.
+            Nodes are entities from the Context page; solid edges are defined relationships, dashed edges are transcript co-occurrence.
           </p>
         </div>
 

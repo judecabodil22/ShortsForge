@@ -185,12 +185,12 @@ export default function Context() {
       category: t.category,
       metadata: t.metadata
     })),
-    ...((context?.relationships || []) as any[]).map((r: any) => ({
-      id: r.id || `${r.from}-${r.to}`,
-      name: `${r.from} → ${r.to}`,
+    ...((context?.relationships || []) as any[]).map((r: any, idx: number) => ({
+      id: r.id || (r.from && r.to ? `${r.from}-${r.to}` : `rel-${idx}`),
+      name: r.from && r.to ? `${r.from} → ${r.to}` : r.relationship || r.name || 'Unnamed relationship',
       type: 'relationship',
-      description: r.relationship,
-      category: r.relationship,
+      description: r.relationship || '',
+      category: r.relationship || '',
       metadata: r.metadata
     })),
   ]

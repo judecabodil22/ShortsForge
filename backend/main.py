@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Web Backend
+Cogitator Web Backend
 FastAPI server for the cyberpunk web UI
 """
 import os
@@ -9,11 +9,12 @@ import json
 import time
 import secrets
 import re
+import asyncio
 from datetime import datetime
 from typing import Optional, Any, Tuple
 
 # Add parent directory to path for imports
-WORKSPACE = os.path.expanduser("~/ShortsForge")
+WORKSPACE = os.path.expanduser("~/Cogitator")
 sys.path.insert(0, WORKSPACE)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends
@@ -25,7 +26,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Import existing ShortsForge modules
+# Import existing Cogitator modules
 from workflows.performance_database import (
     get_performance_stats, get_all_videos_with_metrics, get_successful_scripts,
     get_learnings, get_tts_learning_data, get_thompson_sampling_weights,
@@ -42,16 +43,17 @@ from workflows.context_manager import (
     load_implicit_relationships,
     save_implicit_relationships,
 )
+from workflows.ws_manager import ConnectionManager, manager as ws_manager, pipeline_status
 
 # ============================================================================
 # SECURITY CONFIGURATION
 # ============================================================================
 
-SECRET_KEY_FILE = "/home/alph4r1us/ShortsForge/.shortsforge/api_key"
+SECRET_KEY_FILE = "/home/alph4r1us/Cogitator/.cogitator/api_key"
 
 def load_or_create_api_key():
     """Load existing API key or create a new one"""
-    os.makedirs(os.path.expanduser("~/ShortsForge/.shortsforge"), exist_ok=True)
+    os.makedirs(os.path.expanduser("~/Cogitator/.cogitator"), exist_ok=True)
     key_file = SECRET_KEY_FILE
     if os.path.exists(key_file):
         with open(key_file, "r") as f:
@@ -86,6 +88,8 @@ def sanitize_input(text: str, max_length: int = 10000) -> str:
         return ""
     # Remove null bytes
     text = text.replace("\x00", "")
+    # Block path traversal
+    text = text.replace("..", "").replace("/", "").replace("\\", "")
     # Trim to max length
     if len(text) > max_length:
         text = text[:max_length]
@@ -103,7 +107,13 @@ async def verify_api_key(request: Request):
 
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="ShortsForge API", version="2.0.0")
+app = FastAPI(title="Cogitator API", version="2.0.0")
+_main_loop = None
+
+@app.on_event("startup")
+async def _store_event_loop():
+    global _main_loop
+    _main_loop = asyncio.get_event_loop()
 
 # Exception handler for rate limiting
 @app.exception_handler(RateLimitExceeded)
@@ -128,78 +138,10 @@ app.add_middleware(
     allow_headers=["X-API-Key", "Content-Type", "Authorization"],
 )
 
-# WebSocket connection manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: list[WebSocket] = []
-        self.log_tailer = None
-    
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        # Start log tailer for this connection if pipeline is running
-        if pipeline_status.get("running"):
-            self._start_log_tailer()
-    
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        if not self.active_connections and self.log_tailer:
-            self.log_tailer = None
-    
-    async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                pass
-    
-    def _start_log_tailer(self):
-        """Start background task to tail pipeline log and broadcast over WebSocket."""
-        import threading
-        
-        if self.log_tailer:
-            return
-        
-        def tail_log():
-            log_file = "/tmp/pipeline.log"
-            if not os.path.exists(log_file):
-                self.log_tailer = None
-                return
-            
-            with open(log_file, "r") as f:
-                f.seek(0, 2)  # Seek to end
-                while self.active_connections and pipeline_status.get("running"):
-                    line = f.readline()
-                    if line:
-                        import asyncio
-                        try:
-                            asyncio.get_event_loop().run_until_complete(
-                                self.broadcast({"type": "log", "data": line.strip()})
-                            )
-                        except Exception:
-                            pass
-                    else:
-                        time.sleep(0.5)
-            self.log_tailer = None
-        
-        self.log_tailer = threading.Thread(target=tail_log, daemon=True)
-        self.log_tailer.start()
-
-manager = ConnectionManager()
-
-# Pipeline status storage
-pipeline_status = {
-    "running": False,
-    "current_phase": None,
-    "progress": 0,
-    "message": "Idle",
-    "last_run": None,
-    "error": None
-}
+# WebSocket manager and pipeline status imported from workflows.ws_manager
 
 # Pipeline settings storage
-SETTINGS_FILE = os.path.expanduser("~/ShortsForge/.shortsforge/web_settings.json")
+SETTINGS_FILE = os.path.expanduser("~/Cogitator/.cogitator/web_settings.json")
 
 def load_pipeline_settings():
     """Load pipeline settings from file"""
@@ -239,9 +181,17 @@ def save_pipeline_settings(settings):
 async def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
+
 @app.get("/api/auth/key")
-async def get_api_key():
-    """Get API key for frontend authentication"""
+@limiter.limit("10/minute")
+async def get_api_key(request: Request):
+    """Return the API key for frontend bootstrapping.
+    
+    Only accessible from localhost for security.
+    """
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     return {"api_key": API_KEY}
 
 
@@ -277,6 +227,7 @@ import subprocess
 import threading
 
 pipeline_process = None
+_pipeline_lock = threading.Lock()
 
 # Phase ranges matching desktop UI
 PHASE_RANGES = {
@@ -296,11 +247,9 @@ PHASE_LABELS = {
     6: "TTS",
 }
 
-STATUS_FILE = "/tmp/pipeline_status"
-
 async def broadcast_status():
     """Broadcast current pipeline status to all connected clients"""
-    await manager.broadcast({
+    await ws_manager.broadcast({
         "type": "pipeline:status",
         "data": pipeline_status
     })
@@ -342,33 +291,41 @@ def parse_status(status_text):
     
     return None, 0
 
-PIPELINE_LOG = "/tmp/pipeline.log"
+_SF_DIR = os.path.expanduser("~/.cogitator")
+os.makedirs(_SF_DIR, exist_ok=True)
+PIPELINE_LOG = os.path.join(_SF_DIR, "pipeline.log")
+STATUS_FILE = os.path.join(_SF_DIR, "pipeline_status")
+PENDING_DOWNLOAD_FILE = os.path.join(_SF_DIR, "pending_download.txt")
 
-def run_pipeline_async(source: str = "youtube"):
+def run_pipeline_async(source: str = "youtube", video_url: str = ""):
     """Run pipeline in background thread"""
     global pipeline_process
-    
-    WORKSPACE = os.path.expanduser("~/ShortsForge")
     
     # Clear previous log
     try:
         if os.path.exists(PIPELINE_LOG):
             os.remove(PIPELINE_LOG)
-    except Exception:
+    except OSError:
         pass
     
     # Clear status file before starting
     try:
         if os.path.exists(STATUS_FILE):
             os.remove(STATUS_FILE)
-    except Exception:
+    except OSError:
         pass
     
-    if source == "local":
-        cmd = [sys.executable, "workflows/shortsforge.py", "run_local", "media"]
+    # Write pending download URL if provided
+    if video_url:
+        with open(PENDING_DOWNLOAD_FILE, "w") as f:
+            f.write(video_url.strip())
+        cmd = [sys.executable, "workflows/cogitator.py", "run"]
+        pipeline_status["message"] = "Downloading from URL..."
+    elif source == "local":
+        cmd = [sys.executable, "workflows/cogitator.py", "run_local", "media"]
         pipeline_status["message"] = "Processing local media..."
     else:
-        cmd = [sys.executable, "workflows/shortsforge.py", "run"]
+        cmd = [sys.executable, "workflows/cogitator.py", "run"]
         pipeline_status["message"] = "Downloading from YouTube..."
     
     pipeline_status["running"] = True
@@ -385,20 +342,47 @@ def run_pipeline_async(source: str = "youtube"):
     env["PYTHONPATH"] = WORKSPACE
 
     try:
-        pipeline_process = subprocess.Popen(
-            cmd,
-            cwd=WORKSPACE,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-            env=env
-        )
+        with _pipeline_lock:
+            pipeline_process = subprocess.Popen(
+                cmd,
+                cwd=WORKSPACE,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                env=env
+            )
 
-        # Poll status file while process runs
+        # Poll status file and tail logs while process runs
         last_status = ""
-        while pipeline_process is not None and pipeline_process.poll() is None:
+        log_pos = 0
+        while True:
+            with _pipeline_lock:
+                proc = pipeline_process
+            if proc is None or proc.poll() is not None:
+                break
+
+            # Broadcast new log lines via WebSocket
+            try:
+                if os.path.exists(PIPELINE_LOG):
+                    with open(PIPELINE_LOG, "r") as lf:
+                        lf.seek(log_pos)
+                        for line in lf:
+                            line = line.rstrip("\n\r")
+                            if line and _main_loop and _main_loop.is_running():
+                                asyncio.run_coroutine_threadsafe(
+                                    ws_manager.broadcast({
+                                        "type": "log",
+                                        "log": line,
+                                        "timestamp": datetime.now().isoformat()
+                                    }),
+                                    _main_loop
+                                )
+                        log_pos = lf.tell()
+            except OSError:
+                pass
+
             # Read status from file
             status_text = read_status_file()
 
@@ -426,7 +410,7 @@ def run_pipeline_async(source: str = "youtube"):
             pipeline_status["error"] = status_text
             pipeline_status["current_phase"] = "Error"
             pipeline_status["progress"] = 0
-        elif pipeline_process is None:
+        elif proc is None:
             # Distinguish between never run and stopped/finished
             if not status_text:
                 pipeline_status["current_phase"] = "Idle"
@@ -434,12 +418,12 @@ def run_pipeline_async(source: str = "youtube"):
             else:
                 pipeline_status["current_phase"] = "Stopped"
                 pipeline_status["message"] = "Pipeline stopped by user"
-        elif pipeline_process.returncode == 0:
+        elif proc.returncode == 0:
             pipeline_status["current_phase"] = "Complete"
             pipeline_status["progress"] = 100
             pipeline_status["message"] = "Pipeline completed successfully"
         else:
-            pipeline_status["error"] = f"Pipeline exited with code {pipeline_process.returncode}"
+            pipeline_status["error"] = f"Pipeline exited with code {proc.returncode}"
             pipeline_status["current_phase"] = "Failed"
             
     except Exception as e:
@@ -451,7 +435,8 @@ def run_pipeline_async(source: str = "youtube"):
             log_file = None
     finally:
         pipeline_status["running"] = False
-        pipeline_process = None
+        with _pipeline_lock:
+            pipeline_process = None
         
         # Auto-sync YouTube metrics after pipeline completes
         try:
@@ -465,24 +450,33 @@ def run_pipeline_async(source: str = "youtube"):
         if log_file:
             try:
                 log_file.close()
-            except Exception:
+            except OSError:
                 pass
+        
+        # Clean up pending download file
+        try:
+            if os.path.exists(PENDING_DOWNLOAD_FILE):
+                os.remove(PENDING_DOWNLOAD_FILE)
+        except OSError:
+            pass
 
 
 @app.post("/api/pipeline/run")
 @limiter.limit("5/minute")
-async def run_pipeline(request: Request, source: str = "youtube", _: bool = Depends(verify_api_key)):
-    """Trigger pipeline run - source: 'youtube' or 'local'"""
-    global pipeline_status
-    
+async def run_pipeline(request: Request, _: bool = Depends(verify_api_key)):
+    """Trigger pipeline run - accepts JSON body with optional video_url"""
     if pipeline_status["running"]:
         return {"status": "already_running", "message": "Pipeline is already running"}
     
-    thread = threading.Thread(target=run_pipeline_async, args=(source,))
+    body = await request.json()
+    video_url = body.get("video_url", "").strip()
+    source = body.get("source", "youtube" if not video_url else "url")
+    
+    thread = threading.Thread(target=run_pipeline_async, args=(source, video_url))
     thread.daemon = True
     thread.start()
     
-    return {"status": "started", "source": source}
+    return {"status": "started", "source": source, "video_url": video_url}
 
 
 @app.post("/api/pipeline/stop")
@@ -491,18 +485,20 @@ async def stop_pipeline(request: Request, _: bool = Depends(verify_api_key)):
     """Stop pipeline"""
     global pipeline_process
     
-    if pipeline_process:
-        pipeline_process.terminate()
-        try:
-            pipeline_process.wait(timeout=5)
-        except Exception:
-            pipeline_process.kill()
-        pipeline_process = None
+    with _pipeline_lock:
+        proc = pipeline_process
+        if proc:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+            pipeline_process = None
     
     pipeline_status["running"] = False
     pipeline_status["message"] = "Stopped"
     
-    await manager.broadcast({
+    await ws_manager.broadcast({
         "type": "pipeline:status",
         "data": pipeline_status
     })
@@ -575,7 +571,7 @@ async def sync_youtube_metrics(request: Request, _: bool = Depends(verify_api_ke
         from workflows.performance_database import sync_youtube_metrics
         result = sync_youtube_metrics(days=7, max_results=50)
         
-        await manager.broadcast({
+        await ws_manager.broadcast({
             "type": "metrics:updated",
             "data": result
         })
@@ -617,6 +613,24 @@ async def get_script(script_id: str):
     return {
         "script": script,
         "features": features
+    }
+
+
+@app.get("/api/scripts/{script_id}/metadata")
+async def get_script_metadata(script_id: str):
+    """Get script metadata (description, hashtags, tags)"""
+    from workflows.performance_database import get_script_by_id
+
+    script = get_script_by_id(script_id)
+    if not script:
+        return {"error": "Script not found"}
+
+    return {
+        "title": script.get("title", ""),
+        "description": script.get("description", ""),
+        "hashtags": script.get("hashtags", ""),
+        "tags": script.get("tags", ""),
+        "content_type": script.get("content_type", ""),
     }
 
 
@@ -784,7 +798,23 @@ async def get_game_context(game: str):
         except Exception:
             pass
 
-    context_data = all_context.get(game_key, {}).get("context", {})
+    # Ensure ContextManagerV2 is loaded (assigns UUIDs to all items)
+    cm.load_all_contexts()
+
+    # Use ContextManagerV2 for per-game data so items always have UUIDs
+    if not is_franchise and not series_name:
+        characters = [c.to_dict() for c in cm.get_context_items(game_key, "character")]
+        locations = [l.to_dict() for l in cm.get_context_items(game_key, "location")]
+        terms = [t.to_dict() for t in cm.get_context_items(game_key, "term")]
+        relationships = [r.to_dict() for r in cm.get_context_items(game_key, "relationship")]
+        context_data = {
+            "characters": characters,
+            "locations": locations,
+            "key_terms": terms,
+            "relationships": relationships,
+        }
+    else:
+        context_data = all_context.get(game_key, {}).get("context", {})
 
     # If this is a franchise, also merge in context from child games
     if is_franchise or series_name:
@@ -834,614 +864,54 @@ async def get_game_context(game: str):
                         merged["relationships"].append(rel)
 
         context_data = {
-            "characters": [{"name": c} for c in sorted(merged["characters"])],
-            "locations": [{"name": l} for l in sorted(merged["locations"])],
-            "key_terms": [{"name": t} for t in sorted(merged["key_terms"])],
+            "characters": [{"name": c} for c in sorted(merged["characters"]) if c],
+            "locations": [{"name": l} for l in sorted(merged["locations"]) if l],
+            "key_terms": [{"name": t} for t in sorted(merged["key_terms"]) if t],
             "relationships": merged["relationships"]
         }
+
+    # Accept relationships in either old format (from/to) or ContextManagerV2 format (id/name)
+    valid_relationships = [
+        r for r in context_data.get("relationships", [])
+        if isinstance(r, dict) and (r.get("from") or r.get("id"))
+    ]
 
     return {
         "characters": context_data.get("characters", []),
         "locations": context_data.get("locations", []),
         "terms": context_data.get("key_terms", []),
-        "relationships": context_data.get("relationships", []),
+        "relationships": valid_relationships,
         "games": context_data.get("games", []),
         "is_franchise": is_franchise or series_name is not None,
         "franchise_name": game_key if (is_franchise or series_name) else None
     }
 
 
-def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
-    """Analyze transcripts for entity co-occurrence to generate implicit graph edges.
-    
-    Returns dict with:
-    - edges: list of implicit edges with {source_id, target_id, type, weight, label}
-    - entity_segments: {entity_name: [segment_indices]} for reference
-    """
-    import re
-    from collections import defaultdict
-    
-    # Get entities from context manager
-    cm = get_context_manager()
-    
-    # Determine game keys to load entities from — if franchise, include child games
-    game_keys_for_entities = [game_key]
-    if game_key in SERIES_MAPPING.values():
-        children = [
-            child_key
-            for child_key, series_val in SERIES_MAPPING.items()
-            if series_val == game_key
-        ]
-        game_keys_for_entities = [game_key] + children
-    
-    entities = {
-        'character': [],
-        'location': [],
-        'term': []
-    }
-    
-    for gk in game_keys_for_entities:
-        for etype in entities:
-            for item in cm.get_context_items(gk, etype):
-                entities[etype].append({
-                    'id': item.id,
-                    'name': item.name.lower(),
-                    'original': item.name,
-                    'type': etype
-                })
-    
-    # Build entity name to ID map (include variations)
-    name_to_id = {}
-    for etype, items in entities.items():
-        for item in items:
-            name_to_id[item['name']] = item['id']
-            # Also add lowercase version
-            name_to_id[item['name'].lower()] = item['id']
-    
-    # Find and parse transcript files
-    transcripts_dir = os.path.join(WORKSPACE, "transcripts")
-    if not os.path.exists(transcripts_dir):
-        return {"edges": [], "entity_segments": {}}
-    
-    # Find transcripts related to this game/franchise
-    transcript_files = []
-    for fname in os.listdir(transcripts_dir):
-        if fname.endswith('.json'):
-            transcript_files.append(os.path.join(transcripts_dir, fname))
-    
-    if not transcript_files:
-        return {"edges": [], "entity_segments": {}}
-    
-    # Entity patterns for matching (case-insensitive)
-    entity_patterns = {}
-    for etype, items in entities.items():
-        for item in items:
-            entity_patterns[item['name']] = {
-                'id': item['id'],
-                'type': etype,
-                'original': item['original']
-            }
-            # Also add lowercase
-            entity_patterns[item['name'].lower()] = entity_patterns[item['name']]
-    
-    # Co-occurrence tracking
-    cooccurrence = defaultdict(int)  # (name1, name2) -> count
-    entity_segments = defaultdict(set)  # name -> set of segment indices
-    entity_contexts = defaultdict(list)  # name -> list of {segment_idx, nearby_entities}
-    
-    def _process_text_segment(text: str, seg_idx: int):
-        if not text:
-            return
-        text_lower = text.lower()
-        mentioned = []
-        for entity_name in entity_patterns:
-            pattern = r'\b' + re.escape(entity_name) + r'\b'
-            if re.search(pattern, text_lower):
-                mentioned.append(entity_name)
-                entity_segments[entity_name].add(seg_idx)
-        for i, name1 in enumerate(mentioned):
-            for name2 in mentioned[i + 1:]:
-                pair = tuple(sorted([name1, name2]))
-                cooccurrence[pair] += 1
-                for other in mentioned:
-                    if other != name1:
-                        entity_contexts[name1].append({
-                            'segment': seg_idx,
-                            'nearby': other,
-                            'text_preview': text[:100],
-                        })
-
-    # Process each transcript JSON on disk
-    seg_offset = 0
-    for tfile in transcript_files:
-        try:
-            with open(tfile, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for seg_idx, segment in enumerate(data.get('segments', [])):
-                _process_text_segment(segment.get('text', ''), seg_offset + seg_idx)
-            seg_offset += len(data.get('segments', []))
-        except Exception as e:
-            print(f"Error processing transcript {tfile}: {e}")
-            continue
-
-    # MemPalace: split narrative chunks into sentence-like segments for co-occurrence
-    for gk in game_keys_for_entities:
-        mempalace_chunks = get_mempalace_text_chunks(gk)
-        for chunk_idx, chunk in enumerate(mempalace_chunks):
-            for part_idx, part in enumerate(re.split(r'[.!?\n]+', chunk)):
-                part = part.strip()
-                if len(part) > 20:
-                    _process_text_segment(part, seg_offset + chunk_idx * 1000 + part_idx)
-    
-    # Generate implicit edges from co-occurrences
-    implicit_edges = []
-    edge_id = 0
-    
-    # Threshold: at least 2 co-occurrences to create an edge
-    min_cooccurrence = 1
-    
-    for (name1, name2), count in cooccurrence.items():
-        if count >= min_cooccurrence:
-            id1 = name_to_id.get(name1)
-            id2 = name_to_id.get(name2)
-            
-            if id1 and id2 and id1 != id2:
-                # Determine edge type based on entity types
-                type1 = entity_patterns.get(name1, {}).get('type', 'unknown')
-                type2 = entity_patterns.get(name2, {}).get('type', 'unknown')
-                
-                # Edge type logic
-                if type1 == 'character' and type2 == 'location':
-                    edge_type = 'located_at'
-                    edge_label = f"found in {entity_patterns.get(name2, {}).get('original', name2)}"
-                elif type2 == 'character' and type1 == 'location':
-                    edge_type = 'located_at'
-                    edge_label = f"visited by {entity_patterns.get(name1, {}).get('original', name1)}"
-                elif type1 == 'term' or type2 == 'term':
-                    edge_type = 'related_to'
-                    edge_label = f"connected ({count}x)"
-                else:
-                    edge_type = 'co_occurs'
-                    edge_label = f"mentioned together ({count}x)"
-                
-                implicit_edges.append({
-                    'source': id1,
-                    'target': id2,
-                    'type': edge_type,
-                    'weight': count,
-                    'label': edge_label,
-                    'implicit': True
-                })
-                edge_id += 1
-    
-    # Also create edges between entities that share many contexts
-    # (entities frequently mentioned in same segments)
-    shared_contexts = defaultdict(int)
-    for name, contexts in entity_contexts.items():
-        nearby_counts = defaultdict(int)
-        for ctx in contexts:
-            nearby_counts[ctx['nearby']] += 1
-        
-        for other_name, cnt in nearby_counts.items():
-            if cnt >= 3:  # At least 3 shared contexts
-                pair = tuple(sorted([name, other_name]))
-                if pair not in cooccurrence or cooccurrence[pair] < cnt:
-                    shared_contexts[pair] = cnt
-    
-    # Add shared context edges
-    for (name1, name2), count in shared_contexts.items():
-        if count >= 3:
-            id1 = name_to_id.get(name1)
-            id2 = name_to_id.get(name2)
-            
-            if id1 and id2 and id1 != id2:
-                # Check if edge already exists
-                exists = any(
-                    (e['source'] == id1 and e['target'] == id2) or
-                    (e['source'] == id2 and e['target'] == id1)
-                    for e in implicit_edges
-                )
-                
-                if not exists:
-                    type1 = entity_patterns.get(name1, {}).get('type', 'unknown')
-                    type2 = entity_patterns.get(name2, {}).get('type', 'unknown')
-                    
-                    edge_type = 'mentioned_with' if 'character' in [type1, type2] else 'contextually_linked'
-                    
-                    implicit_edges.append({
-                        'source': id1,
-                        'target': id2,
-                        'type': edge_type,
-                        'weight': count,
-                        'label': f"frequently together ({count}x)",
-                        'implicit': True
-                    })
-    
-    return {
-        "edges": implicit_edges,
-        "entity_segments": {k: list(v) for k, v in entity_segments.items()},
-        "total_transcripts": len(transcript_files),
-        "total_cooccurrences": sum(cooccurrence.values())
-    }
-
-
-def _normalize_entity_name(name: str) -> str:
-    return re.sub(r"\s+", " ", (name or "").lower().strip())
-
-
-def _resolve_graph_game_key(game_key: str) -> str:
-    """Map child game keys to franchise context when applicable."""
-    if game_key in SERIES_MAPPING:
-        return SERIES_MAPPING[game_key]
-    return game_key
-
-
-def _register_graph_node(item, nodes: list, node_id_map: dict, alias_map: dict) -> None:
-    """Register an entity node and all name aliases for edge resolution.
-    First registration wins for name collisions (character > location > term)."""
-    norm = _normalize_entity_name(item.name)
-    if not norm:
-        return
-    nodes.append({
-        "data": {
-            "id": item.id,
-            "label": item.name,
-            "type": item.type,
-            "description": item.description,
-            "category": getattr(item, "category", "") or "",
-        }
-    })
-    if norm not in node_id_map:
-        node_id_map[norm] = item.id
-    for alias in getattr(item, "aliases", []) or []:
-        alias_norm = _normalize_entity_name(alias if isinstance(alias, str) else str(alias))
-        if alias_norm:
-            alias_map[alias_norm] = item.id
-
-
-def _resolve_entity_id(name: str, node_id_map: dict, alias_map: dict) -> Optional[str]:
-    """Resolve a context name to a graph node id."""
-    norm = _normalize_entity_name(name)
-    if not norm:
-        return None
-    if norm in node_id_map:
-        return node_id_map[norm]
-    if norm in alias_map:
-        return alias_map[norm]
-    # Substring match for minor spelling differences (longest keys first)
-    for key, ent_id in sorted(node_id_map.items(), key=lambda kv: -len(kv[0])):
-        if len(norm) >= 3 and len(key) >= 3 and (norm in key or key in norm):
-            return ent_id
-    return None
-
-
-def _parse_relationship_endpoints(item) -> Tuple[Optional[str], Optional[str], str]:
-    """Extract from/to entity names and relationship label from a context item."""
-    meta = getattr(item, "metadata", None) or {}
-    from_name = (meta.get("from") or "").strip()
-    to_name = (meta.get("to") or "").strip()
-    rel_label = (meta.get("relationship") or item.category or "").strip()
-
-    if from_name and to_name:
-        return from_name, to_name, rel_label
-
-    name = item.name or ""
-    if "↔" in name:
-        parts = name.split("↔", 1)
-        if len(parts) == 2:
-            return parts[0].strip(), parts[1].strip(), rel_label or "related"
-
-    return None, None, rel_label
-
-
-def _iter_context_relationships(game_key: str, cm) -> list:
-    """Yield relationship dicts from manager items and verified_context.json."""
-    seen: set[str] = set()
-    for item in cm.get_context_items(game_key, "relationship"):
-        from_n, to_n, label = _parse_relationship_endpoints(item)
-        if from_n and to_n:
-            key = f"{_normalize_entity_name(from_n)}|{_normalize_entity_name(to_n)}|{label}"
-            if key not in seen:
-                seen.add(key)
-                yield {"from": from_n, "to": to_n, "relationship": label}
-
-    verified_file = os.path.join(WORKSPACE, "Context", "verified_context.json")
-    if os.path.exists(verified_file):
-        try:
-            with open(verified_file, "r") as f:
-                all_ctx = json.load(f)
-            rels = all_ctx.get(game_key, {}).get("context", {}).get("relationships", [])
-            for rel in rels:
-                if not isinstance(rel, dict):
-                    continue
-                from_n = (rel.get("from") or "").strip()
-                to_n = (rel.get("to") or "").strip()
-                if not from_n or not to_n:
-                    continue
-                label = (rel.get("relationship") or rel.get("type") or "related").strip()
-                key = f"{_normalize_entity_name(from_n)}|{_normalize_entity_name(to_n)}|{label}"
-                if key not in seen:
-                    seen.add(key)
-                    yield {"from": from_n, "to": to_n, "relationship": label}
-        except Exception:
-            pass
-
-
-def _build_single_game_graph(
-    game_key: str,
-    cm,
-    shared_node_id_map: dict | None = None,
-    shared_alias_map: dict | None = None,
-    shared_valid_ids: set | None = None,
-) -> dict:
-    """Build graph for one game. Optionally merge into shared maps for cross-game views.
-    If game_key is a franchise key, child game data is merged in automatically."""
-    nodes = []
-    edges = []
-    node_id_map = {} if shared_node_id_map is None else shared_node_id_map
-    alias_map = {} if shared_alias_map is None else shared_alias_map
-    valid_node_ids: set[str] = shared_valid_ids if shared_valid_ids is not None else set()
-
-    # Determine which game keys to process — if franchise, include child games
-    # Only merge child data in individual mode (no shared maps), not in all-games mode
-    game_keys_to_process = [game_key]
-    if shared_node_id_map is None and shared_valid_ids is None:
-        is_franchise = game_key in SERIES_MAPPING.values()
-        if is_franchise:
-            children = [
-                child_key
-                for child_key, series_val in SERIES_MAPPING.items()
-                if series_val == game_key
-            ]
-            game_keys_to_process = [game_key] + children
-
-    for current_game_key in game_keys_to_process:
-        for item_type in ("character", "location", "term", "game"):
-            for item in cm.get_context_items(current_game_key, item_type):
-                _register_graph_node(item, nodes, node_id_map, alias_map)
-                valid_node_ids.add(item.id)
-
-    context_rel_count = 0
-    added_pairs: set[tuple[str, str]] = set()
-    for current_game_key in game_keys_to_process:
-        for rel in _iter_context_relationships(current_game_key, cm):
-            source_id = _resolve_entity_id(rel["from"], node_id_map, alias_map)
-            target_id = _resolve_entity_id(rel["to"], node_id_map, alias_map)
-
-            # Auto-create placeholder nodes for entities that don't exist as nodes
-            if not source_id:
-                placeholder_id = f"ph_{_normalize_entity_name(rel['from'])}_{current_game_key[:8]}"
-                norm_from = _normalize_entity_name(rel["from"])
-                nodes.append({
-                    "data": {
-                        "id": placeholder_id,
-                        "label": rel["from"],
-                        "type": "character",
-                        "description": "",
-                        "category": "",
-                    }
-                })
-                node_id_map[norm_from] = placeholder_id
-                valid_node_ids.add(placeholder_id)
-                source_id = placeholder_id
-
-            if not target_id:
-                placeholder_id = f"ph_{_normalize_entity_name(rel['to'])}_{current_game_key[:8]}"
-                norm_to = _normalize_entity_name(rel["to"])
-                nodes.append({
-                    "data": {
-                        "id": placeholder_id,
-                        "label": rel["to"],
-                        "type": "character",
-                        "description": "",
-                        "category": "",
-                    }
-                })
-                node_id_map[norm_to] = placeholder_id
-                valid_node_ids.add(placeholder_id)
-                target_id = placeholder_id
-
-            if source_id == target_id:
-                continue
-            pair_key = tuple(sorted([source_id, target_id]))
-            if pair_key in added_pairs:
-                continue
-            added_pairs.add(pair_key)
-            context_rel_count += 1
-            edges.append({
-                "data": {
-                    "id": f"ctx_{source_id[:8]}_{target_id[:8]}_{context_rel_count}",
-                    "source": source_id,
-                    "target": target_id,
-                    "label": rel.get("relationship") or "related",
-                    "type": "context_relationship",
-                    "implicit": False,
-                    "is_direct": True,
-                    "is_context": True,
-                    "game_key": current_game_key,
-                }
-            })
-
-    try:
-        stored_implicit = load_implicit_relationships(game_key)
-        cooccurrence_data = analyze_transcript_cooccurrence(game_key)
-        fresh_edges = cooccurrence_data.get("edges", [])
-
-        if fresh_edges:
-            save_implicit_relationships(game_key, fresh_edges)
-            implicit_edges_data = fresh_edges
-        elif stored_implicit:
-            implicit_edges_data = stored_implicit
-        else:
-            implicit_edges_data = []
-
-        for ie in implicit_edges_data:
-            source_val = ie.get('source', '')
-            target_val = ie.get('target', '')
-            source_id = source_val if source_val in valid_node_ids else _resolve_entity_id(source_val, node_id_map, alias_map)
-            target_id = target_val if target_val in valid_node_ids else _resolve_entity_id(target_val, node_id_map, alias_map)
-            if not source_id or not target_id or source_id == target_id:
-                continue
-            edges.append({
-                "data": {
-                    "id": f"implicit_{source_id[:8]}_{target_id[:8]}",
-                    "source": source_id,
-                    "target": target_id,
-                    "label": ie.get("label", ""),
-                    "type": ie.get("type", "co_occurs"),
-                    "implicit": True,
-                    "weight": ie.get("weight", 1),
-                    "game_key": game_key,
-                }
-            })
-    except Exception as e:
-        print(f"Error generating implicit edges: {e}")
-
-    sources = get_context_sources_summary(game_key)
-    context_edges = sum(1 for e in edges if e.get("data", {}).get("is_context"))
-    implicit_edges = sum(1 for e in edges if e.get("data", {}).get("implicit"))
-
-    return {
-        "nodes": nodes,
-        "edges": edges,
-        "stats": {
-            "nodes": len(nodes),
-            "context_edges": context_edges,
-            "implicit_edges": implicit_edges,
-            "sources": sources,
-            "game_key": game_key,
-        },
-    }
-
-
 @app.get("/api/context/all/graph")
 async def get_all_games_graph():
-    """Get graph data for all games combined. Each game is isolated — no cross-game edges."""
-    cm = get_context_manager()
-    cm.load_all_contexts()
-
-    all_games = cm.get_games()
-    if not all_games:
-        return {"nodes": [], "edges": [], "stats": {"total_nodes": 0, "per_game": {}}}
-
-    all_nodes: list = []
-    all_edges: list = []
-    per_game_stats: dict = {}
-    shared_node_id_map: dict = {}
-    shared_alias_map: dict = {}
-    shared_valid_ids: set = set()
-
-    for game_key in all_games:
-        game_graph = _build_single_game_graph(
-            game_key, cm,
-            shared_node_id_map=shared_node_id_map,
-            shared_alias_map=shared_alias_map,
-            shared_valid_ids=shared_valid_ids,
-        )
-
-        game_nodes = game_graph.get("nodes", [])
-        game_stats = game_graph.get("stats", {})
-
-        if not game_nodes:
-            continue
-
-        display_name = game_key.replace("_", " ").title()
-        hub_id = f"hub_{game_key}"
-        all_nodes.append({
-            "data": {
-                "id": hub_id,
-                "label": display_name,
-                "type": "game",
-                "description": f"{len(game_nodes)} entities in {display_name}",
-            }
-        })
-
-        for node in game_nodes:
-            node["data"]["game_key"] = game_key
-            node["data"]["_hub_id"] = hub_id
-            all_nodes.append(node)
-            all_edges.append({
-                "data": {
-                    "id": f"hub_link_{node['data']['id']}",
-                    "source": hub_id,
-                    "target": node["data"]["id"],
-                    "label": "belongs to",
-                    "type": "hub",
-                    "implicit": False,
-                    "is_context": False,
-                    "game_key": game_key,
-                }
-            })
-
-        for edge in game_graph.get("edges", []):
-            edge["data"]["game_key"] = game_key
-            all_edges.append(edge)
-
-        per_game_stats[game_key] = {
-            "nodes": game_stats.get("nodes", 0),
-            "context_edges": game_stats.get("context_edges", 0),
-            "implicit_edges": game_stats.get("implicit_edges", 0),
-        }
-
-    return {
-        "nodes": all_nodes,
-        "edges": all_edges,
-        "stats": {
-            "total_nodes": len(all_nodes),
-            "total_edges": len(all_edges),
-            "per_game": per_game_stats,
-        },
-    }
-
-
-# Graph data cache (TTL: 60 seconds, invalidated on context file changes)
-_graph_cache: dict = {}
-_graph_cache_time: float = 0
-_GRAPH_CACHE_TTL = 60
-
-def _get_graph_cache_key() -> str:
-    """Generate cache key based on context file mtimes."""
-    context_dir = os.path.join(WORKSPACE, "Context")
-    if not os.path.exists(context_dir):
-        return "no_context"
-    mtimes = []
-    for root, dirs, files in os.walk(context_dir):
-        for f in files:
-            if f.endswith(('.json', '.md')):
-                mtimes.append(str(os.path.getmtime(os.path.join(root, f))))
-    return "|".join(sorted(mtimes))
-
-def _get_cached_graph(cache_key: str) -> dict | None:
-    """Get cached graph data if still valid."""
-    global _graph_cache_time
-    if _graph_cache and (time.time() - _graph_cache_time < _GRAPH_CACHE_TTL):
-        return _graph_cache.get(cache_key)
-    return None
-
-def _set_cached_graph(cache_key: str, data: dict) -> None:
-    """Cache graph data with current timestamp."""
-    global _graph_cache, _graph_cache_time
-    _graph_cache = {cache_key: data}
-    _graph_cache_time = time.time()
+    """Get graph data for all games combined."""
+    from workflows.graph_builder import build_all_games_graph
+    return build_all_games_graph()
 
 
 @app.get("/api/context/{game}/graph")
 async def get_graph_data(game: str):
     """Get graph data in Cytoscape.js format for a single game."""
+    from workflows.graph_builder import build_single_game_graph, get_graph_cache_key, get_cached_graph, set_cached_graph
     game_title = sanitize_input(game, max_length=100)
-    game_key = _resolve_graph_game_key(game_title.lower().replace(" ", "_").strip())
+    game_key = game_title.lower().replace(" ", "_").strip()
     
-    cache_key = _get_graph_cache_key()
-    cached = _get_cached_graph(f"single:{game_key}:{cache_key}")
+    cache_key = get_graph_cache_key()
+    cached = get_cached_graph(f"single:{game_key}:{cache_key}")
     if cached:
         return cached
 
     cm = get_context_manager()
     cm.load_all_contexts()
 
-    graph = _build_single_game_graph(game_key, cm)
+    graph = build_single_game_graph(game_key, cm)
     graph["stats"].pop("game_key", None)
-    _set_cached_graph(f"single:{game_key}:{cache_key}", graph)
+    set_cached_graph(f"single:{game_key}:{cache_key}", graph)
     return graph
 
 
@@ -1451,7 +921,7 @@ async def get_segment_references(game: str):
     # Sanitize game name
     game = sanitize_input(game, max_length=100)
     import os
-    SEGMENT_REF_FILE = os.path.expanduser("~/ShortsForge/Context/segment_references.json")
+    SEGMENT_REF_FILE = os.path.expanduser("~/Cogitator/Context/segment_references.json")
     game_key = game.lower().replace(" ", "_")
     
     try:
@@ -1464,6 +934,60 @@ async def get_segment_references(game: str):
         return {"error": str(e)}, 500
 
 
+# ---------------------------------------------------------------------------
+# Prompt Editor Endpoints
+# ---------------------------------------------------------------------------
+
+PROMPT_FILE = os.path.join(WORKSPACE, "prompts", "base.j2")
+PROMPT_BACKUP_FILE = os.path.join(WORKSPACE, "prompts", "base.j2.bak")
+
+
+@app.get("/api/prompts/script")
+async def get_script_prompt():
+    """Get the current script generation prompt template."""
+    try:
+        if os.path.exists(PROMPT_FILE):
+            with open(PROMPT_FILE, "r") as f:
+                content = f.read()
+            return {"content": content}
+        return {"content": "", "error": "Prompt file not found"}
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
+@app.put("/api/prompts/script")
+async def save_script_prompt(request: Request, _: bool = Depends(verify_api_key)):
+    """Save an edited script generation prompt template."""
+    try:
+        body = await request.json()
+        content = body.get("content", "")
+
+        if not content.strip():
+            return {"error": "Content cannot be empty"}, 400
+
+        # Validate Jinja2 syntax
+        try:
+            from jinja2 import Environment
+            env = Environment()
+            env.parse(content)
+        except Exception as e:
+            return {"error": f"Jinja2 syntax error: {str(e)}"}, 400
+
+        # Backup existing file
+        if os.path.exists(PROMPT_FILE):
+            import shutil
+            shutil.copy2(PROMPT_FILE, PROMPT_BACKUP_FILE)
+
+        # Write new content
+        os.makedirs(os.path.dirname(PROMPT_FILE), exist_ok=True)
+        with open(PROMPT_FILE, "w") as f:
+            f.write(content)
+
+        return {"status": "saved"}
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
 @app.put("/api/context/{game}/{item_type}/{item_id}")
 @limiter.limit("10/minute")
 async def update_context_item(request: Request, game: str, item_type: str, item_id: str, data: dict, _: bool = Depends(verify_api_key)):
@@ -1472,8 +996,13 @@ async def update_context_item(request: Request, game: str, item_type: str, item_
     game_title = sanitize_input(game, max_length=100)
     game_key = game_title.lower().replace(" ", "_").strip()
     item_id = sanitize_input(item_id, max_length=100)
-    from workflows.context_manager_v2 import update_item
+    from workflows.context_manager_v2 import update_item, get_items
     result = update_item(game_key, item_id, **data)
+    if not result:
+        for item in get_items(game_key, item_type):
+            if item.name == item_id:
+                result = update_item(game_key, item.id, **data)
+                break
     if result:
         return {"status": "updated", "item": result.to_dict()}
     return {"error": "Item not found"}, 404
@@ -1487,8 +1016,13 @@ async def delete_context_item(request: Request, game: str, item_type: str, item_
     game_title = sanitize_input(game, max_length=100)
     game_key = game_title.lower().replace(" ", "_").strip()
     item_id = sanitize_input(item_id, max_length=100)
-    from workflows.context_manager_v2 import delete_item
+    from workflows.context_manager_v2 import delete_item, get_items
     result = delete_item(game_key, item_id)
+    if not result:
+        for item in get_items(game_key, item_type):
+            if item.name == item_id:
+                result = delete_item(game_key, item.id)
+                break
     if result:
         return {"status": "deleted"}
     return {"error": "Item not found"}, 404
@@ -1544,7 +1078,7 @@ async def update_config(request: Request, updates: ConfigUpdate, _: bool = Depen
         with open(env_file, "r") as f:
             lines = f.readlines()
     
-    update_dict = updates.dict(exclude_none=True)
+    update_dict = updates.model_dump(exclude_none=True)
     for k, v in update_dict.items():
         found = False
         for i, line in enumerate(lines):
@@ -1590,7 +1124,7 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
     except Exception as e:
         return {"status": "error", "message": "Invalid hostname"}
     
-    cmd = [sys.executable, "workflows/shortsforge.py", "download", "-url", url]
+    cmd = [sys.executable, "workflows/cogitator.py", "download", "-url", url]
     pipeline_status["message"] = f"Downloading from {url}..."
     pipeline_status["running"] = True
     pipeline_status["current_phase"] = "downloading"
@@ -1598,7 +1132,8 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
     def run_download():
         global pipeline_process
         try:
-            pipeline_process = subprocess.Popen(cmd, cwd=WORKSPACE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1)
+            with _pipeline_lock:
+                pipeline_process = subprocess.Popen(cmd, cwd=WORKSPACE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1)
             for line in pipeline_process.stdout:
                 pass
             pipeline_process.wait()
@@ -1606,7 +1141,8 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
             pass
         finally:
             pipeline_status["running"] = False
-            pipeline_process = None
+            with _pipeline_lock:
+                pipeline_process = None
             
     thread = threading.Thread(target=run_download)
     thread.daemon = True
@@ -1638,18 +1174,18 @@ async def cleanup_files(request: Request, _: bool = Depends(verify_api_key)):
     import glob
     for d in ["media", "shorts", "tts", "transcripts"]:
         path = os.path.join(WORKSPACE, d)
-        for f in glob.glob(os.path.join(path, "*")):
+        for f in glob.glob(os.path.join(path, "**/*"), recursive=True):
             if os.path.isfile(f):
                 try: os.remove(f)
-                except: pass
+                except OSError: pass
     return {"status": "cleaned"}
 
 @app.post("/api/system/restart-listener")
 @limiter.limit("2/minute")
 async def restart_listener(request: Request, _: bool = Depends(verify_api_key)):
     """Restart Telegram listener - requires API key"""
-    subprocess.run([sys.executable, "workflows/shortsforge.py", "stop"], cwd=WORKSPACE, capture_output=True)
-    subprocess.Popen([sys.executable, "workflows/shortsforge.py", "listen"], cwd=WORKSPACE, stdin=subprocess.DEVNULL)
+    subprocess.run([sys.executable, "workflows/cogitator.py", "stop"], cwd=WORKSPACE, capture_output=True)
+    subprocess.Popen([sys.executable, "workflows/cogitator.py", "listen"], cwd=WORKSPACE, stdin=subprocess.DEVNULL)
     return {"status": "restarted"}
 
 class ImportRequest(BaseModel):
@@ -1689,7 +1225,17 @@ async def import_context(request: Request, req: ImportRequest, _: bool = Depends
         if key == "characters": context["characters"] = [{"name": i, "status": "imported"} for i in items]
         elif key == "locations": context["locations"] = [{"name": i, "status": "imported"} for i in items]
         elif key == "key_terms": context["key_terms"] = [{"term": i} for i in items]
-        elif key == "relationships": context["relationships"] = [{"from": i} for i in items]
+        elif key == "relationships":
+            for i in items:
+                # Try to parse "From → To (label)" or "From - To" format
+                parts = re.split(r' *[→\-] *', i, maxsplit=1)
+                if len(parts) == 2:
+                    relation_parts = parts[1].rsplit('(', 1)
+                    to_name = relation_parts[0].strip()
+                    rel_label = relation_parts[1].rstrip(')').strip() if len(relation_parts) > 1 else ""
+                    context["relationships"].append({"from": parts[0].strip(), "to": to_name, "relationship": rel_label})
+                else:
+                    context["relationships"].append({"from": i.strip(), "to": "unknown", "relationship": "related"})
         
     if context["characters"] or context["locations"]:
         try:
@@ -1833,7 +1379,7 @@ async def delete_game_context(request: Request, game: str, _: bool = Depends(ver
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket for real-time updates"""
-    await manager.connect(websocket)
+    await ws_manager.connect(websocket)
     try:
         while True:
             data = await websocket.receive_text()
@@ -1844,7 +1390,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
                 
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        ws_manager.disconnect(websocket)
 
 
 # ============================================================================
@@ -1856,12 +1402,14 @@ FRONTEND_DIST = os.path.join(WORKSPACE, "frontend", "dist")
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
     """Serve the frontend build in production, or proxy to Vite in development."""
+    from fastapi.responses import FileResponse
     # Try to serve from production build first
     if os.path.exists(FRONTEND_DIST):
-        file_path = os.path.join(FRONTEND_DIST, full_path) if full_path else os.path.join(FRONTEND_DIST, "index.html")
-        if os.path.isfile(file_path):
-            from fastapi.responses import FileResponse
-            return FileResponse(file_path)
+        resolved = os.path.normpath(os.path.join(FRONTEND_DIST, full_path)) if full_path else os.path.join(FRONTEND_DIST, "index.html")
+        if not resolved.startswith(os.path.normpath(FRONTEND_DIST)):
+            return HTMLResponse(status_code=404)
+        if os.path.isfile(resolved):
+            return FileResponse(resolved)
         # SPA fallback: serve index.html for any route
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
     
@@ -1872,10 +1420,10 @@ async def serve_frontend(full_path: str):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ShortsForge - Loading...</title>
+        <title>Cogitator - Loading...</title>
     </head>
     <body>
-        <div id="root">Loading ShortsForge Web UI...</div>
+        <div id="root">Loading Cogitator Web UI...</div>
         <script type="module" src="/src/main.tsx"></script>
     </body>
     </html>
@@ -1884,5 +1432,5 @@ async def serve_frontend(full_path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting ShortsForge Backend on http://localhost:8000")
+    print("Starting Cogitator Backend on http://localhost:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Performance Database
+Cogitator Performance Database
 Tracks scripts, clips, and YouTube performance metrics for learning.
 """
 import json
@@ -12,13 +12,10 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 
-try:
-    from constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score
-except ImportError:
-    from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score
+from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score
 
-WORKSPACE = os.path.expanduser("~/ShortsForge")
-DB_DIR = os.path.join(WORKSPACE, ".shortsforge")
+WORKSPACE = os.path.expanduser("~/Cogitator")
+DB_DIR = os.path.join(WORKSPACE, ".cogitator")
 DB_PATH = os.path.join(DB_DIR, "performance.db")
 
 os.makedirs(DB_DIR, exist_ok=True)
@@ -151,7 +148,15 @@ def init_db():
     if 'title' not in columns:
         cursor.execute("ALTER TABLE scripts ADD COLUMN title TEXT")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_scripts_title ON scripts(title)")
-    
+
+    # Migrate scripts table: add metadata columns for description, hashtags, tags
+    if 'description' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN description TEXT")
+    if 'hashtags' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN hashtags TEXT")
+    if 'tags' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN tags TEXT")
+
     cursor.execute("PRAGMA table_info(learnings)")
     columns = [row[1] for row in cursor.fetchall()]
     if 'variance' not in columns:
@@ -178,7 +183,10 @@ def store_script(
     features: Dict[str, Any],
     variants: List[Dict] = None,
     selected_variant: int = 0,
-    title: Optional[str] = None
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    hashtags: Optional[str] = None,
+    tags: Optional[str] = None,
 ) -> str:
     """Store a generated script."""
     conn = get_db()
@@ -189,10 +197,10 @@ def store_script(
     
     # Auto-extract title from script text if not provided
     script_title = title or _extract_title_from_script(script_text)
-    
+
     cursor.execute("""
-        INSERT INTO scripts (id, video_name, title, content_type, script_text, features, variants, selected_variant, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO scripts (id, video_name, title, content_type, script_text, features, variants, selected_variant, created_at, description, hashtags, tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         script_id,
         video_name,
@@ -202,7 +210,10 @@ def store_script(
         json.dumps(features),
         json.dumps(variants or []),
         selected_variant,
-        created_at
+        created_at,
+        description,
+        hashtags,
+        tags,
     ))
     
     conn.commit()
@@ -217,7 +228,7 @@ def store_clip(
     end_time: float,
     duration: float,
     features: Dict[str, Any],
-    virality_score: float = 0.0
+    virality_score: float = 0.0,
 ) -> str:
     """Store a generated clip."""
     conn = get_db()
@@ -238,7 +249,7 @@ def store_clip(
         duration,
         json.dumps(features),
         virality_score,
-        created_at
+        created_at,
     ))
     
     conn.commit()
@@ -624,185 +635,136 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
     matched = 0
     new_metrics = 0
     errors = []
-    
+
     scripts = get_all_scripts()
-    
-    existing_learning_keys = set()
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT feature_name, feature_value FROM learnings")
-    for row in cursor.fetchall():
-        existing_learning_keys.add((row['feature_name'], row['feature_value']))
-    
-    for video in recent_videos:
-        video_id = video.get('video_id', '')
-        yt_title = video.get('title', '')
-        duration_seconds = video.get('duration_seconds', 0)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT feature_name, feature_value FROM learnings")
+        existing_learning_keys = {(r['feature_name'], r['feature_value']) for r in cursor.fetchall()}
 
-        if duration_seconds == 0 or duration_seconds > 180:
-            import logging
-            log = logging.getLogger(__name__)
-            log.info(f"Skipping video {video_id} ({yt_title}): duration={duration_seconds}s (not a short)")
-            continue
+        for video in recent_videos:
+            try:
+                video_id = video.get('video_id', '')
+                yt_title = video.get('title', '')
+                duration_seconds = video.get('duration_seconds', 0)
 
-        existing = get_video_by_youtube_id(video_id)
-        if existing:
-            store_metrics(
-                video_id=existing['id'],
-                views=video.get('views', 0),
-                likes=video.get('likes', 0),
-                comments=video.get('comments', 0),
-                favorites=0,
-                raw_data=video
-            )
-            new_metrics += 1
-            continue
-
-        best_match = None
-        match_reason = None
-
-        yt_normalized = ' '.join(yt_title.lower().split())
-
-        for script in scripts:
-            script_title = script.get('title') or ''
-
-            if not script_title:
-                continue
-
-            script_normalized = ' '.join(script_title.lower().split())
-
-            # Pass 1: Exact match
-            if yt_normalized == script_normalized:
-                best_match = script
-                match_reason = 'exact'
-                break
-
-        if not best_match:
-            for script in scripts:
-                script_title = script.get('title') or ''
-                if not script_title:
+                if duration_seconds == 0 or duration_seconds > 180:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        f"Skipping video {video_id} ({yt_title}): duration={duration_seconds}s (not a short)")
                     continue
 
-                # Pass 2: Substring match (stored title inside YouTube title)
-                script_lower = script_title.lower()
-                yt_lower = yt_title.lower()
+                existing = get_video_by_youtube_id(video_id)
+                if existing:
+                    store_metrics(video_id=existing['id'], views=video.get('views', 0),
+                                  likes=video.get('likes', 0), comments=video.get('comments', 0),
+                                  favorites=0, raw_data=video)
+                    new_metrics += 1
+                    continue
 
-                # Check if the stored title appears as a contiguous substring
-                if script_lower in yt_lower:
-                    best_match = script
-                    match_reason = 'substring'
-                    break
-
-        if not best_match:
-            # Pass 3: Word-overlap fallback (legacy behavior)
-            yt_words = set(yt_normalized.split())
-            best_score = 0.0
-
-            for script in scripts:
-                video_name = script.get('video_name', '')
-                script_title = script.get('title') or ''
-
-                candidates = [video_name.lower()]
-                if script_title:
-                    candidates.append(' '.join(script_title.lower().split()))
-
-                for candidate in candidates:
-                    cand_words = set(candidate.split())
-                    common = yt_words & cand_words
-                    if common:
-                        score = len(common) / max(len(yt_words), len(cand_words))
-                        if score > best_score:
-                            best_score = score
-                            best_match = script
-                            match_reason = 'word_overlap'
-
-            if best_match and best_score < 0.3:
                 best_match = None
                 match_reason = None
+                yt_normalized = ' '.join(yt_title.lower().split())
 
-        if best_match:
-            try:
-                video_url = f"https://www.youtube.com/watch?v={video_id}"
-                video_db_id = link_video(
-                    script_id=best_match['id'],
-                    clip_id=None,
-                    video_url=video_url,
-                    youtube_id=video_id,
-                    title=yt_title
-                )
-                
-                store_metrics(
-                    video_id=video_db_id,
-                    views=video.get('views', 0),
-                    likes=video.get('likes', 0),
-                    comments=video.get('comments', 0),
-                    favorites=0,
-                    raw_data=video
-                )
-                
-                matched += 1
-                new_metrics += 1
-                
-                features_str = best_match.get('features', '{}')
-                if isinstance(features_str, str):
-                    try:
-                        features = json.loads(features_str)
-                    except:
-                        features = {}
-                else:
-                    features = features_str or {}
-                
-                engagement_ratio = video.get('engagement_ratio', 0)
-                performance_score = _calculate_performance_score(video.get('views', 0), engagement_ratio)
-                
-                if best_match.get('content_type'):
-                    store_learning(
-                        feature_name='content_type',
-                        feature_value=best_match['content_type'],
-                        metric_type='combined',
-                        impact_score=performance_score / 100,
-                        sample_count=1,
-                        confidence=0.3
-                    )
-                
-                if features.get('word_count'):
-                    store_learning(
-                        feature_name='word_count',
-                        feature_value=str(features['word_count']),
-                        metric_type='combined',
-                        impact_score=performance_score / 100,
-                        sample_count=1,
-                        confidence=0.3
-                    )
+                for script in scripts:
+                    script_title = script.get('title') or ''
+                    if not script_title:
+                        continue
+                    script_normalized = ' '.join(script_title.lower().split())
+                    if yt_normalized == script_normalized:
+                        best_match = script
+                        match_reason = 'exact'
+                        break
 
-                clip_cursor = conn.cursor()
-                clip_cursor.execute("""
-                    SELECT c.features FROM clips c
-                    JOIN videos v ON v.clip_id = c.id
-                    WHERE v.script_id = ?
-                    LIMIT 1
-                """, (best_match['id'],))
-                clip_row = clip_cursor.fetchone()
-                clip_cursor.close()
-                if clip_row:
-                    clip_features = json.loads(clip_row['features'] or '{}')
-                    voice = clip_features.get('voice', '')
-                    style = clip_features.get('style', '')
-                    if voice:
-                        update_tts_learning(
-                            voice=voice,
-                            style=style or '',
-                            content_type=best_match.get('content_type'),
-                            views=video.get('views', 0),
-                            engagement_ratio=engagement_ratio,
-                            performance_score=performance_score
-                        )
-                
+                if not best_match:
+                    for script in scripts:
+                        script_title = script.get('title') or ''
+                        if not script_title:
+                            continue
+                        if script_title.lower() in yt_title.lower():
+                            best_match = script
+                            match_reason = 'substring'
+                            break
+
+                if not best_match:
+                    yt_words = set(yt_normalized.split())
+                    best_score = 0.0
+                    for script in scripts:
+                        video_name = script.get('video_name', '')
+                        script_title = script.get('title') or ''
+                        candidates = [video_name.lower()]
+                        if script_title:
+                            candidates.append(' '.join(script_title.lower().split()))
+                        for candidate in candidates:
+                            cand_words = set(candidate.split())
+                            common = yt_words & cand_words
+                            if common:
+                                score = len(common) / max(len(yt_words), len(cand_words))
+                                if score > best_score:
+                                    best_score = score
+                                    best_match = script
+                                    match_reason = 'word_overlap'
+                    if best_match and best_score < 0.3:
+                        best_match = None
+
+                if best_match:
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    video_db_id = link_video(script_id=best_match['id'], clip_id=None,
+                                              video_url=video_url, youtube_id=video_id, title=yt_title)
+                    store_metrics(video_id=video_db_id, views=video.get('views', 0),
+                                  likes=video.get('likes', 0), comments=video.get('comments', 0),
+                                  favorites=0, raw_data=video)
+                    matched += 1
+                    new_metrics += 1
+
+                    features_str = best_match.get('features', '{}')
+                    if isinstance(features_str, str):
+                        try:
+                            features = json.loads(features_str)
+                        except json.JSONDecodeError:
+                            features = {}
+                    else:
+                        features = features_str or {}
+
+                    engagement_ratio = video.get('engagement_ratio', 0)
+                    performance_score = calculate_performance_score(video.get('views', 0), engagement_ratio)
+
+                    if best_match.get('content_type'):
+                        store_learning(feature_name='content_type', feature_value=best_match['content_type'],
+                                       metric_type='combined', impact_score=performance_score / 100,
+                                       sample_count=1, confidence=0.3)
+
+                    if features.get('word_count'):
+                        store_learning(feature_name='word_count', feature_value=str(features['word_count']),
+                                       metric_type='combined', impact_score=performance_score / 100,
+                                       sample_count=1, confidence=0.3)
+
+                    clip_cursor = conn.cursor()
+                    clip_cursor.execute("""
+                        SELECT c.features FROM clips c
+                        JOIN videos v ON v.clip_id = c.id
+                        WHERE v.script_id = ? LIMIT 1
+                    """, (best_match['id'],))
+                    clip_row = clip_cursor.fetchone()
+                    clip_cursor.close()
+                    if clip_row:
+                        clip_features = json.loads(clip_row['features'] or '{}')
+                        voice = clip_features.get('voice', '')
+                        style = clip_features.get('style', '')
+                        if voice:
+                            update_tts_learning(voice=voice, style=style or '',
+                                                content_type=best_match.get('content_type'),
+                                                views=video.get('views', 0),
+                                                engagement_ratio=engagement_ratio,
+                                                performance_score=performance_score)
             except Exception as e:
                 errors.append(str(e))
-    
-    conn.close()
-    
+    except Exception as e:
+        errors.append(str(e))
+    finally:
+        conn.close()
+
     return {
         'matched_count': matched,
         'new_metrics': new_metrics,
@@ -839,7 +801,7 @@ def backfill_script_titles() -> Dict[str, Any]:
     """
     updated = 0
     errors = []
-    scripts_dir = os.path.expanduser("~/ShortsForge/scripts")
+    scripts_dir = os.path.expanduser("~/Cogitator/scripts")
     
     if not os.path.exists(scripts_dir):
         return {'updated_count': 0, 'errors': ['scripts directory does not exist']}

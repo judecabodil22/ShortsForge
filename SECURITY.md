@@ -9,7 +9,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability within ShortsForge, please send an email to the maintainers. All security vulnerabilities will be promptly addressed.
+If you discover a security vulnerability within Cogitator, please send an email to the maintainers. All security vulnerabilities will be promptly addressed.
 
 Please include the following information:
 - Type of vulnerability
@@ -24,7 +24,7 @@ Please include the following information:
 
 ### API Key Management
 
-ShortsForge uses multiple API keys for its functionality:
+Cogitator uses multiple API keys for its functionality:
 
 1. **Gemini API Key** - For AI script generation and TTS
 2. **YouTube API Key** - For fetching video metrics
@@ -33,7 +33,7 @@ ShortsForge uses multiple API keys for its functionality:
 
 #### Secure Storage
 
-ShortsForge supports storing API keys securely in your system's keychain:
+Cogitator supports storing API keys securely in your system's keychain:
 
 - **Linux**: Uses `dbus` keyring (e.g., GNOME Keyring, KWallet)
 - **macOS**: Uses Keychain Access
@@ -42,7 +42,7 @@ ShortsForge supports storing API keys securely in your system's keychain:
 For headless environments (e.g., systemd services), you can use a `.env` file:
 
 ```bash
-# Create .env file in ShortsForge root
+# Create .env file in Cogitator root
 cp .env.example .env
 # Edit .env with your actual API keys
 ```
@@ -62,7 +62,7 @@ The web backend (`backend/main.py`) includes:
 
 The API key is auto-generated on first run and stored in:
 ```
-~/.shortsforge/api_key
+~/.cogitator/api_key
 ```
 
 When making requests to protected endpoints, include the header:
@@ -82,7 +82,7 @@ The following endpoints require API key authentication:
 
 ### Production Deployment
 
-When deploying ShortsForge in production:
+When deploying Cogitator in production:
 
 1. **Use HTTPS**: Never run the web interface over HTTP
 2. **Restrict CORS**: Update CORS settings to your actual domain
@@ -122,7 +122,7 @@ Security updates will be released as patch versions and documented in CHANGELOG.
 
 ## Third-Party Dependencies
 
-ShortsForge uses the following key dependencies:
+Cogitator uses the following key dependencies:
 - FastAPI (web framework)
 - Google Gemini API (AI)
 - YouTube Data API (metrics)

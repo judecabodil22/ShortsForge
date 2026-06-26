@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 """
-ShortsForge Pipeline Context
+Cogitator Pipeline Context
 
 Shared state object passed between pipeline phases.
-Replaces the 40+ global variables that were scattered across shortsforge.py.
+Replaces the 40+ global variables that were scattered across cogitator.py.
 """
 import os
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 
-try:
-    from constants import TTS_VOICES, TTS_STYLE_OPTIONS
-except ImportError:
-    from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS
-try:
-    from core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin
-except ImportError:
-    from workflows.core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin
+from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS
+from workflows.core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin
 
 
 @dataclass

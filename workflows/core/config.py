@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Configuration Manager
+Cogitator Configuration Manager
 
 Handles .env file reading/writing, environment variable access,
 and keychain integration for API keys.
@@ -8,7 +8,7 @@ and keychain integration for API keys.
 import os
 from typing import Optional
 
-WORKSPACE = os.path.expanduser("~/ShortsForge")
+WORKSPACE = os.path.expanduser("~/Cogitator")
 ENV_FILE = os.path.join(WORKSPACE, ".env")
 
 # ─── .env File Management ────────────────────────────────────────────────────

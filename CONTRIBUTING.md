@@ -1,11 +1,11 @@
-# Contributing to ShortsForge
+# Contributing to Cogitator
 
 Thank you for your interest in contributing!
 
 ## Quick Start
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/ShortsForge.git`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/Cogitator.git`
 3. Create a feature branch: `git checkout -b feature/your-feature`
 4. Make your changes
 5. Run linting: `ruff check workflows/`
@@ -37,13 +37,13 @@ pip install ruff
 source venv/bin/activate
 
 # Run the pipeline
-python workflows/shortsforge.py run
+python workflows/cogitator.py run
 
 # Start Telegram listener
-python workflows/shortsforge.py listen
+python workflows/cogitator.py listen
 
 # Run onboarding
-python workflows/shortsforge.py onboard
+python workflows/cogitator.py onboard
 ```
 
 ## Code Style
@@ -56,9 +56,9 @@ python workflows/shortsforge.py onboard
 ## Project Structure
 
 ```
-ShortsForge/
+Cogitator/
 ├── workflows/
-│   ├── shortsforge.py      # Main entry point
+│   ├── cogitator.py      # Main entry point
 │   └── update_manager.py  # Auto-update system
 ├── content_studio/         # Content Studio feature
 ├── docs/                  # Documentation

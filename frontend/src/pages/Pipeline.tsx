@@ -136,12 +136,13 @@ export default function Pipeline() {
     enabled: status?.pipeline?.running || expandedLogs
   })
 
-  // Sync polled logs into live logs
+  // Sync polled logs into live logs (dedup by last 10 entries)
   useEffect(() => {
     if (logsData?.logs?.length) {
       setLiveLogs(prev => {
-        const newLogs = [...prev, ...logsData.logs.slice(-50)]
-        return newLogs.slice(-500)
+        const seen = new Set(prev.slice(-10))
+        const fresh = logsData.logs.filter((l: string) => !seen.has(l)).slice(-50)
+        return [...prev, ...fresh].slice(-500)
       })
     }
   }, [logsData])
@@ -162,7 +163,7 @@ export default function Pipeline() {
     mutationFn: () => {
       const source = phases.find(p => p.id === 'p1')?.videoSource || 'youtube'
       setLiveLogs([])
-      return runPipeline(source)
+      return runPipeline(source, downloadUrl)
     },
     onError: (error: Error) => alert(`Failed to run pipeline: ${error.message}`)
   })
@@ -189,8 +190,8 @@ export default function Pipeline() {
   const openSettings = (phase: Phase) => {
     if (phase.id === 'p1') {
       setLocalVideos([
-        { name: 'gameplay_recording.mp4', path: '/home/alph4r1us/ShortsForge/media/gameplay_recording.mp4' },
-        { name: 'cutscene_01.mp4', path: '/home/alph4r1us/ShortsForge/media/cutscene_01.mp4' },
+        { name: 'gameplay_recording.mp4', path: '/home/alph4r1us/Cogitator/media/gameplay_recording.mp4' },
+        { name: 'cutscene_01.mp4', path: '/home/alph4r1us/Cogitator/media/cutscene_01.mp4' },
       ])
     }
     setSelectedPhase(phase)
@@ -246,7 +247,16 @@ export default function Pipeline() {
           </p>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
+          <div className="flex-1 max-w-md">
+            <input
+              type="text"
+              value={downloadUrl}
+              onChange={(e) => setDownloadUrl(e.target.value)}
+              placeholder="YouTube video URL (e.g. https://youtube.com/watch?v=...)"
+              className="w-full px-3 py-2 bg-40k-dark border border-40k-border rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-40k-gold/50 font-mono"
+            />
+          </div>
           <motion.button 
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
@@ -624,7 +634,7 @@ export default function Pipeline() {
                       ))}
                     </div>
                     <p className="text-xs text-gray-500 mt-2">
-                      Place videos in: ~/ShortsForge/media/
+                      Place videos in: ~/Cogitator/media/
                     </p>
                   </div>
                 )}

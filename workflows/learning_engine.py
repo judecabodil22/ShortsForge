@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """
-ShortsForge Learning Engine
+Cogitator Learning Engine
 Analyzes performance patterns and optimizes generation parameters.
 """
 import json
 import os
 import re
+import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
 
-try:
-    from constants import calculate_readability, calculate_hook_strength
-except ImportError:
-    from workflows.constants import calculate_readability, calculate_hook_strength
+from workflows.constants import calculate_readability, calculate_hook_strength
 
-WORKSPACE = os.path.expanduser("~/ShortsForge")
+WORKSPACE = os.path.expanduser("~/Cogitator")
 
 
 def analyze_performance_patterns(
@@ -380,8 +378,13 @@ def calculate_curiosity_score(text: str) -> float:
     if '...' in text:
         score += 0.2
     
-    if text.endswith(('and', 'but', 'so', 'however')):
-        score += 0.1
+    # Check if any line ends with a trailing word (cliffhanger pattern)
+    trailing_words = ('and', 'but', 'so', 'however', 'or', 'yet', 'because')
+    for line in text.split('\n'):
+        stripped = line.strip().rstrip('.!?')
+        if stripped and stripped.lower().split()[-1] in trailing_words:
+            score += 0.1
+            break
     
     return min(1.0, score)
 
@@ -559,6 +562,47 @@ def _optimize_for_engagement(script: str) -> str:
     return '\n'.join(lines)
 
 
+_retention_history: list = []
+
+
+def load_retention_history(max_samples: int = 100):
+    """Load past script performance data from performance DB."""
+    global _retention_history
+    try:
+        from workflows.performance_database import get_successful_scripts
+        scripts = get_successful_scripts(limit=max_samples)
+        _retention_history = [
+            {
+                "word_count": s.get("word_count", 0),
+                "has_hook": bool(s.get("hook_score", 0) > 0.5),
+                "has_cta": "follow" in (s.get("script_text", "") or "").lower(),
+                "performance": s.get("performance_score", 50),
+            }
+            for s in scripts if s.get("performance_score")
+        ]
+    except Exception:
+        pass
+
+
+def retention_adjustment(features: Dict) -> float:
+    """Calculate score adjustment based on historical retention patterns (0-15 bonus)."""
+    if not _retention_history:
+        return 0.0
+    word_count = features.get("word_count", 225)
+    has_hook = features.get("has_hook", features.get("has_dialogue", False))
+    duration = features.get("duration", 45)
+
+    similar = [
+        r for r in _retention_history
+        if abs(r["word_count"] - word_count) < 50
+        and r["has_hook"] == has_hook
+    ]
+    if not similar:
+        return 0.0
+    avg_perf = sum(r["performance"] for r in similar) / len(similar)
+    return min(15.0, (avg_perf - 50) * 0.3)
+
+
 def calculate_virality_score(
     clip_features: Dict,
     learned_params: Dict = None
@@ -594,6 +638,8 @@ def calculate_virality_score(
         optimal_range = learned_params.get('optimal_duration_range', (30, 60))
         if optimal_range[0] <= duration <= optimal_range[1]:
             base_score += 10
+
+    base_score += retention_adjustment(clip_features)
     
     return min(base_score, 100.0)
 
@@ -672,7 +718,7 @@ class ViralityPredictor:
     def __init__(self):
         self.model = None
         self.is_trained = False
-        self.model_path = os.path.join(WORKSPACE, '.shortsforge', 'virality_model.json')
+        self.model_path = os.path.join(WORKSPACE, '.cogitator', 'virality_model.json')
         self._load_model()
     
     def _load_model(self):
@@ -781,13 +827,16 @@ class ViralityPredictor:
 
 
 _virality_predictor = None
+_virality_predictor_lock = threading.Lock()
 
 
 def get_virality_predictor() -> ViralityPredictor:
-    """Get singleton virality predictor instance."""
+    """Get singleton virality predictor instance (thread-safe)."""
     global _virality_predictor
     if _virality_predictor is None:
-        _virality_predictor = ViralityPredictor()
+        with _virality_predictor_lock:
+            if _virality_predictor is None:
+                _virality_predictor = ViralityPredictor()
     return _virality_predictor
 
 

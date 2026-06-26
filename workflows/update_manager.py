@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Update Manager
+Cogitator Update Manager
 Handles version checking, updates, and backups.
 """
 
@@ -61,7 +61,7 @@ def get_remote_version():
     try:
         req = urllib.request.Request(
             VERSION_URL,
-            headers={"User-Agent": "Lambda-Cut-Updater"}
+            headers={"User-Agent": "Cogitator-Updater"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
             return response.read().decode("utf-8").strip()
@@ -115,7 +115,7 @@ def get_release_notes():
     try:
         req = urllib.request.Request(
             RELEASES_API_URL,
-            headers={"User-Agent": "Lambda-Cut-Updater"}
+            headers={"User-Agent": "Cogitator-Updater"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -134,7 +134,7 @@ def create_backup(project_root, version):
     os.makedirs(backup_dir, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"ShortsForge_v{version}_backup_{timestamp}"
+    backup_name = f"Cogitator_v{version}_backup_{timestamp}"
     backup_path = os.path.join(backup_dir, backup_name)
     
     # Create backup directory
@@ -170,7 +170,7 @@ def cleanup_old_backups(project_root):
     
     backups = []
     for item in os.listdir(backup_dir):
-        if item.startswith("ShortsForge_v") and item.endswith("_backup"):
+        if item.startswith("Cogitator_v") and item.endswith("_backup"):
             backup_path = os.path.join(backup_dir, item)
             if os.path.isdir(backup_path):
                 backups.append((os.path.getmtime(backup_path), backup_path))
@@ -194,11 +194,11 @@ def cleanup_old_backups(project_root):
 def download_update(version, dest_dir):
     """Download update from GitHub."""
     url = DOWNLOAD_URL_TEMPLATE.format(version=version)
-    zip_file = os.path.join(dest_dir, f"ShortsForge_v{version}.zip")
+    zip_file = os.path.join(dest_dir, f"Cogitator_v{version}.zip")
     
     try:
         print(f"Downloading update from {url}...")
-        req = urllib.request.Request(url, headers={"User-Agent": "Lambda-Cut-Updater"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Cogitator-Updater"})
         with urllib.request.urlopen(req, timeout=60) as response:
             with open(zip_file, "wb") as f:
                 f.write(response.read())
@@ -210,12 +210,16 @@ def download_update(version, dest_dir):
 
 
 def extract_update(zip_file, dest_dir):
-    """Extract zipball to directory."""
+    """Extract zipball to directory (safe against zip slip)."""
     try:
         with zipfile.ZipFile(zip_file, "r") as zip_ref:
-            zip_ref.extractall(dest_dir)
+            for member in zip_ref.infolist():
+                member_path = os.path.realpath(os.path.join(dest_dir, member.filename))
+                if not member_path.startswith(os.path.realpath(dest_dir)):
+                    print(f"Skipping zip slip entry: {member.filename}")
+                    continue
+                zip_ref.extract(member, dest_dir)
         
-        # Find the extracted directory
         extracted = [d for d in os.listdir(dest_dir) if os.path.isdir(os.path.join(dest_dir, d))]
         if extracted:
             return os.path.join(dest_dir, extracted[0])
@@ -304,7 +308,7 @@ def perform_update(project_root):
     cleanup_old_backups(project_root)
     
     # Create temp directory for download
-    temp_dir = tempfile.mkdtemp(prefix="ShortsForge_update_")
+    temp_dir = tempfile.mkdtemp(prefix="Cogitator_update_")
     
     try:
         # Download update

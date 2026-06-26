@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Centralized Constants & Shared Utilities
+Cogitator Centralized Constants & Shared Utilities
 
 Single source of truth for:
 - TTS voices and styles
@@ -11,6 +11,72 @@ Single source of truth for:
 - Groq key rotation
 """
 import re
+
+# ─── Fuzzy Dedup & Alias Resolution ──────────────────────────────────────────
+
+try:
+    from rapidfuzz import fuzz
+    _RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    _RAPIDFUZZ_AVAILABLE = False
+
+def dedupe_entity_list(items: list[str], threshold: int = 80) -> tuple[list[str], dict[str, str]]:
+    """
+    Deduplicate a list of entity names using fuzzy matching.
+    Returns (deduplicated_list, alias_map) where alias_map maps short forms to canonical names.
+    """
+    if not items or not _RAPIDFUZZ_AVAILABLE:
+        return items, {}
+
+    canonical = []
+    alias_map = {}
+
+    for item in items:
+        item_lower = item.lower().strip()
+        matched = False
+
+        for existing in canonical:
+            existing_lower = existing.lower()
+            if item_lower == existing_lower:
+                matched = True
+                break
+            ratio = fuzz.token_sort_ratio(item_lower, existing_lower)
+            if ratio >= threshold:
+                # Shorter name is alias of longer canonical name
+                if len(item) < len(existing):
+                    alias_map[item] = existing
+                else:
+                    alias_map[existing] = item
+                    canonical.remove(existing)
+                    canonical.append(item)
+                matched = True
+                break
+
+        if not matched:
+            canonical.append(item)
+
+    return canonical, alias_map
+
+def fuzzy_dedup_against_list(item: str, existing_list: list[str], threshold: int = 80) -> tuple[bool, str | None]:
+    """
+    Check if item fuzzy-matches any entry in existing_list.
+    Returns (is_duplicate, canonical_form_or_None).
+    """
+    if not existing_list or not _RAPIDFUZZ_AVAILABLE:
+        return False, None
+
+    item_lower = item.lower().strip()
+    for existing in existing_list:
+        existing_lower = existing.lower()
+        if item_lower == existing_lower:
+            return True, existing
+        ratio = fuzz.token_sort_ratio(item_lower, existing_lower)
+        if ratio >= threshold:
+            # Use the longer form as canonical
+            canonical = existing if len(existing) >= len(item) else item
+            return True, canonical
+
+    return False, None
 
 # ─── TTS Voices ──────────────────────────────────────────────────────────────
 
@@ -42,7 +108,14 @@ TTS_STYLE_OPTIONS = [
 _GROQ_KEY_INDEX = 0
 
 def get_groq_keys():
-    """Get list of Groq API keys from environment or keychain."""
+    """Get list of Groq API keys from keychain (preferred) or environment."""
+    try:
+        from keychain_manager import get_groq_keys as _kc_get_keys
+        kc_keys = _kc_get_keys()
+        if kc_keys:
+            return kc_keys
+    except ImportError:
+        pass
     import os
     keys = []
     primary = os.environ.get("GROQ_API_KEY", "")
@@ -128,9 +201,6 @@ def calculate_readability(text: str) -> float:
     num_sentences = len(sentences)
     num_words = len(words)
     num_syllables = sum(_count_syllables(word) for word in words)
-
-    if num_sentences == 0 or num_words == 0:
-        return 0
 
     avg_sentence_length = num_words / num_sentences
     avg_syllables_per_word = num_syllables / num_words

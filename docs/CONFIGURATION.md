@@ -122,7 +122,7 @@ Or use bracket tags for quick styling:
 ## Directory Structure
 
 ```
-ShortsForge/
+Cogitator/
 ├── .env              # Configuration (not in git)
 ├── workflows/        # Python code
 ├── streams/         # Downloaded videos
@@ -138,13 +138,13 @@ To run listener as a systemd service:
 
 ```bash
 # Enable auto-start on boot
-systemctl --user enable shortsforge-listener.service
+systemctl --user enable cogitator-listener.service
 
 # Start manually
-systemctl --user start shortsforge-listener.service
+systemctl --user start cogitator-listener.service
 
 # Check status
-systemctl --user status shortsforge-listener.service
+systemctl --user status cogitator-listener.service
 ```
 
 ## API Keys

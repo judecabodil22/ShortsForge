@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cogitator"
+dynamic = ["version"]
+description = "YouTube Shorts Pipeline — AI-powered short-form content generation from long-form videos"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Justin Jude Cabodil" },
+]
+
+dependencies = [
+    "yt-dlp>=2024.1.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "slowapi>=0.1.8",
+    "jinja2>=3.1.0",
+    "requests>=2.31.0",
+    "faster-whisper>=1.0.0",
+    "stable-ts>=2.0.0",
+    "spacy>=3.7.0",
+    "rapidfuzz>=3.5.0",
+    "textblob>=0.18.0",
+    "xgboost>=2.0.0",
+    "keyring>=23.0.0",
+    "google-auth>=2.0.0",
+    "google-auth-oauthlib>=1.0.0",
+    "google-auth-httplib2>=0.4.0",
+    "google-api-python-client>=2.0.0",
+]
+
+[project.optional-dependencies]
+gpu = ["torch>=2.0.0", "torchaudio>=2.0.0"]
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[project.scripts]
+cogitator = "workflows.cogitator:main"
+cogitator-backend = "backend.main:app"
+cogitator-listener = "workflows.telegram.bot:main"
+
+[tool.setuptools.packages.find]
+include = ["workflows*", "backend*"]

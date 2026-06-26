@@ -1,10 +1,10 @@
-# ShortsForge
+# Cogitator
 
 **Automated YouTube Shorts Pipeline for Game Streams**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-purple.svg)](https://archlinux.org/)
-[![Python: 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
+[![Python: 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 [![React](https://img.shields.io/badge/React-18.2-blue)](https://react.dev)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109-green)](https://fastapi.tiangolo.com)
 
@@ -13,7 +13,7 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [What is ShortsForge?](#what-is-shortsforge)
+2. [What is Cogitator?](#what-is-cogitator)
 3. [Features](#features)
 4. [Architecture](#architecture)
 5. [System Requirements](#system-requirements)
@@ -22,21 +22,20 @@
 8. [Usage](#usage)
 9. [Telegram Commands](#telegram-commands)
 10. [Web Interface](#web-interface)
-11. [Content Studio](#content-studio)
-12. [Learning Engine](#learning-engine)
-13. [Metrics & Analytics](#metrics--analytics)
-14. [Project Structure](#project-structure)
-15. [Tech Stack](#tech-stack)
-16. [Security](#security)
-17. [Troubleshooting](#troubleshooting)
-18. [Development](#development)
-19. [License](#license)
+11. [Learning Engine](#learning-engine)
+12. [Metrics & Analytics](#metrics--analytics)
+13. [Project Structure](#project-structure)
+14. [Tech Stack](#tech-stack)
+15. [Security](#security)
+16. [Troubleshooting](#troubleshooting)
+17. [Development](#development)
+18. [License](#license)
 
 ---
 
 ## Overview
 
-ShortsForge is a comprehensive, AI-powered pipeline that transforms long-form YouTube game streams into ready-to-publish YouTube Shorts. It automates the entire content creation workflow from video download to final TTS-narrated clips with subtitles.
+Cogitator is a comprehensive, AI-powered pipeline that transforms long-form YouTube game streams into ready-to-publish YouTube Shorts. It automates the entire content creation workflow from video download to final TTS-narrated clips with subtitles.
 
 The project has evolved from a simple CLI script into a full-stack application with:
 - **CLI Pipeline** - Command-line interface for batch processing
@@ -47,9 +46,9 @@ The project has evolved from a simple CLI script into a full-stack application w
 
 ---
 
-## What is ShortsForge?
+## What is Cogitator?
 
-ShortsForge takes a YouTube playlist of game streams and automatically produces:
+Cogitator takes a YouTube playlist of game streams and automatically produces:
 
 | Output | Description | Format |
 |--------|-------------|--------|
@@ -65,7 +64,6 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 - **Resumable**: Each phase saves progress - restart anywhere
 - **Skippable Phases**: Run any combination of phases independently
 - **WebSocket Log Streaming**: Live pipeline logs in browser
-- **Content Studio**: Generate additional content from existing transcripts
 - **Real-time Metrics**: Track YouTube performance via API
 - **ML Learning**: Optimize content based on historical performance
 
@@ -81,16 +79,8 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 | **2** | Transcribe | Converts audio to text with timestamps | `transcripts/` |
 | **3** | Context | Extracts characters, locations, relationships | `Context/` |
 | **4** | Scripts | Generates AI-powered narration scripts | `scripts/` |
-| **5** | Clip | Extracts video clips based on scene detection | `shorts/` |
+| **5** | Clip | Frame-accurate cutting via PySceneDetect, portrait 9:16 crop, caption burn-in, HEVC VAAPI auto-detection, audio normalization | `shorts/` |
 | **6** | TTS | Creates AI voice narration with subtitles | `tts/` |
-
-### Content Studio
-
-- **Import Pipeline Data**: Copy transcripts from main pipeline
-- **Generate Scripts**: Create AI scripts with context awareness
-- **Generate TTS**: Convert scripts to voice narration
-- **Series Continuity**: Context accumulates across runs
-- **Context Memory**: Characters, locations, relationships tracked
 
 ### Web Interface
 
@@ -108,6 +98,9 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 - **Performance Tracking**: Store and analyze video metrics
 - **Feature Extraction**: NLP analysis of script content
+- **Story Arc Detection**: Classifies clips into 4 arc types (hook_setup_payload_closer, mystery_reveal, problem_solution, setup_twist)
+- **Retention Re-ranking**: Reorders clips by predicted audience retention
+- **Curiosity Scoring**: Ranks clips based on narrative curiosity gaps
 - **Thompson Sampling**: Optimize content type selection (70/30 explore/exploit)
 - **Virality Prediction**: ML model predicting short performance
 - **Content Type Analysis**: Compare performance by script style
@@ -127,7 +120,7 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        ShortsForge                              │
+│                        Cogitator                              │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    │
@@ -145,7 +138,7 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 │  ┌─────────────────────────┼─────────────────────────────┐   │
 │  │                    Workflows                            │   │
 │  ├──────────────┬──────────┼──────────┬──────────────┬────┤   │
-│  │ shortsforge   │ context  │ metrics  │ learning     │ other│
+│  │ cogitator   │ context  │ metrics  │ learning     │ other│
 │  │ .py           │ _manager │ _fetcher │ _engine      │ .py │
 │  └──────┬────────┴──────────┴──────────┴──────┬──────┘   │
 │         │                                       │             │
@@ -163,7 +156,7 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 | Component | Purpose |
 |-----------|---------|
-| `shortsforge.py` | Main pipeline orchestration, CLI, Telegram bot |
+| `cogitator.py` | Main pipeline orchestration, CLI, Telegram bot |
 | `context_manager.py` | Context storage and retrieval for scripts |
 | `context_manager_v2.py` | Enhanced context with graph visualization |
 | `metrics_fetcher.py` | YouTube API integration for video metrics |
@@ -171,9 +164,9 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 | `performance_database.py` | SQLite storage for scripts, videos, metrics, learnings |
 | `script_validation.py` | Script quality scoring and content type detection |
 | `audio_analysis.py` | Audio feature extraction for clip selection |
+| `llm_provider.py` | LLM abstraction layer (Gemini + Groq fallback) |
 | `keychain_manager.py` | Secure API key storage in system keychain |
 | `constants.py` | Centralized configuration (voices, styles, scoring, rotation) |
-| `content_studio.py` | Content Studio orchestration facade |
 | `backend/main.py` | FastAPI web server with REST API |
 | `core/round_robin.py` | Shuffled round-robin engine for voice/style/Groq rotation |
 | `core/config.py` | `.env` file management utilities |
@@ -188,13 +181,13 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 - **CPU**: Multi-core (4+ cores recommended)
 - **RAM**: 8GB+ (16GB recommended for video processing)
 - **Storage**: 50GB+ for video processing
-- **GPU**: Optional (for faster video encoding)
+- **GPU**: Optional (for faster video encoding; AMD VA-API supported)
 
 ### Software
 
 | Requirement | Version | Purpose |
 |-------------|---------|---------|
-| **Python** | 3.10+ | Runtime |
+| **Python** | 3.11+ | Runtime |
 | **FFmpeg** | Latest | Video processing |
 | **Git** | Latest | Version control |
 | **Node.js** | 18+ | Frontend build (optional) |
@@ -211,11 +204,13 @@ ShortsForge takes a YouTube playlist of game streams and automatically produces:
 
 ## Installation
 
+You can use the automated `install.sh` script or follow the manual steps below.
+
 ### 1. Clone Repository
 
 ```bash
 git clone https://github.com/judecabodil22/ShortsForge.git
-cd ShortsForge
+cd Cogitator
 ```
 
 ### 2. Install System Dependencies
@@ -245,11 +240,11 @@ cp .env.example .env
 nano .env
 ```
 
-### 5. Start Using ShortsForge
+### 5. Start Using Cogitator
 
 **Option A: Telegram Bot**
 ```bash
-python workflows/shortsforge.py listen
+python workflows/cogitator.py listen
 ```
 
 **Option B: Web Interface**
@@ -263,8 +258,8 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 **Option C: Direct CLI**
 ```bash
-python workflows/shortsforge.py run
-python workflows/shortsforge.py status
+python workflows/cogitator.py run
+python workflows/cogitator.py status
 ```
 
 ---
@@ -286,6 +281,9 @@ GEMINI_API_KEY=AIzaSy...
 ### Optional Variables
 
 ```bash
+# AI Fallback (used when Gemini is unavailable)
+GROQ_API_KEY=gsk_...
+
 # Telegram Bot
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 TELEGRAM_CHAT_ID=123456789
@@ -327,26 +325,26 @@ PLAYLIST_INDEX=1
 
 ```bash
 # Full pipeline (all 5 phases)
-python workflows/shortsforge.py run
+python workflows/cogitator.py run
 
 # Specific phases
-python workflows/shortsforge.py run --phase 3
-python workflows/shortsforge.py run --phase 1,2,3
+python workflows/cogitator.py run --phase 3
+python workflows/cogitator.py run --phase 1,2,3
 
 # Local video processing
-python workflows/shortsforge.py run_local media
+python workflows/cogitator.py run_local media
 ```
 
 ### Pipeline Commands
 
 ```bash
-python workflows/shortsforge.py run         # Run pipeline
-python workflows/shortsforge.py listen       # Start Telegram listener
-python workflows/shortsforge.py stop        # Stop running pipeline
-python workflows/shortsforge.py status      # Show status
-python workflows/shortsforge.py cleanup      # Clean generated files
-python workflows/shortsforge.py debug       # Show recent logs
-python workflows/shortsforge.py onboard     # Interactive setup
+python workflows/cogitator.py run         # Run pipeline
+python workflows/cogitator.py listen       # Start Telegram listener
+python workflows/cogitator.py stop        # Stop running pipeline
+python workflows/cogitator.py status      # Show status
+python workflows/cogitator.py cleanup      # Clean generated files
+python workflows/cogitator.py debug       # Show recent logs
+python workflows/cogitator.py onboard     # Interactive setup
 ```
 
 ---
@@ -373,15 +371,6 @@ python workflows/shortsforge.py onboard     # Interactive setup
 | `/set_clips 10` | Set clips per hour (1-20) |
 | `/set_game Game Title` | Set game title |
 | `/config` | Show current settings |
-
-### Content Studio
-
-| Command | Description |
-|---------|-------------|
-| `/cs` | Open Content Studio |
-| `/cs_generate` | Generate script |
-| `/cs_tts` | Generate TTS |
-| `/cs_context` | View context |
 
 ### Utilities
 
@@ -413,8 +402,8 @@ Open `http://localhost:8000` in your browser.
 
 ### Features
 
-- **Dashboard**: Pipeline status, metrics summary
-- **Pipeline Control**: Start, stop, configure pipeline
+- **Dashboard**: Metrics summary
+- **Pipeline Control**: Start, stop, configure pipeline (the dedicated pipeline page in `Layout.tsx` was removed — implementation was incomplete)
 - **Metrics**: Video performance charts
 - **Scripts**: View generated scripts
 - **Context**: Interactive knowledge graph visualization
@@ -473,32 +462,6 @@ The Context page features an interactive force-directed graph:
 
 ---
 
-## Content Studio
-
-Content Studio generates additional content from existing transcripts.
-
-### Access
-
-Send `/cs` to your Telegram bot.
-
-### Workflow
-
-1. **Import**: Copy transcripts from main pipeline
-2. **Analyze**: Extract characters, locations, terms
-3. **Generate**: Create scripts with context awareness
-4. **TTS**: Convert scripts to voice narration
-
-### Context Memory
-
-Content Studio maintains context across runs:
-- Character names and descriptions
-- Location names
-- Key terms and plot points
-- Relationships between entities
-- Previous script summaries
-
----
-
 ## Learning Engine
 
 The Learning Engine optimizes content creation based on historical performance.
@@ -546,7 +509,7 @@ prediction = predictor.predict(features)
 
 ### YouTube Metrics
 
-ShortsForge tracks:
+Cogitator tracks:
 - **Views**: Total video views
 - **Likes**: Total likes
 - **Comments**: Total comments
@@ -574,7 +537,7 @@ stats = get_variant_performance_stats()
 ## Project Structure
 
 ```
-ShortsForge/
+Cogitator/
 ├── backend/                    # FastAPI web backend
 │   ├── main.py                # API server
 │   └── requirements.txt      # Backend dependencies
@@ -582,13 +545,13 @@ ShortsForge/
 │   ├── src/                   # React source
 │   └── dist/                 # Pre-built static files
 ├── workflows/                  # Core pipeline modules
-│   ├── shortsforge.py        # Main application
+│   ├── cogitator.py        # Main application
 │   ├── constants.py          # Centralized configuration
-│   ├── content_studio.py     # Content Studio facade
 │   ├── context_manager.py    # Context storage v1
 │   ├── context_manager_v2.py # Context storage v2 (graph)
 │   ├── metrics_fetcher.py   # YouTube API integration
 │   ├── learning_engine.py   # ML optimization
+│   ├── llm_provider.py      # LLM abstraction (Gemini + Groq)
 │   ├── performance_database.py # SQLite storage
 │   ├── script_validation.py # Script quality scoring
 │   ├── audio_analysis.py    # Audio feature extraction
@@ -613,7 +576,7 @@ ShortsForge/
 ├── transcripts/              # Generated transcripts
 ├── streams/                  # Downloaded videos
 ├── Context/                  # Game context files
-├── .shortsforge/            # App data (OAuth, DB, API key)
+├── .cogitator/            # App data (OAuth, DB, API key)
 ├── .env.example             # Configuration template
 ├── requirements.txt         # Python dependencies
 ├── VERSION                  # Version file
@@ -641,7 +604,7 @@ ShortsForge/
 
 | Component | Technology | Version |
 |-----------|------------|---------|
-| **Language** | Python | 3.10+ |
+| **Language** | Python | 3.11+ |
 | **Web Framework** | FastAPI | 0.109+ |
 | **Web Server** | Uvicorn | 0.27+ |
 | **Frontend** | React | 18.2.0 |
@@ -681,7 +644,7 @@ ShortsForge/
 
 ### API Key Management
 
-ShortsForge supports secure API key storage:
+Cogitator supports secure API key storage via `keychain_manager.py`:
 
 1. **System Keychain** (Recommended)
    - Linux: GNOME Keyring / KWallet
@@ -693,7 +656,7 @@ ShortsForge supports secure API key storage:
 
 ### Web Interface Security
 
-- **API Key Authentication**: Protected endpoints require `X-API-Key` header
+- **API Key Authentication**: Protected endpoints require `X-Goog-Api-Key` header (not URL params)
 - **Rate Limiting**: Prevents abuse (5-60 requests/minute depending on endpoint)
 - **Security Headers**: X-Frame-Options, X-XSS-Protection, HSTS, Referrer-Policy
 - **Input Sanitization**: Prevents injection attacks
@@ -701,13 +664,15 @@ ShortsForge supports secure API key storage:
 
 ### Protected Endpoints
 
-These endpoints require API key authentication:
+These endpoints require API key authentication (sent via `X-Goog-Api-Key` header, not URL params):
 - `POST /api/config`
 - `POST /api/system/cleanup`
 - `POST /api/system/restart-listener`
 - `POST /api/context/import`
 - `POST /api/context/clear`
 - `POST /api/pipeline/download`
+
+Path traversal protections are enforced on all file-related endpoints. Thread-safe locking ensures database integrity during concurrent pipeline operations.
 
 ### Best Practices
 
@@ -725,7 +690,7 @@ These endpoints require API key authentication:
 
 **Q: Pipeline won't start**
 - Check `.env` has valid `GEMINI_API_KEY`
-- Run `python workflows/shortsforge.py onboard` to verify
+- Run `python workflows/cogitator.py onboard` to verify
 
 **Q: No videos downloading**
 - Verify `PLAYLIST_URL` in `.env`
@@ -743,20 +708,20 @@ These endpoints require API key authentication:
 - Verify YouTube OAuth is configured (`client_secret.json` in workspace)
 - Check video duration (must be < 3 minutes to be treated as Short)
 - Ensure the Short exists on YouTube and appears in recent uploads
-- Run sync via API: `curl -X POST http://localhost:8000/api/metrics/sync -H "X-API-Key: YOUR_KEY"`
+- Run sync via API: `curl -X POST http://localhost:8000/api/metrics/sync -H "X-Goog-Api-Key: YOUR_KEY"`
 - Check the database: stored YouTube IDs must match actual YouTube video IDs
 
 ### Debug Mode
 
 ```bash
 # View recent logs
-python workflows/shortsforge.py debug
+python workflows/cogitator.py debug
 
 # Check pipeline status
-python workflows/shortsforge.py status
+python workflows/cogitator.py status
 
 # Verbose output
-python workflows/shortsforge.py run --verbose
+python workflows/cogitator.py run --verbose
 ```
 
 ---
@@ -814,6 +779,6 @@ See [LICENSE](./LICENSE) for full details.
 
 ---
 
-**ShortsForge** — Turn your game streams into YouTube Shorts automatically.
+**Cogitator** — Turn your game streams into YouTube Shorts automatically.
 
 Built with FastAPI, React, Python, and Google Gemini AI.

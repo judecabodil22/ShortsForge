@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-ShortsForge Context Management System v2
+Cogitator Context Management System v2
 Advanced context management with editor, search, and analytics.
 """
 import os
 import json
 import uuid
+import tempfile
 from datetime import datetime, timezone
+from typing import List, Dict, Optional, Any
 
-try:
-    from workflows.context_manager import load_markdown_context
-except ImportError:
-    from context_manager import load_markdown_context
+from workflows.context_manager import load_markdown_context
 
-WORKSPACE = os.path.expanduser("~/ShortsForge")
+WORKSPACE = os.path.expanduser("~/Cogitator")
 CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
 VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")
 HISTORY_DIR = os.path.join(CONTEXT_DIR, "history")
@@ -23,6 +22,9 @@ SCHEMA_FILE = os.path.join(CONTEXT_DIR, "schema.json")
 class ContextItem:
     """Represents a single context item (character, location, term, relationship)."""
     
+    # Minimum transcript appearances before admission
+    ADMISSION_THRESHOLD = 2
+
     def __init__(
         self,
         game_key: str,
@@ -49,6 +51,9 @@ class ContextItem:
         self.metadata.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
         self.metadata.setdefault("confidence", 1.0)
         self.metadata.setdefault("validation_count", 0)
+        self.metadata.setdefault("transcript_mentions", 0)
+        self.metadata.setdefault("first_seen_transcript", "")
+        self.metadata.setdefault("admission_threshold_met", False)
     
     def to_dict(self) -> Dict:
         return {
@@ -89,6 +94,20 @@ class ContextItem:
                 setattr(self, key, value)
         self.metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
     
+    def record_mention(self, transcript_name: str = ""):
+        """Increment transcript mention count and check admission threshold."""
+        self.metadata["transcript_mentions"] = self.metadata.get("transcript_mentions", 0) + 1
+        if not self.metadata.get("first_seen_transcript") and transcript_name:
+            self.metadata["first_seen_transcript"] = transcript_name
+        if self.metadata["transcript_mentions"] >= self.ADMISSION_THRESHOLD:
+            self.metadata["admission_threshold_met"] = True
+            self.metadata["confidence"] = min(1.0, self.metadata.get("confidence", 0.5) + 0.2)
+    
+    @property
+    def is_admitted(self) -> bool:
+        """Check if entity meets admission threshold."""
+        return self.metadata.get("admission_threshold_met", False) or self.source == "manual"
+    
     def validate(self) -> List[str]:
         """Validate the item and return list of errors."""
         errors = []
@@ -125,7 +144,7 @@ class ContextHistory:
             print(f"Warning: Could not write history entry: {e}")
     
     def get_history(self, item_id: str = None, limit: int = 100) -> List[Dict]:
-        """Get history entries, optionally filtered by item_id."""
+        """Get history entries, optionally filtered by item_id. Returns most recent first."""
         if not os.path.exists(self.history_file):
             return []
         
@@ -136,11 +155,10 @@ class ContextHistory:
                     entry = json.loads(line.strip())
                     if item_id is None or entry.get("item_id") == item_id:
                         entries.append(entry)
-                    if len(entries) >= limit:
-                        break
         except Exception:
             pass
-        return entries
+        entries.reverse()
+        return entries[:limit]
 
 
 class ContextManagerV2:
@@ -370,7 +388,7 @@ class ContextManagerV2:
         return True
     
     def save_context(self, game_key: str):
-        """Save context to verified_context.json."""
+        """Save context to verified_context.json (atomic write)."""
         if game_key not in self.contexts:
             return
         
@@ -379,7 +397,7 @@ class ContextManagerV2:
             try:
                 with open(VERIFIED_CONTEXT_FILE, "r") as f:
                     all_data = json.load(f)
-            except:
+            except (json.JSONDecodeError, OSError):
                 pass
         
         ctx = {
@@ -396,8 +414,17 @@ class ContextManagerV2:
         }
         
         os.makedirs(CONTEXT_DIR, exist_ok=True)
-        with open(VERIFIED_CONTEXT_FILE, "w") as f:
-            json.dump(all_data, f, indent=2)
+        fd, tmp_path = tempfile.mkstemp(dir=CONTEXT_DIR, suffix='.json')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(all_data, f, indent=2)
+            os.replace(tmp_path, VERIFIED_CONTEXT_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     
     def search(
         self,
@@ -602,8 +629,17 @@ def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool 
     }
     
     os.makedirs(CONTEXT_DIR, exist_ok=True)
-    with open(VERIFIED_CONTEXT_FILE, "w") as f:
-        json.dump(all_data, f, indent=2)
+    fd, tmp_path = tempfile.mkstemp(dir=CONTEXT_DIR, suffix='.json')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(all_data, f, indent=2)
+        os.replace(tmp_path, VERIFIED_CONTEXT_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     
     # Invalidate cache so next load picks up changes
     if hasattr(cm, '_context_mtime'):
@@ -621,8 +657,17 @@ def clear_verified_context(game_title: str) -> None:
             all_data = json.load(f)
         if game_key in all_data:
             del all_data[game_key]
-            with open(VERIFIED_CONTEXT_FILE, "w") as f:
-                json.dump(all_data, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(dir=CONTEXT_DIR, suffix='.json')
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(all_data, f, indent=2)
+                os.replace(tmp_path, VERIFIED_CONTEXT_FILE)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
     except Exception:
         pass
     
@@ -660,9 +705,14 @@ def format_context_for_confirmation(game_title: str, context: Dict[str, Any]) ->
 def is_first_run(game_title: str) -> bool:
     """Check if this is the first context run for a game (v1-compatible)."""
     game_key = game_title.lower().replace(" ", "_").strip()
-    return not os.path.exists(VERIFIED_CONTEXT_FILE) or game_key not in (
-        json.load(open(VERIFIED_CONTEXT_FILE)) if os.path.exists(VERIFIED_CONTEXT_FILE) else {}
-    )
+    if not os.path.exists(VERIFIED_CONTEXT_FILE):
+        return True
+    try:
+        with open(VERIFIED_CONTEXT_FILE) as f:
+            data = json.load(f)
+        return game_key not in data
+    except (json.JSONDecodeError, OSError):
+        return True
 
 
 def compute_and_save_implicit_relationships(game_title: str, transcript_text: str) -> Dict[str, Any]:

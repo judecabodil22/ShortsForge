@@ -1,4 +1,4 @@
-# ShortsForge - Git Ignore
+# Cogitator - Git Ignore
 
 # Environment variables and secrets
 .env
@@ -58,8 +58,11 @@ generation_metrics.jsonl
 
 # Application data
 .shortsforge/
+.cogitator/
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 
 # OS files
 .DS_Store

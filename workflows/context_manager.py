@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Context Manager Module
+Cogitator Context Manager Module
 
 Handles verified context storage, comparison, and learning.
 
@@ -14,8 +14,15 @@ Key features:
 import os
 import json
 import re
+import copy
+import threading
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
+
+try:
+    from rapidfuzz import fuzz as _fuzz
+except ImportError:
+    _fuzz = None
 
 
 # Paths
@@ -155,6 +162,8 @@ VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")
 CONTEXT_CORRECTIONS_FILE = os.path.join(CONTEXT_DIR, "context_corrections.jsonl")
 CONTEXT_HISTORY_DIR = os.path.join(CONTEXT_DIR, "history")
 
+_context_file_lock = threading.Lock()
+
 
 # ── Markdown + MemPalace loaders (used by graph / context manager v2) ────────
 
@@ -231,15 +240,17 @@ def get_mempalace_text_chunks(game_key: str) -> List[str]:
     try:
         import sqlite3
         conn = sqlite3.connect(MEMPALACE_CHROMA_DB)
-        cur = conn.cursor()
-        cur.execute("SELECT c0 FROM embedding_fulltext_search_content WHERE c0 IS NOT NULL")
-        for (text,) in cur.fetchall():
-            if not text or len(text.strip()) < 40:
-                continue
-            lower = text.lower()
-            if any(kw in lower for kw in keywords):
-                chunks.append(text)
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT c0 FROM embedding_fulltext_search_content WHERE c0 IS NOT NULL")
+            for (text,) in cur.fetchall():
+                if not text or len(text.strip()) < 40:
+                    continue
+                lower = text.lower()
+                if any(kw in lower for kw in keywords):
+                    chunks.append(text)
+        finally:
+            conn.close()
     except Exception:
         pass
     return chunks
@@ -279,17 +290,52 @@ def get_context_sources_summary(game_key: str) -> Dict[str, Any]:
 # ── Verified Context Storage ─────────────────────────────────────────────────
 
 def load_verified_context(game_title: str) -> Dict[str, Any]:
-    """Load verified context for a game."""
-    if not os.path.exists(VERIFIED_CONTEXT_FILE):
-        return {}
+    """Load verified context for a game, with auto-recovery from snapshots on corruption."""
+    game_key = game_title.lower().replace(" ", "_").strip()
     
-    try:
-        with open(VERIFIED_CONTEXT_FILE, "r") as f:
-            all_context = json.load(f)
-        game_key = game_title.lower().replace(" ", "_").strip()
-        return all_context.get(game_key, {})
-    except Exception:
-        return {}
+    # Step 1: Try loading from the verified context file
+    context_data = {}
+    corrupted = False
+    with _context_file_lock:
+        if os.path.exists(VERIFIED_CONTEXT_FILE):
+            try:
+                with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                    all_context = json.load(f)
+                context_data = all_context.get(game_key, {})
+                # Validate the context has expected structure
+                ctx = context_data.get("context", {})
+                if not isinstance(ctx, dict):
+                    corrupted = True
+            except (json.JSONDecodeError, ValueError, TypeError):
+                corrupted = True
+    
+    if corrupted:
+        # Step 2: Attempt recovery from the most recent snapshot
+        snapshots = load_context_history(game_title)
+        if snapshots:
+            latest = snapshots[-1]  # Chronologically sorted
+            recovered = latest.get("context", {})
+            context_data = {"context": recovered, "verified_at": latest.get("timestamp", ""), "source": "recovered_snapshot"}
+            print(f"[CONTEXT] Recovered context for {game_key} from snapshot ({len(snapshots)} available)")
+            # Attempt to write recovered context back (with lock)
+            with _context_file_lock:
+                try:
+                    all_context = {}
+                    if os.path.exists(VERIFIED_CONTEXT_FILE):
+                        try:
+                            with open(VERIFIED_CONTEXT_FILE) as f:
+                                all_context = json.load(f)
+                        except Exception:
+                            all_context = {}
+                    all_context[game_key] = context_data
+                    with open(VERIFIED_CONTEXT_FILE, "w") as f:
+                        json.dump(all_context, f, indent=2)
+                except Exception:
+                    pass
+        else:
+            print(f"[CONTEXT] Verified context corrupted for {game_key} and no snapshots to recover from")
+    
+    return context_data
 
 
 def _relationship_key(rel: Any) -> tuple:
@@ -301,17 +347,33 @@ def _relationship_key(rel: Any) -> tuple:
     return ("", "")
 
 
+def _fuzzy_in(item: str, existing: list[str], threshold: int = 80) -> tuple[bool, str | None]:
+    """Check if item fuzzy-matches any entry in existing list."""
+    if not existing or not _fuzz:
+        return False, None
+    item_lower = item.lower().strip()
+    for entry in existing:
+        entry_lower = entry.lower()
+        if item_lower == entry_lower:
+            return True, entry
+        ratio = _fuzz.token_sort_ratio(item_lower, entry_lower)
+        if ratio >= threshold:
+            canonical = entry if len(entry) >= len(item) else item
+            return True, canonical
+    return False, None
+
+
 def merge_context_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
     """Union list fields and relationships; overlay wins on relationship conflicts."""
     out = dict(base or {})
     for key in ("characters", "locations", "key_terms", "processed_transcripts", "previous_scripts"):
         merged = []
-        seen = set()
         for item in list(base.get(key, []) or []) + list(overlay.get(key, []) or []):
-            if not item or item in seen:
+            if not item:
                 continue
-            seen.add(item)
-            merged.append(item)
+            is_dup, _ = _fuzzy_in(str(item), merged)
+            if not is_dup:
+                merged.append(item)
         out[key] = merged
 
     rel_map: Dict[tuple, Any] = {}
@@ -335,77 +397,80 @@ def merge_context_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[s
 
 def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool = False):
     """Save verified context for a game and sync to MemPalace."""
-    all_context = {}
-    
-    if os.path.exists(VERIFIED_CONTEXT_FILE):
+    game_key = game_title.lower().replace(" ", "_").strip()
+    with _context_file_lock:
+        all_context = {}
+        
+        if os.path.exists(VERIFIED_CONTEXT_FILE):
+            try:
+                with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                    all_context = json.load(f)
+            except Exception:
+                pass
+        
+        if merge:
+            existing = all_context.get(game_key, {}).get("context", {})
+            context = merge_context_dicts(existing, context)
+        all_context[game_key] = {
+            "context": context,
+            "verified_at": datetime.now().isoformat(),
+            "source": "user_approved"
+        }
+        
         try:
-            with open(VERIFIED_CONTEXT_FILE, "r") as f:
-                all_context = json.load(f)
+            with open(VERIFIED_CONTEXT_FILE, "w") as f:
+                json.dump(all_context, f, indent=2)
         except Exception:
             pass
     
-    game_key = game_title.lower().replace(" ", "_").strip()
-    if merge:
-        existing = all_context.get(game_key, {}).get("context", {})
-        context = merge_context_dicts(existing, context)
-    all_context[game_key] = {
-        "context": context,
-        "verified_at": datetime.now().isoformat(),
-        "source": "user_approved"
-    }
-    
-    try:
-        with open(VERIFIED_CONTEXT_FILE, "w") as f:
-            json.dump(all_context, f, indent=2)
-    except Exception:
-        pass
-    
-    # Sync to MemPalace for learning
+    # Sync to MemPalace for learning (uses existing context param, no re-read needed)
     try:
         sync_result = sync_context_to_mempalace(game_title, context)
         if sync_result.get("synced", 0) > 0:
-            pass  # Sync succeeded, logged by function
+            pass
     except Exception:
-        pass  # Don't break context save if sync fails
+        pass
 
 
 def save_implicit_relationships(game_title: str, implicit_edges: List[Dict[str, Any]]):
     """Save implicit co-occurrence relationships to verified_context.json."""
-    all_context = {}
     game_key = game_title.lower().replace(" ", "_").strip()
-    
-    if os.path.exists(VERIFIED_CONTEXT_FILE):
+    with _context_file_lock:
+        all_context = {}
+        
+        if os.path.exists(VERIFIED_CONTEXT_FILE):
+            try:
+                with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                    all_context = json.load(f)
+            except Exception:
+                pass
+        
+        if game_key not in all_context:
+            all_context[game_key] = {"context": {}, "verified_at": datetime.now().isoformat()}
+        
+        all_context[game_key]["implicit_relationships"] = implicit_edges
+        
         try:
-            with open(VERIFIED_CONTEXT_FILE, "r") as f:
-                all_context = json.load(f)
-        except Exception:
-            pass
-    
-    if game_key not in all_context:
-        all_context[game_key] = {"context": {}, "verified_at": datetime.now().isoformat()}
-    
-    all_context[game_key]["implicit_relationships"] = implicit_edges
-    
-    try:
-        with open(VERIFIED_CONTEXT_FILE, "w") as f:
-            json.dump(all_context, f, indent=2)
-    except Exception as e:
-        print(f"Failed to save implicit relationships: {e}")
+            with open(VERIFIED_CONTEXT_FILE, "w") as f:
+                json.dump(all_context, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save implicit relationships: {e}")
 
 
 def load_implicit_relationships(game_title: str) -> List[Dict[str, Any]]:
     """Load stored implicit co-occurrence relationships."""
     game_key = game_title.lower().replace(" ", "_").strip()
     
-    if not os.path.exists(VERIFIED_CONTEXT_FILE):
-        return []
-    
-    try:
-        with open(VERIFIED_CONTEXT_FILE, "r") as f:
-            all_context = json.load(f)
-        return all_context.get(game_key, {}).get("implicit_relationships", [])
-    except Exception:
-        return []
+    with _context_file_lock:
+        if not os.path.exists(VERIFIED_CONTEXT_FILE):
+            return []
+        
+        try:
+            with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                all_context = json.load(f)
+            return all_context.get(game_key, {}).get("implicit_relationships", [])
+        except Exception:
+            return []
 
 
 def compute_and_save_implicit_relationships(game_title: str, transcript_text: str):
@@ -526,8 +591,9 @@ def clear_mempalace_for_game(game_title: str) -> Dict[str, Any]:
         result["errors"].append("No game title provided")
         return result
     
-    game_sanitized = game_title.lower().strip().replace(" ", "_")
-    
+    import re
+    game_sanitized = re.sub(r'[^a-z0-9_]', '_', game_title.lower().strip().replace(" ", "_"))
+
     try:
         mp_manager = _get_mempalace_manager()
         if not mp_manager:
@@ -625,7 +691,7 @@ def compare_context_with_history(
     }
     
     discrepancies = []
-    resolved = verified.get("context", {}).copy()
+    resolved = copy.deepcopy(verified.get("context", {}))
     
     verified_ctx = verified.get("context", {})
     extracted_chars = set(extracted.get("characters", []))
@@ -929,7 +995,7 @@ def clear_all_verified_context():
 
 # Module test
 if __name__ == "__main__":
-    print("ShortsForge Context Manager")
+    print("Cogitator Context Manager")
     print(f"Workspace: {WORKSPACE}")
     print(f"Verified context file: {VERIFIED_CONTEXT_FILE}")
     print(f"Corrections file: {CONTEXT_CORRECTIONS_FILE}")

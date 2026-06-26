@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Audio Analysis
+Cogitator Audio Analysis
 Analyzes audio in video segments for highlight detection.
 """
 import os
@@ -61,7 +61,7 @@ def analyze_audio_segment(video_path: str, start: float, end: float) -> Dict:
         if temp_audio and os.path.exists(temp_audio):
             try:
                 os.remove(temp_audio)
-            except:
+            except OSError:
                 pass
     
     return features
@@ -91,7 +91,7 @@ def _analyze_volume_levels(audio_path: str) -> Dict:
             'volume_spike': max_vol > -3.0,
             'has_silence': mean_vol < -40.0
         }
-    except:
+    except Exception:
         return {
             'volume_peak': -10.0,
             'volume_rms': -30.0,
@@ -118,7 +118,7 @@ def _detect_audio_transitions(audio_path: str) -> int:
             return min(int(variance / 5), 10)
         
         return 0
-    except:
+    except Exception:
         return 0
 
 
@@ -139,6 +139,27 @@ def _detect_speech(audio_path: str) -> bool:
             rms = float(rms_match.group(1))
             return rms > -35.0
         
+        return False
+    except Exception:
+        return False
+
+
+def _detect_laughter(audio_path: str) -> bool:
+    """Detect potential laughter based on audio patterns."""
+    try:
+        cmd = [
+            'ffmpeg', '-i', audio_path,
+            '-af', 'silencedetect=n=-40dB:d=0.3',
+            '-f', 'null', '-'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        output = result.stderr
+        
+        silence_count = output.count('silencedetect')
+        return silence_count > 2 and silence_count < 20
+        
+    except Exception:
         return False
     except:
         return False

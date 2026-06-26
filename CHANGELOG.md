@@ -1,6 +1,79 @@
-# ShortsForge Changelog
+# Cogitator Changelog
 
 All notable changes to this project are documented here.
+
+---
+
+## 2.3.0 (2026-06-22)
+
+### Security
+- **CRITICAL**: Fixed unauthenticated path traversal in `serve_frontend` — resolved paths are now validated against `FRONTEND_DIST`
+- **CRITICAL**: Fixed path traversal via game name in context endpoints (sanitize_input now strips `..`, `/`, `\`)
+- **CRITICAL**: Fixed `clear_mempalace_for_game` — `shutil.rmtree` with unsanitized game name could delete arbitrary directories
+- **API key URL leak**: All Gemini API key URLs migrated from `?key=` query param to `X-Goog-Api-Key` header across all 6 call sites (llm_provider.py, cogitator.py)
+- **API key rotation**: Keychain-backed rotation with `GEMINI_KEY_INDEX` tracking
+- **In-memory rate limiting**: Replaced file-based rate limiting (race condition / /tmp fragility)
+- **Bare except fixes**: 7+ `except:` replaced with specific exception types across audio_analysis.py, metrics_fetcher.py, desktop.py, performance_database.py, ws_manager.py
+
+### Thread Safety
+- Added `_rr_lock` to all round_robin.py functions protecting mutable shared globals
+- Added `_pipeline_globals_lock` in cogitator.py (was defined but never used)
+- Added `_pipeline_lock` around pipeline_process reads/writes in backend/main.py
+- Added `_ctx_edit_lock` + `_env_lock` in bot.py for CONTEXT_EDIT_STATE and update_env_var
+- Fixed `PENDING_CONTEXT` split-brain (bot.py redefined the imported dict)
+- Double-checked locking singleton for virality predictor
+- File locking for all context_manager.py load/save/merge operations
+
+### Bug Fixes
+- **desktop.py**: `cream` variable never set — TTS voice always showed "Not set" (`voice = line.split(...)` was `cream = ...`)
+- **AnimatedCounter.tsx**: Stale closure in `useTransform` — `format` prop always used initial render's value
+- **Scripts.tsx**: Runtime TypeError when `video_name` or `content_type` is null (`?.toLowerCase().includes()`)
+- **round_robin.py**: All global state read/writes now protected by lock
+- **backends/main.py**: Relationship import parsing (extracted from/to/label), malformed entity filter, non-recursive glob → recursive
+- **context_manager_v2.py**: `is_first_run` file descriptor leak, `get_history` now returns most-recent-first, atomic writes via tempfile+os.replace
+- **phase_tts.py**: Fixed double SQLite connection (reused `conn` + try/finally)
+- **phase_download.py**: Added PLAYLIST_URL injection guard (-- prefix), PLAYLIST_INDEX integer validation
+- **extract_context.py**: Added directory existence check, json.JSONDecodeError handling, moved private import out of loop
+- **pyproject.toml**: Fixed invalid `build-backend` (`setuptools.backends._legacy._Backend` doesn't exist)
+- **pipeline_runner.py**: Added `_pipeline_globals_lock` for pipeline globals
+- **performance_database.py**: Fixed indentation error in auto_match_and_fetch, SQL connection leak (try/finally), `_calculate_performance_score` typo
+
+### Context Extraction
+- Entity provenance tracking (transcript_mentions, first_seen_transcript, admission_threshold)
+- Admission gate: new entities need ≥2 transcript mentions before promotion
+- Conflict detection: validates generated scripts against known entities
+
+### Script Quality
+- Story arc detection: 4 arc types (hook_setup_payload_closer, mystery_reveal, problem_solution, setup_twist)
+- Hook strength scoring + arc confidence
+- Retention re-ranking (compares current features against historical performers)
+- Post-generation word count enforcement (trims to 280 words if >300)
+- Title diversity tracking (rolling set of last 10 titles)
+- Retry on low factuality (< 0.5) with stricter instruction
+- Fixed contradictory word count targets in variant .j2 templates (Jinja2 `{% set instruction %}` was overriding Python kwarg)
+
+### Video Clipping
+- Frame-accurate cutting with `{s:.3f}` float timestamps
+- PySceneDetect integration for visual scene boundary detection
+- Portrait 9:16 crop mode (PORTRAIT_CLIPS env var)
+- Caption burn-in (BURN_CAPTIONS env var) via ffmpeg drawtext
+- HEVC VAAPI auto-detection (hevc_vaapi/h264_vaapi for AMD GPUs)
+- Audio normalization with loudnorm on CPU path
+- Single-pass scene extraction (removed duplicate call)
+
+### Pipeline & Workflow
+- Removed Pipeline page from web UI (Layout.tsx navigation + App.tsx route)
+- Graph.tsx: default showImplicitEdges=false, rAF animation loop switched from state to ref (no React re-renders)
+- Consolidated all /tmp/ paths to ~/.cogitator/
+- Failure storage threshold lowered from 0.5 to 0.7 engagement
+- _is_known_entity returns False on empty list (stricter)
+- get_groq_keys tries keychain first before .env
+
+### Documentation
+- Updated README.md with current feature set
+- Updated .env.example with GROQ_API_KEY, PORTRAIT_CLIPS, BURN_CAPTIONS
+- Updated install.sh Python version check (3.10→3.11)
+- Deprecated content_studio.py (all functionality in cogitator.py `_cs_*` functions)
 
 ---
 
@@ -13,7 +86,7 @@ All notable changes to this project are documented here.
 - **Graph Franchise Merging**: `_build_single_game_graph()` merges child game context into franchise graphs — Tomb Raider Series went from 38→81 characters, 13→45 context edges
 - **Co-occurrence Child Entities**: `analyze_transcript_cooccurrence()` loads entities from child games when resolving franchise keys — implicit edges went from 37→211
 - **All Games Route**: Moved `/api/context/all/graph` before parameterized `/api/context/{game}/graph` to fix route capture
-- **TTS Voice Style**: Fixed `_get_next_voice_style()` → `get_next_voice_style()` call in `shortsforge.py:4425`
+- **TTS Voice Style**: Fixed `_get_next_voice_style()` → `get_next_voice_style()` call in `cogitator.py:4425`
 - **metrics_fetcher Import**: Added try/except fallback for `workflows.metrics_fetcher` in `performance_database.py:823`
 - **Tracker Sync**: `get_recent_uploads()` no longer returns early before fetching duration stats; `get_all_videos_with_metrics()` uses correlated subquery instead of LEFT JOIN to eliminate duplicate metric rows
 - **SQLite Concurrency**: Added `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000` for concurrent pipeline + API access
@@ -21,7 +94,7 @@ All notable changes to this project are documented here.
 
 ### Added
 - **Centralized Constants**: `workflows/constants.py` — single source for TTS voices (30), style options (10), `calculate_performance_score()`, `parse_duration()`, `calculate_readability()`, `calculate_hook_strength()`, `get_next_groq_key()`
-- **Unified YouTube Sync**: `sync_youtube_metrics()` in `performance_database.py` replaces 3 duplicated implementations across `shortsforge.py` and `backend/main.py`
+- **Unified YouTube Sync**: `sync_youtube_metrics()` in `performance_database.py` replaces 3 duplicated implementations across `cogitator.py` and `backend/main.py`
 - **Module Extraction**: Created `workflows/core/round_robin.py`, `workflows/core/config.py`, `workflows/core/pipeline_context.py`, `workflows/content_studio.py`, and module stubs (`pipeline/`, `generators/`, `telegram/`)
 - **WebSocket Log Streaming**: Background log tailer reads `/tmp/pipeline.log` and broadcasts over WebSocket to all connected clients
 - **Graph Caching**: Function-level TTL caches for `get_weighted_tts_voices()` (5-min) and graph endpoints (60-sec with file-mtime invalidation)
@@ -33,16 +106,16 @@ All notable changes to this project are documented here.
 - **Frontend Production Build**: Backend serves `frontend/dist/` via `StaticFiles` with Vite dev server fallback for development
 - **Phase Numbering**: Unified to 6 phases (Download, Transcribe, Context, Scripts, Clips, TTS) across `PHASE_LABELS` and `PHASE_MAP`
 - **Context Callback Routing**: `handle_context_callback` moved to module top; context callbacks routed directly via `cb_id` instead of `handle_menu_callback`
-- **`.env.example`**: Renamed from "Lambda Cut" to "ShortsForge"; added `WHISPER_MODEL` option
-- **All `docs/`**: Updated "lambda_cut" → "ShortsForge" references
+- **`.env.example`**: Renamed from "Lambda Cut" to "Cogitator"; added `WHISPER_MODEL` option
+- **All `docs/`**: Updated "lambda_cut" → "Cogitator" references
 - **Pipeline Context**: Import fallback pattern (`try/except ImportError`) for all new modules to support both direct execution and package imports
 - **`store_metrics()`**: Changed from insert-only to upsert to prevent stale metric rows on known videos
 - **Frontend Metrics**: Deduplicates `videos?.videos` array by `youtube_id` and sorts by `created_at DESC`
-- **`.gitignore`**: Rebranded from `Lambda Cut` to `ShortsForge`
+- **`.gitignore`**: Rebranded from `Lambda Cut` to `Cogitator`
 
 ### Technical
 - `backend/main.py`: Graph franchise logic (L1153-1260), co-occurrence child entity loading (L854-940), node registration guard (L1066-1083), placeholder node auto-creation (L1203-1232)
-- `workflows/shortsforge.py`: 215 lines removed — duplicated sync, context, and constants extracted to dedicated modules
+- `workflows/cogitator.py`: 215 lines removed — duplicated sync, context, and constants extracted to dedicated modules
 - `workflows/performance_database.py`: Rewritten metrics sync, learning engine queries, and YouTube auto-match
 - `workflows/constants.py`: 210 lines — new centralized constants module
 - `workflows/core/round_robin.py`: 130 lines — extracted round-robin engine with `get_state()` helper
@@ -81,7 +154,7 @@ All notable changes to this project are documented here.
 ### Technical
 - context_manager.py: Added save_implicit_relationships(), load_implicit_relationships(), compute_and_save_implicit_relationships()
 - backend/main.py: Updated get_graph_data() to use stored implicit relationships first
-- shortsforge.py: Auto-calls compute_and_save_implicit_relationships() after transcript import
+- cogitator.py: Auto-calls compute_and_save_implicit_relationships() after transcript import
 - frontend Graph.tsx: Added visualTheme state, theme-specific rendering, animation loop
 - graphSettings.ts: Added VisualTheme type, THEME_PHYSICS presets, THEME_OPTIONS
 
@@ -138,7 +211,7 @@ All notable changes to this project are documented here.
 ### Security
 - **API Key Authentication**: Added API key verification to sensitive endpoints
   - Protected endpoints: `/api/config`, `/api/system/cleanup`, `/api/system/restart-listener`, `/api/context/import`, `/api/context/clear`, `/api/pipeline/download`
-  - Auto-generated API key stored in `~/.shortsforge/api_key`
+  - Auto-generated API key stored in `~/.cogitator/api_key`
   - Use `X-API-Key` header for authenticated requests
 - **Rate Limiting**: Added rate limiting to prevent API abuse
   - Pipeline endpoints: 5/minute (run), 10/minute (stop)
@@ -156,8 +229,8 @@ All notable changes to this project are documented here.
   - Path traversal prevention
 - **.gitignore**: Added security files to gitignore
   - `client_secret.json`
-  - `.shortsforge/youtube_oauth.json`
-  - `.shortsforge/web_settings.json`
+  - `.cogitator/youtube_oauth.json`
+  - `.cogitator/web_settings.json`
 
 ### Added
 - **FastAPI Backend** (`backend/`): New web API server
@@ -218,9 +291,9 @@ All notable changes to this project are documented here.
   - Side-by-side layout: Buttons panel | Terminal status display
   - Real-time file counts and pipeline status
   - Dark theme matching KDE desktop
-  - Run via `./shortsforge --ui`
+  - Run via `./cogitator --ui`
 - **Local Recordings Support**: Process local video files
-  - Videos from `~/ShortsForge/recordings/` directory
+  - Videos from `~/Cogitator/recordings/` directory
   - Supported formats: mp4, mkv, avi, mov, webm
   - Source selection (YouTube Playlist / Local Recordings)
   - Phase 1 for local copies videos to streams/
@@ -229,7 +302,7 @@ All notable changes to this project are documented here.
   - Set Game Title
   - Set Clips per Hour (1-20)
   - Start/Stop Telegram listener
-- **New Launcher Script**: `./shortsforge` for easy CLI access
+- **New Launcher Script**: `./cogitator` for easy CLI access
 
 ### Changed
 - Desktop app no longer requires importing broken workflow modules
@@ -306,7 +379,7 @@ All notable changes to this project are documented here.
 ## 1.4.0 — 2026-04-10
 ### Added
 - **Centralized Context Directory**: New `/Context/` folder for all context files shared between Pipeline and Content Studio
-  - Located at `/home/alph4r1us/ShortsForge/Context/`
+  - Located at `/home/alph4r1us/Cogitator/Context/`
   - Per-game subdirectories with `context.json` and `quality.json`
   - Replaces scattered context files in content_studio/ and root directory
 - **Telegram Commands**:
@@ -395,7 +468,7 @@ All notable changes to this project are documented here.
 
 ### Overview
 
-ShortsForge v1.1.0 adds persistent context for series continuity and improved script generation accuracy.
+Cogitator v1.1.0 adds persistent context for series continuity and improved script generation accuracy.
 
 ---
 
@@ -438,7 +511,7 @@ ShortsForge v1.1.0 adds persistent context for series continuity and improved sc
 
 ### Overview
 
-ShortsForge v1.0.0 is the initial release of an automated YouTube Shorts pipeline for game streams. It handles the complete workflow from YouTube playlist to ready-to-edit shorts with AI-powered narration.
+Cogitator v1.0.0 is the initial release of an automated YouTube Shorts pipeline for game streams. It handles the complete workflow from YouTube playlist to ready-to-edit shorts with AI-powered narration.
 
 ---
 
@@ -618,9 +691,9 @@ Aoede, Callirrhoe, Gacrux, Kore, Leda, Puck, Sao, Zephyr, Fenrir, Charon, Orus, 
 ### Project Structure
 
 ```
-ShortsForge/
+Cogitator/
 ├── workflows/           # Main pipeline code
-│   ├── shortsforge.py  # Main application
+│   ├── cogitator.py  # Main application
 │   ├── keychain_manager.py
 │   └── update_manager.py
 ├── content_studio/      # Content Studio

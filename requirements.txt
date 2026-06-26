@@ -1,5 +1,5 @@
-# ShortsForge Requirements
-# Python dependencies for ShortsForge - YouTube Shorts Pipeline
+# Cogitator Requirements
+# Python dependencies for Cogitator - YouTube Shorts Pipeline
 
 # Core
 yt-dlp>=2024.1.0

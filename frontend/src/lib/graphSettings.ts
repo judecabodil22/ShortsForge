@@ -29,7 +29,7 @@ export const THEME_PHYSICS: Record<VisualTheme, Partial<GraphSettings>> = {
   world: { linkDistance: 300, chargeStrength: -350, velocityDecay: 0.8 },
 }
 
-const STORAGE_KEY = 'shortsforge_graph_settings'
+const STORAGE_KEY = 'cogitator_graph_settings'
 
 export function loadGraphSettings(): GraphSettings {
   try {

@@ -3,25 +3,25 @@ import { NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   LayoutDashboard,
-  Play,
   Network,
   FileText,
   BarChart3,
   Database,
   Activity,
   Zap,
-  Wrench
+  Wrench,
+  FileEdit
 } from 'lucide-react'
 import clsx from 'clsx'
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/pipeline', label: 'Pipeline', icon: Play },
   { path: '/graph', label: 'Knowledge Graph', icon: Network },
   { path: '/scripts', label: 'Scripts', icon: FileText },
   { path: '/metrics', label: 'Performance', icon: BarChart3 },
   { path: '/context', label: 'Context', icon: Database },
   { path: '/settings', label: 'Settings', icon: Wrench },
+  { path: '/prompts', label: 'Prompts', icon: FileEdit },
 ]
 
 interface LayoutProps {
@@ -121,8 +121,8 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Footer */}
         <footer className="px-6 py-3 border-t border-40k-border bg-40k-dark/50 flex items-center justify-between text-xs text-gray-500">
-          <span>ShortsForge v2.0.0 | Imperium Edition</span>
-          <span>Workspace: ~/ShortsForge</span>
+          <span>Cogitator v2.0.0 | Imperium Edition</span>
+          <span>Workspace: ~/Cogitator</span>
         </footer>
       </main>
     </div>

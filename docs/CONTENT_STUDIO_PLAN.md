@@ -122,7 +122,7 @@ Each content type maps to a specific TTS style:
 ### 4.1 Directory Structure
 
 ```
-ShortsForge/
+Cogitator/
 ├── content_studio/
 │   ├── scripts/          # Generated scripts
 │   ├── tts/             # Generated TTS audio
@@ -189,7 +189,7 @@ Generate a 1500-word script that:
 
 | Aspect | Content Studio | Main Pipeline |
 |--------|---------------|---------------|
-| Location | `content_studio/` folder | `workflows/shortsforge.py` |
+| Location | `content_studio/` folder | `workflows/cogitator.py` |
 | Commands | `/content_studio`, `/theory`, etc. | `/run_pipeline`, `/run_phase` |
 | Triggers | Manual command | YouTube/Local trigger |
 | Output | New content | Video production |

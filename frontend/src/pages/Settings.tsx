@@ -88,7 +88,7 @@ export default function Settings() {
           <h1 className="text-3xl font-display font-bold text-white">
             <span className="text-40k-gold">SYSTEM</span> SETTINGS
           </h1>
-          <p className="text-gray-400 mt-1">Configure ShortsForge core parameters</p>
+          <p className="text-gray-400 mt-1">Configure Cogitator core parameters</p>
         </motion.div>
       </div>
 
@@ -152,7 +152,7 @@ export default function Settings() {
                     onChange={e => setFormData({ ...formData, TTS_VOICE: e.target.value })}
                     className="w-full bg-40k-dark border border-40k-border rounded px-3 py-2 text-white focus:border-40k-gold focus:outline-none appearance-none"
                   >
-                    <option value="">Select a voice...</option>
+                    <option value="">Let system handle (learning-weighted round-robin)</option>
                     {["Vindemiatrix", "Puck", "Aoede", "Charon", "Kore", "Fenrir", "Orus", "Enceladus", "Iapetus", "Nereus", "Zephyr", "Atlas", "Callirhoe", "Ceres"].map(voice => (
                       <option key={voice} value={voice}>{voice}</option>
                     ))}
@@ -239,7 +239,7 @@ export default function Settings() {
               <div className="mt-8 p-4 bg-40k-gold/10 rounded-lg border border-40k-gold/30 flex items-center gap-4">
                 <Cpu className="w-8 h-8 text-40k-gold" />
                 <div>
-                  <h4 className="text-white font-display font-bold">ShortsForge v2.0.0</h4>
+                  <h4 className="text-white font-display font-bold">Cogitator v2.0.0</h4>
                   <p className="text-xs text-40k-gold">Cyberpunk Edition • System Online</p>
                 </div>
               </div>

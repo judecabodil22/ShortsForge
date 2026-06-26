@@ -1,0 +1,22 @@
+#!/bin/bash
+# Cogitator Launcher
+
+cd "$(dirname "$0")"
+
+# If --ui flag is passed, try to launch desktop app
+if [[ "$1" == "--ui" ]]; then
+    if command -v python3 &> /dev/null; then
+        exec python3 -c "from ui.desktop import main; main()" 2>/dev/null || {
+            echo "Desktop UI requires PyQt6: pip install PyQt6"
+            echo "Desktop UI is experimental and may not work in all environments."
+            echo "Use './cogitator' without --ui for CLI mode."
+            exit 1
+        }
+    else
+        echo "Python3 not found"
+        exit 1
+    fi
+fi
+
+# Default: run CLI
+exec python3 workflows/cogitator.py "$@"

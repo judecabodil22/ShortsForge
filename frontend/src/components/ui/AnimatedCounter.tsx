@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { motion, useSpring, useTransform } from 'framer-motion'
 
 interface AnimatedCounterProps {
@@ -7,8 +7,10 @@ interface AnimatedCounterProps {
 }
 
 export function AnimatedCounter({ value, format = (v) => Math.round(v).toString() }: AnimatedCounterProps) {
+  const formatRef = useRef(format)
+  formatRef.current = format
   const spring = useSpring(0, { stiffness: 50, damping: 20 })
-  const displayValue = useTransform(spring, (current) => format(current))
+  const displayValue = useTransform(spring, (current) => formatRef.current(current))
 
   useEffect(() => {
     spring.set(value)

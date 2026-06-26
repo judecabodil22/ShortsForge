@@ -7,7 +7,7 @@ Automatically extract context from game video transcripts and save to markdown f
 ### Requirements
 
 1. **Extract from transcript** - Use AI to extract characters, locations, key terms, relationships
-2. **Save to markdown** - Save to `/home/alph4r1us/ShortsForge/Context/{game}/`
+2. **Save to markdown** - Save to `/home/alph4r1us/Cogitator/Context/{game}/`
 3. **Proper markdown format**:
    - Frontmatter with metadata
    - Tables with wiki-links `[[Name]]`
@@ -98,15 +98,15 @@ graph TD
 
 ## Files Involved
 
-- `/home/alph4r1us/ShortsForge/workflows/shortsforge.py` - Main application
+- `/home/alph4r1us/Cogitator/workflows/cogitator.py` - Main application
   - `_cs_extract_context_from_transcript()` (line ~2836) - AI extraction
   - `_cs_save_context()` (line ~2224) - Save to markdown
   - `_rebuild_file_preserving_content()` (line ~2444) - Rebuild with Mermaid
   - `_rebuild_relationships_preserving_content()` (line ~2598) - Rebuild relationships
 
-- `/home/alph4r1us/ShortsForge/workflows/context_manager.py` - Context verification
+- `/home/alph4r1us/Cogitator/workflows/context_manager.py` - Context verification
 
-- `/home/alph4r1us/ShortsForge/Context/{game}/` - Output directory
+- `/home/alph4r1us/Cogitator/Context/{game}/` - Output directory
   - `characters.md`
   - `locations.md`
   - `key_terms.md`

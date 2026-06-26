@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Script Validation Module
+Cogitator Script Validation Module
 
 Provides factuality checking, engagement scoring, and quality metrics
 for AI-generated scripts.
@@ -19,10 +19,7 @@ import os
 import json
 from datetime import datetime, timedelta
 
-try:
-    from constants import calculate_readability as _calc_readability, calculate_hook_strength as _calc_hook
-except ImportError:
-    from workflows.constants import calculate_readability as _calc_readability, calculate_hook_strength as _calc_hook
+from workflows.constants import calculate_readability as _calc_readability, calculate_hook_strength as _calc_hook
 from rapidfuzz import fuzz
 
 
@@ -37,29 +34,68 @@ def _get_nlp():
         try:
             import spacy
             _nlp = spacy.load("en_core_web_sm")
-        except Exception:
+        except ImportError:
+            pass
+        except OSError:
+            pass
+        except Exception as e:
             pass
     return _nlp
 
 
 def extract_entities(text):
-    """Extract named entities (PERSON, LOC, ORG, etc.) from text."""
+    """Extract named entities (PERSON, LOC, ORG, etc.) from text.
+    
+    Uses spaCy when available; falls back to regex/dictionary-based extraction.
+    """
     nlp = _get_nlp()
-    if nlp is None:
-        return {"persons": [], "locations": [], "organizations": []}
+    if nlp is not None:
+        doc = nlp(text)
+        persons = set()
+        locations = set()
+        organizations = set()
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":
+                persons.add(ent.text)
+            elif ent.label_ in ("LOC", "GPE", "FAC"):
+                locations.add(ent.text)
+            elif ent.label_ == "ORG":
+                organizations.add(ent.text)
+        return {
+            "persons": list(persons),
+            "locations": list(locations),
+            "organizations": list(organizations),
+        }
 
-    doc = nlp(text)
+    # Fallback: regex/dictionary-based NER
     persons = set()
     locations = set()
     organizations = set()
 
-    for ent in doc.ents:
-        if ent.label_ == "PERSON":
-            persons.add(ent.text)
-        elif ent.label_ in ("LOC", "GPE", "FAC"):
-            locations.add(ent.text)
-        elif ent.label_ == "ORG":
-            organizations.add(ent.text)
+    # Pattern: Capitalized words that are 2+ chars and not sentence-start
+    import string
+    sentences = re.split(r'[.!?]+', text)
+    for sent in sentences:
+        sent = sent.strip()
+        if not sent:
+            continue
+        words = sent.split()
+        for i, w in enumerate(words):
+            w_clean = w.strip(string.punctuation)
+            if len(w_clean) < 2:
+                continue
+            # Skip first word (sentence start)
+            if i == 0:
+                continue
+            # Match capitalized word that is not ALL CAPS (abbreviation) or at sentence start
+            if w_clean[0].isupper() and not w_clean.isupper() and w_clean[0].isalpha():
+                # Likely a proper noun
+                if w_clean.endswith(('Inc', 'Corp', 'Ltd', 'LLC', 'Studios', 'Games', 'Entertainment')):
+                    organizations.add(w_clean)
+                elif any(kw in w_clean.lower() for kw in ['city', 'town', 'lake', 'river', 'mountain', 'forest', 'base', 'facility', 'lab', 'tower']):
+                    locations.add(w_clean)
+                else:
+                    persons.add(w_clean)
 
     return {
         "persons": list(persons),
@@ -83,13 +119,87 @@ def validate_script_factuality(script_text, context):
             - score: 0.0-1.0 factuality score
             - issues: List of validation issues found
             - flagged_entities: Entities in script not found in context
+            - style_violations: List of style guideline violations
     """
     issues = []
     flagged_entities = []
+    style_violations = []
 
     known_chars = context.get("characters", [])
     known_locs = context.get("locations", [])
     known_terms = context.get("key_terms", [])
+
+    # Check for style guideline violations
+    script_lower = script_text.lower()
+
+    # Forbidden greeting/gaming intros
+    greeting_patterns = [
+        r'\bhey\s+guys\b', r'\bwelcome\s+back\b', r'\btoday\s+we', r'\bin\s+this\s+video\b',
+        r'\bwhat\'?s\s+up\b', r'\bhello\s+everyone\b', r'\bhi\s+everyone\b',
+    ]
+    for pat in greeting_patterns:
+        if re.search(pat, script_lower):
+            style_violations.append(f"Forbidden greeting/intro: '{pat}'")
+
+    # Forbidden conclusion phrases
+    conclusion_patterns = [
+        r'\bin\s+conclusion\b', r'\bto\s+summarize\b', r'\bthe\s+point\s+is\b',
+        r'\bas\s+we\s+can\s+see\b', r'\bin\s+summary\b',
+    ]
+    for pat in conclusion_patterns:
+        if re.search(pat, script_lower):
+            style_violations.append(f"Forbidden conclusion phrase: '{pat}'")
+
+    # Dialogue indicators (said, told, asked, replied, whispered, shouted)
+    dialogue_verbs = [
+        r'\bsaid\b', r'\btold\b', r'\basked\b', r'\breplied\b',
+        r'\bwhispered\b', r'\bshouted\b', r'\bexclaimed\b', r'\banswered\b',
+        r'\bmuttered\b', r'\byelled\b',
+    ]
+    for pat in dialogue_verbs:
+        if re.search(pat, script_lower):
+            style_violations.append(f"Forbidden dialogue verb: '{pat.strip("\\b")}'")
+
+    # Quotation marks (dialogue indicator)
+    if '"' in script_text or '\u201c' in script_text or '\u201d' in script_text:
+        style_violations.append("Quotation marks detected (forbidden)")
+
+    # First/second person narration framing
+    narrator_patterns = [
+        r'\bi\s+saw\b', r'\bwe\s+saw\b', r'\bnarrator\s+said\b', r'\bwe\'?ll\s+see\b',
+        r'\bi\'?ll\s+tell\b', r'\blet\s+me\s+tell\b', r'\baccording\s+to\b',
+    ]
+    for pat in narrator_patterns:
+        if re.search(pat, script_lower):
+            style_violations.append(f"First/third person narration: '{pat}'")
+
+    # Markdown formatting
+    md_patterns = [r'\*\*', r'__', r'#', r'/>', r'```']
+    for pat in md_patterns:
+        if pat in script_text:
+            style_violations.append(f"Markdown formatting: '{pat}'")
+            break
+
+    # Abbreviations and symbols
+    abbrev_patterns = [r'\b#\d', r'\$\d', r'\b%\b', r'&']
+    for pat in abbrev_patterns:
+        if re.search(pat, script_text):
+            style_violations.append(f"Abbreviation/symbol: '{pat}'")
+
+    # Redundant sentence starts (same word 3+ times in first 8 sentences)
+    sentences = re.split(r'[.!?]+', script_text.strip())
+    sentence_starts = []
+    for s in sentences[:10]:
+        s = s.strip()
+        if s:
+            first_word = s.split()[0].lower().strip('"\'(') if s.split() else ''
+            if first_word:
+                sentence_starts.append(first_word)
+    from collections import Counter
+    start_counts = Counter(sentence_starts)
+    for word, count in start_counts.items():
+        if count >= 3 and word not in ('the', 'a', 'an', 'this', 'that', 'it', 'its'):
+            style_violations.append(f"Repetitive sentence start: '{word}' used {count}x in first 10 sentences")
 
     # Extract entities from script
     entities = extract_entities(script_text)
@@ -109,10 +219,6 @@ def validate_script_factuality(script_text, context):
             flagged_entities.append(("location", loc))
             issues.append(f"Unknown location mentioned: {loc}")
 
-    # Validate key_terms - skip for now
-    # Note: Full NER-based validation is too complex for transcript ASR errors like "cypress" → "cyberpsycho"
-    # Those are better caught by manual user corrections or transcript post-processing
-
     # Calculate score
     total_entities = len(script_persons) + len(script_locations)
     if total_entities == 0:
@@ -125,13 +231,14 @@ def validate_script_factuality(script_text, context):
         "score": score,
         "issues": issues,
         "flagged_entities": flagged_entities,
+        "style_violations": style_violations,
     }
 
 
 def _is_known_entity(entity, known_list, threshold=80):
     """Check if entity matches any known entity using fuzzy matching."""
     if not known_list:
-        return True  # No known entities to check against
+        return False  # No known entities, so this entity cannot be known
 
     entity_lower = str(entity).lower()
     for known in known_list:
@@ -189,18 +296,6 @@ def _score_hook(hook_text):
     """Score the hook strength of the first 100 words."""
     return _calc_hook(hook_text)
 
-    # Question or statement that creates intrigue
-    if '?' in hook_text or '!' in hook_text:
-        score += 0.15
-
-    # Varied sentence structure in hook
-    hook_sentences = re.split(r'[.!?]+', hook_text)
-    hook_sentences = [s.strip() for s in hook_sentences if s.strip()]
-    if len(hook_sentences) >= 2:
-        score += 0.15
-
-    return max(0.0, min(1.0, score))
-
 
 def _score_sentiment_arc(sentences):
     """Score sentiment progression (emotional arc)."""
@@ -235,7 +330,80 @@ def _score_readability(text, word_count, sentence_count):
     return max(0.0, min(1.0, flesch / 100.0))
 
 
-# ── Multi-Attempt Selection ──────────────────────────────────────────────────
+# ── Story Arc Detection ──────────────────────────────────────────────────────
+
+STORY_ARCS = {
+    "hook_setup_payload_closer": {
+        "patterns": ["but here", "the thing", "and that", "worst part"],
+        "min_sentences": 6,
+    },
+    "mystery_reveal": {
+        "patterns": ["why", "how", "what if", "the reason", "the answer", "turns out", "reveal"],
+        "min_sentences": 4,
+    },
+    "problem_solution": {
+        "patterns": ["problem", "issue", "challenge", "solution", "solve", "fix", "works"],
+        "min_sentences": 4,
+    },
+    "setup_twist": {
+        "patterns": ["expected", "but then", "until", "however", "surprise", "twist", "suddenly"],
+        "min_sentences": 4,
+    },
+}
+
+
+def detect_story_arc(script_text: str) -> tuple:
+    """Detect which story arc a script follows. Returns (arc_name, confidence)."""
+    sentences = [s.strip() for s in re.split(r'[.!?\n]+', script_text) if s.strip()]
+    text_lower = script_text.lower()
+    total_sentences = len(sentences)
+
+    if total_sentences < 3:
+        return ("too_short", 0.0)
+
+    scores = {}
+    for arc_name, arc in STORY_ARCS.items():
+        pattern_matches = sum(1 for p in arc["patterns"] if p in text_lower)
+        length_ok = total_sentences >= arc["min_sentences"]
+        pattern_score = min(1.0, pattern_matches / 3)
+        length_score = 1.0 if length_ok else total_sentences / arc["min_sentences"]
+        scores[arc_name] = (pattern_score * 0.6 + length_score * 0.4)
+
+    # Also assign a baseline "hook_setup_payload_closer" score for any script with 5+ sentences
+    scores["hook_setup_payload_closer"] = max(
+        scores.get("hook_setup_payload_closer", 0),
+        0.5 if total_sentences >= 5 else total_sentences / 5 * 0.5
+    )
+
+    best_arc = max(scores, key=scores.get)
+    return (best_arc, scores[best_arc])
+
+
+def score_hook_strength(script_text: str) -> float:
+    """Score the first 2 sentences for hook quality (0-1)."""
+    sentences = [s.strip() for s in re.split(r'[.!?\n]+', script_text) if s.strip()]
+    if not sentences:
+        return 0.0
+
+    first = sentences[0].lower()
+
+    # Penalize weak openings
+    weak_openers = ["hey", "hello", "hi", "welcome", "today", "so", "guys"]
+    for w in weak_openers:
+        if first.startswith(w):
+            return 0.2
+
+    # Reward strong hooks
+    hook_indicators = ["what if", "why", "how", "the reason", "the moment",
+                       "never", "worst", "best", "most", "secret", "shocking",
+                       "unbelievable", "this is", "one thing", "you won't"]
+    indicator_count = sum(1 for hi in hook_indicators if hi in first)
+    question = 1 if "?" in first else 0
+    exclamation = 0.5 if "!" in first else 0
+
+    score = min(1.0, (indicator_count * 0.2 + question * 0.3 + exclamation * 0.15))
+    return max(0.2, score)
+
 
 def select_best_script(candidates, context):
     """
@@ -251,22 +419,26 @@ def select_best_script(candidates, context):
     scored = []
 
     for script_text, metadata in candidates:
-        # Factuality score
         fact_check = validate_script_factuality(script_text, context)
-
-        # Engagement score
         engagement = score_engagement(script_text)
+        hook_score = score_hook_strength(script_text)
+        arc_name, arc_conf = detect_story_arc(script_text)
 
-        # Word count bonus (prefer scripts closer to target length)
         word_count = len(script_text.split())
-        target_words = 1500  # Target for 5-10 minute videos
+        target_words = 225
         length_score = 1.0 - min(1.0, abs(word_count - target_words) / target_words)
 
-        # Combined score (weighted)
+        # Penalize style violations
+        style_penalty = len(fact_check.get("style_violations", [])) * 0.05
+        style_score = max(0.0, 1.0 - style_penalty)
+
         combined = (
-            fact_check["score"] * 0.45 +
-            engagement["overall"] * 0.35 +
-            length_score * 0.20
+            fact_check["score"] * 0.30 +
+            engagement["overall"] * 0.15 +
+            hook_score * 0.20 +
+            arc_conf * 0.10 +
+            length_score * 0.10 +
+            style_score * 0.15
         )
 
         scored.append({
@@ -274,7 +446,11 @@ def select_best_script(candidates, context):
             "metadata": metadata,
             "factuality": fact_check,
             "engagement": engagement,
+            "hook_score": round(hook_score, 3),
+            "story_arc": arc_name,
+            "story_arc_confidence": round(arc_conf, 3),
             "length_score": round(length_score, 3),
+            "style_score": round(style_score, 3),
             "combined": round(combined, 3),
         })
 
@@ -371,6 +547,7 @@ def log_generation_metrics(script_text, metadata, fact_check, engagement, log_fi
         "factuality_score": fact_check["score"],
         "factuality_issues": len(fact_check["issues"]),
         "flagged_entities": len(fact_check["flagged_entities"]),
+        "style_violations": len(fact_check.get("style_violations", [])),
         "engagement_overall": engagement["overall"],
         "hook_strength": engagement["hook_strength"],
         "sentiment_arc": engagement["sentiment_arc"],
@@ -417,8 +594,8 @@ def store_generation_failure(
     Returns:
         bool: Success status
     """
-    # Only store if there are actual issues (factuality < 1.0 or engagement < 0.5)
-    if fact_check["score"] >= 1.0 and engagement["overall"] >= 0.5:
+    # Only store if there are actual issues (factuality < 1.0 or engagement < 0.7)
+    if fact_check["score"] >= 1.0 and engagement["overall"] >= 0.7:
         return False
     
     # Determine failure types
@@ -446,10 +623,12 @@ def store_generation_failure(
         if engagement["readability"] < 0.4:
             failure_details["engagement_issues"].append("poor_readability")
     
-    # Check word count issues (for pipeline: 150-300, for cs: 1500-2000)
+    # Check word count issues (pipeline scripts: 150-300, CS scripts: 1500-2000)
+    # Use word count as the discriminator since content_type is a variant key like "mystery_recap"
     word_count = len(script_text.split())
-    target_min = 150 if content_type in ["unknown", "pipeline"] else 1500
-    target_max = 300 if content_type in ["unknown", "pipeline"] else 2000
+    is_pipeline = word_count < 500
+    target_min = 150 if is_pipeline else 1500
+    target_max = 300 if is_pipeline else 2000
     
     if word_count < target_min or word_count > target_max:
         failure_types.append("word_count_out_of_range")
@@ -767,15 +946,17 @@ def get_learned_constraints(game_title="", content_type="pipeline"):
                     f"IGNORE these entities if spaCy marks them as locations (false positives): {', '.join(repeated_locs)}"
                 )
 
+    recommended_temp = None
     effective = get_effective_prompts()
     if effective.get("successful_samples", 0) >= 3:
         temps = effective.get("effective_temperatures", {})
         if temps:
             best_temp = max(temps.keys(), key=lambda k: temps[k])
             recommended_temp = float(best_temp.replace("temp_", ""))
-            positive_emphasis.append(
-                f"Use temperature around {recommended_temp} (proven effective in {temps[best_temp]} high-quality scripts)"
-            )
+            if recommended_temp:
+                positive_emphasis.append(
+                    f"Use temperature around {recommended_temp} (proven effective in {temps[best_temp]} high-quality scripts)"
+                )
 
         avg_wc = effective.get("avg_word_count", 0)
         wc_samples = effective.get("word_count_samples", 0)
@@ -793,7 +974,7 @@ def get_learned_constraints(game_title="", content_type="pipeline"):
     return {
         "negative_constraints": negative_constraints,
         "positive_emphasis": positive_emphasis,
-        "recommended_temp": recommended_temp if 'recommended_temp' in dir() else None,
+        "recommended_temp": recommended_temp,
         "source": "Based on analysis of last 7 days of generation data",
     }
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-ShortsForge Content Studio
+Cogitator Content Studio — DEPRECATED
 
-Secondary content generation from existing transcripts.
-Provides transcript analysis, script generation, TTS, and context management
+All functionality moved to cogitator.py as _cs_* private functions.
+This file is kept for reference; no code imports from this file.
 for creating additional content outside the main pipeline.
 """
 import os
@@ -13,13 +13,13 @@ import glob
 import shutil
 from typing import Dict, List, Optional, Tuple, Any
 
-# These imports resolve at runtime when called from shortsforge.py context
+# These imports resolve at runtime when called from cogitator.py context
 # where WORKSPACE, TRANSCRIPTS_DIR, SHORTS_DIR, etc. are defined.
 
 
 def get_cs_dirs():
     """Get Content Studio directory paths."""
-    from workflows.shortsforge import WORKSPACE, CONTENT_STUDIO_DIR, CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR, CS_SCRIPTS_DIR, CS_TTS_DIR
+    from workflows.cogitator import WORKSPACE, CONTENT_STUDIO_DIR, CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR, CS_SCRIPTS_DIR, CS_TTS_DIR
     return {
         'base': CONTENT_STUDIO_DIR,
         'transcripts': CS_TRANSCRIPTS_DIR,
@@ -31,7 +31,7 @@ def get_cs_dirs():
 
 def cs_import_data() -> Tuple[int, int]:
     """Import transcripts and shorts from pipeline to Content Studio."""
-    from workflows.shortsforge import CONTENT_STUDIO_DIR, CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR, TRANSCRIPTS_DIR, SHORTS_DIR
+    from workflows.cogitator import CONTENT_STUDIO_DIR, CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR, TRANSCRIPTS_DIR, SHORTS_DIR
     
     for d in (CONTENT_STUDIO_DIR, CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR):
         os.makedirs(d, exist_ok=True)
@@ -55,7 +55,7 @@ def cs_import_data() -> Tuple[int, int]:
 
 def cs_clear_data() -> int:
     """Clear all files from Content Studio."""
-    from workflows.shortsforge import CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR, CS_SCRIPTS_DIR, CS_TTS_DIR
+    from workflows.cogitator import CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR, CS_SCRIPTS_DIR, CS_TTS_DIR
     
     count = 0
     for d in (CS_TRANSCRIPTS_DIR, CS_SHORTS_DIR, CS_SCRIPTS_DIR, CS_TTS_DIR):
@@ -71,7 +71,7 @@ def cs_clear_data() -> int:
 
 def cs_find_all_transcripts() -> List[str]:
     """Find all transcripts in Content Studio (including Next folder)."""
-    from workflows.shortsforge import CS_TRANSCRIPTS_DIR
+    from workflows.cogitator import CS_TRANSCRIPTS_DIR
     
     patterns = [
         os.path.join(CS_TRANSCRIPTS_DIR, "*.json"),
@@ -90,7 +90,7 @@ def cs_find_all_transcripts() -> List[str]:
 
 def cs_read_transcript(transcript_path: str) -> Optional[str]:
     """Read a single transcript and return text."""
-    from workflows.shortsforge import log
+    from workflows.cogitator import log
     
     try:
         with open(transcript_path) as f:
@@ -108,7 +108,7 @@ def cs_read_transcript(transcript_path: str) -> Optional[str]:
 
 def cs_read_all_transcripts() -> Optional[str]:
     """Read all transcripts and combine text."""
-    from workflows.shortsforge import log
+    from workflows.cogitator import log
     
     transcripts = cs_find_all_transcripts()
     if not transcripts:

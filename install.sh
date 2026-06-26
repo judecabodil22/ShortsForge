@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# ShortsForge Installer
-# Automated setup for ShortsForge - YouTube Shorts Pipeline
+# Cogitator Installer
+# Automated setup for Cogitator - YouTube Shorts Pipeline
 #
 
 set -e
@@ -11,7 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}ShortsForge Installer${NC}"
+echo -e "${GREEN}Cogitator Installer${NC}"
 echo "==========================="
 echo ""
 
@@ -23,9 +23,9 @@ fi
 # Check Python version
 echo -e "${GREEN}Checking prerequisites...${NC}"
 python_version=$(python3 --version 2>&1 | awk '{print $2}')
-required_version="3.10"
+required_version="3.11"
 if [ "$(printf '%s\n' "$required_version" "$python_version" | sort -V | head -n1)" != "$required_version" ]; then
-    echo -e "${RED}Error: Python 3.10+ required. Found: $python_version${NC}"
+    echo -e "${RED}Error: Python 3.11+ required. Found: $python_version${NC}"
     exit 1
 fi
 echo -e "${GREEN}✓${NC} Python $python_version"
@@ -84,7 +84,7 @@ else
 fi
 
 # Make scripts executable
-chmod +x workflows/shortsforge.py 2>/dev/null || true
+chmod +x workflows/cogitator.py 2>/dev/null || true
 
 echo ""
 echo -e "${GREEN}==========================="
@@ -94,7 +94,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit .env with your API keys"
 echo "  2. Activate venv: source venv/bin/activate"
-echo "  3. Run: python workflows/shortsforge.py onboard"
-echo "  4. Start listener: python workflows/shortsforge.py listen"
+echo "  3. Run: python workflows/cogitator.py onboard"
+echo "  4. Start listener: python workflows/cogitator.py listen"
 echo ""
 echo "For help, see README.md"

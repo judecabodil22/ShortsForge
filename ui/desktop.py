@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Desktop Application
+Cogitator Desktop Application
 Side-by-side button/terminal interface for pipeline control.
 """
 import os
@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from datetime import datetime
 
-WORKSPACE = os.path.expanduser("~/ShortsForge")
+WORKSPACE = os.path.expanduser("~/Cogitator")
 if WORKSPACE not in sys.path:
     sys.path.insert(0, WORKSPACE)
 
@@ -28,10 +28,10 @@ except ImportError:
     PYQT6_AVAILABLE = False
 
 
-class ShortsForgeDesktop(QMainWindow):
+class CogitatorDesktop(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ShortsForge Desktop v2.0.0")
+        self.setWindowTitle("Cogitator Desktop v2.0.0")
         self.setMinimumSize(1000, 700)
         self.pipeline_running = False
         
@@ -72,7 +72,7 @@ class ShortsForgeDesktop(QMainWindow):
         layout.setContentsMargins(5, 5, 5, 5)
         frame.setLayout(layout)
         
-        title = QLabel("ShortsForge Desktop\nv2.0.0")
+        title = QLabel("Cogitator Desktop\nv2.0.0")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
@@ -402,18 +402,19 @@ class ShortsForgeDesktop(QMainWindow):
             
             
             voice = "Not set"
+            cream = "#F5DEB3"
             if os.path.exists(env_file):
                 with open(env_file) as f:
                     for line in f:
                         if line.startswith("TTS_VOICE="):
-                            cream = "#F5DEB3"
+                            voice = line.split("=", 1)[1].strip().strip('"')
             caramel = "#CD853F"
             sepia = "#704214"
             dark_brown = "#2E1C15"
 
             html = f"""
             <div style="font-family: 'Courier New', monospace; font-size: 14px; color: {cream}; padding: 15px; background-color: #0A0A0A; border: 1px solid {sepia};">
-                <h2 style="color: {caramel}; margin-top: 0; border-bottom: 1px solid {sepia}; padding-bottom: 8px;">SHORTSFORGE TERMINAL v{version}</h2>
+                <h2 style="color: {caramel}; margin-top: 0; border-bottom: 1px solid {sepia}; padding-bottom: 8px;">COGITATOR TERMINAL v{version}</h2>
                 <table style="width: 100%; margin-top: 15px;">
                     <tr><td style="color: {sepia}; width: 140px;">Pipeline Status:</td><td style="color: {cream}; font-weight: bold;">{status}</td></tr>
                 </table>
@@ -468,12 +469,12 @@ class ShortsForgeDesktop(QMainWindow):
             self.log(f"Starting local recordings pipeline ({len(video_files)} files)...")
             self.pipeline_running = True
             self.status_bar.showMessage(f"Processing {len(video_files)} local recording(s)...")
-            subprocess.Popen([sys.executable, "workflows/shortsforge.py", "run_local", recording_path], cwd=WORKSPACE)
+            subprocess.Popen([sys.executable, "workflows/cogitator.py", "run_local", recording_path], cwd=WORKSPACE)
         else:
             self.log("Starting full pipeline (YouTube)...")
             self.pipeline_running = True
             self.status_bar.showMessage("Running pipeline...")
-            subprocess.Popen([sys.executable, "workflows/shortsforge.py", "run"], cwd=WORKSPACE)
+            subprocess.Popen([sys.executable, "workflows/cogitator.py", "run"], cwd=WORKSPACE)
 
     def run_phase(self, phase):
         if self.pipeline_running:
@@ -523,7 +524,7 @@ class ShortsForgeDesktop(QMainWindow):
         self.log(f"Starting phase {phase} (YouTube)...")
         self.pipeline_running = True
         self.status_bar.showMessage(f"Running phase {phase}...")
-        subprocess.Popen([sys.executable, "workflows/shortsforge.py", "run", "-phase", phase], cwd=WORKSPACE)
+        subprocess.Popen([sys.executable, "workflows/cogitator.py", "run", "-phase", phase], cwd=WORKSPACE)
 
     def run_local_recordings(self):
         if self.pipeline_running:
@@ -550,7 +551,7 @@ class ShortsForgeDesktop(QMainWindow):
         self.log("Starting local recordings pipeline...")
         self.pipeline_running = True
         self.status_bar.showMessage(f"Processing {len(video_files)} local recording(s)...")
-        subprocess.Popen([sys.executable, "workflows/shortsforge.py", "run_local", recording_path], cwd=WORKSPACE)
+        subprocess.Popen([sys.executable, "workflows/cogitator.py", "run_local", recording_path], cwd=WORKSPACE)
 
     def stop_pipeline(self):
         self.log("Stop requested...")
@@ -650,12 +651,12 @@ class ShortsForgeDesktop(QMainWindow):
 
     def start_listener(self):
         self.log("Starting Telegram listener...")
-        subprocess.Popen([sys.executable, "workflows/shortsforge.py", "listen"], cwd=WORKSPACE)
+        subprocess.Popen([sys.executable, "workflows/cogitator.py", "listen"], cwd=WORKSPACE)
         self.log("Listener started in background")
 
     def stop_listener(self):
         self.log("Stopping Telegram listener...")
-        subprocess.run([sys.executable, "workflows/shortsforge.py", "stop"], cwd=WORKSPACE)
+        subprocess.run([sys.executable, "workflows/cogitator.py", "stop"], cwd=WORKSPACE)
         self.log("Listener stopped")
 
     def cleanup_files(self):
@@ -667,7 +668,7 @@ class ShortsForgeDesktop(QMainWindow):
                 for f in files:
                     try:
                         os.remove(f) if os.path.isfile(f) else None
-                    except:
+                    except OSError:
                         pass
             self.log("Files cleaned up.")
 
@@ -677,10 +678,10 @@ class ShortsForgeDesktop(QMainWindow):
         if os.path.exists(version_file):
             with open(version_file) as f:
                 version = f.read().strip()
-        self.log(f"ShortsForge v{version}")
+        self.log(f"Cogitator v{version}")
 
     def show_about(self):
-        QMessageBox.about(self, "About ShortsForge", "ShortsForge Desktop\nVersion 2.0.0\n\nYouTube Shorts Pipeline")
+        QMessageBox.about(self, "About Cogitator", "Cogitator Desktop\nVersion 2.0.0\n\nYouTube Shorts Pipeline")
 
     def closeEvent(self, event):
         if self.pipeline_running:
@@ -697,8 +698,8 @@ def main():
         sys.exit(1)
     
     app = QApplication(sys.argv)
-    app.setApplicationName("ShortsForge")
-    window = ShortsForgeDesktop()
+    app.setApplicationName("Cogitator")
+    window = CogitatorDesktop()
     window.show()
     sys.exit(app.exec())
 

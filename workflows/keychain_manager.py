@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-ShortsForge Keychain Manager
+Cogitator Keychain Manager
 Handles secure storage and retrieval of API keys using system keychain.
 """
 import os
 import keyring
 
-SERVICE_NAME = "ShortsForge"
+SERVICE_NAME = "Cogitator"
 
 
 def get_service_password(username):
@@ -59,8 +59,9 @@ def get_gemini_keys():
     Tries keychain first, then falls back to .env file for systemd/headless environments.
     """
     keys = []
+    max_iterations = 50
     i = 1
-    while True:
+    while i <= max_iterations:
         username = f"gemini-key-{i}"
         key = get_service_password(username)
         if key is None:
@@ -89,8 +90,9 @@ def get_gemini_keys():
 def get_groq_keys():
     """Retrieve all Groq API keys."""
     keys = []
+    max_iterations = 50
     i = 1
-    while True:
+    while i <= max_iterations:
         username = f"groq-key-{i}"
         key = get_service_password(username)
         if key is None:

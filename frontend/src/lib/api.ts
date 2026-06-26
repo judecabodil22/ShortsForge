@@ -1,6 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-const API_KEY_STORAGE_KEY = 'shortsforge_api_key'
+const API_KEY_STORAGE_KEY = 'cogitator_api_key'
 
 export function getStoredApiKey(): string | null {
   return localStorage.getItem(API_KEY_STORAGE_KEY)
@@ -52,8 +52,24 @@ async function fetchAPI<T>(endpoint: string, options: FetchOptions = {}): Promis
   const response = await fetch(`${API_BASE}${endpoint}`, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   })
+
+  // On 403 (Invalid API key), re-fetch the key and retry once
+  if (response.status === 403 && !skipAuth) {
+    const freshKey = await fetchApiKey()
+    if (freshKey) {
+      headers['X-API-Key'] = freshKey
+      const retry = await fetch(`${API_BASE}${endpoint}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      })
+      if (retry.ok) {
+        return retry.json()
+      }
+    }
+  }
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -65,7 +81,7 @@ async function fetchAPI<T>(endpoint: string, options: FetchOptions = {}): Promis
 
 export const getStatus = () => fetchAPI<{ pipeline: any; oauth_configured: boolean; workspace: string; game_title: string; parent_franchise: string }>('/api/status')
 
-export const runPipeline = (source: string = 'youtube') => fetchAPI<{ status: string }>(`/api/pipeline/run?source=${source}`, { method: 'POST' })
+export const runPipeline = (source: string = 'youtube', videoUrl: string = '') => fetchAPI<{ status: string }>('/api/pipeline/run', { method: 'POST', body: { source, video_url: videoUrl } })
 export const stopPipeline = () => fetchAPI<{ status: string }>('/api/pipeline/stop', { method: 'POST' })
 export const getPipelineSettings = () => fetchAPI<any>('/api/pipeline/settings')
 export const savePipelineSettings = (settings: any) => fetchAPI<{ status: string }>('/api/pipeline/settings', { method: 'POST', body: settings })
@@ -76,6 +92,7 @@ export const getContentPerformance = () => fetchAPI<any>('/api/metrics/content-p
 export const syncMetrics = () => fetchAPI<any>('/api/metrics/sync', { method: 'POST' })
 
 export const getScripts = () => fetchAPI<any>('/api/scripts')
+export const getScriptMetadata = (id: string) => fetchAPI<any>(`/api/scripts/${id}/metadata`)
 export const analyzeScript = (id: string) => fetchAPI<any>(`/api/scripts/${id}/analyze`, { method: 'POST' })
 
 export const getLearnings = () => fetchAPI<any>('/api/learnings')
@@ -102,3 +119,6 @@ export const createGameContext = (game: string) => fetchAPI<any>('/api/context/c
 export const mergeContext = (target_game: string, source_game: string) => fetchAPI<any>('/api/context/merge', { method: 'POST', body: { target_game, source_game } })
 export const clearContext = (game: string) => fetchAPI<any>('/api/context/clear', { method: 'POST', body: { game } })
 export const getSegmentRefs = (game: string) => fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/segments`)
+export const getScriptPrompt = () => fetchAPI<{ content: string }>('/api/prompts/script')
+export const saveScriptPrompt = (content: string) =>
+  fetchAPI<{ status: string }>('/api/prompts/script', { method: 'PUT', body: { content } })

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShortsForge Metrics Fetcher
+Cogitator Metrics Fetcher
 Fetches video performance metrics from YouTube Data API v3.
 """
 import os
@@ -13,14 +13,11 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, List, Any
 
-try:
-    from constants import calculate_performance_score, parse_duration
-except ImportError:
-    from workflows.constants import calculate_performance_score, parse_duration
+from workflows.constants import calculate_performance_score, parse_duration
 
-WORKSPACE = os.path.expanduser("~/ShortsForge")
+WORKSPACE = os.path.expanduser("~/Cogitator")
 CLIENT_SECRETS_FILE = os.path.join(WORKSPACE, "client_secret.json")
-OAUTH_CREDENTIALS_FILE = os.path.join(WORKSPACE, ".shortsforge", "youtube_oauth.json")
+OAUTH_CREDENTIALS_FILE = os.path.join(WORKSPACE, ".cogitator", "youtube_oauth.json")
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -29,7 +26,7 @@ log = logging.getLogger(__name__)
 try:
     from dotenv import load_dotenv
     load_dotenv()
-except:
+except ImportError:
     pass
 
 
@@ -253,8 +250,141 @@ def get_own_channel_id() -> Optional[str]:
         return None
 
 
+def _get_channel_id_from_env() -> Optional[str]:
+    """Get channel ID from env vars or derive from PLAYLIST_URL."""
+    channel_id = os.getenv("CHANNEL_ID", "")
+    if channel_id:
+        return channel_id
+    
+    playlist_url = os.getenv("PLAYLIST_URL", "")
+    if not playlist_url:
+        return None
+    
+    m = re.search(r'[?&]list=([^&]+)', playlist_url)
+    playlist_id = m.group(1) if m else ""
+    if not playlist_id:
+        return None
+    
+    api_key = get_api_key()
+    if not api_key:
+        return None
+    
+    url = f"https://www.googleapis.com/youtube/v3/playlists?part=snippet&id={playlist_id}&key={api_key}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read())
+        if data.get("items"):
+            return data["items"][0]["snippet"]["channelId"]
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_uploads_with_api_key(channel_id: str, days: int, max_results: int) -> List[Dict[str, Any]]:
+    """Fetch recent uploads using API key (no OAuth needed)."""
+    api_key = get_api_key()
+    if not api_key:
+        return []
+    
+    published_after = datetime.now(timezone.utc) - timedelta(days=days)
+    published_after_iso = published_after.strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    # Get the uploads playlist ID for the channel
+    url = f"https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id={channel_id}&key={api_key}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        log.warning(f"Failed to get channel uploads playlist: {e}")
+        return []
+    
+    if not data.get("items"):
+        return []
+    
+    uploads_playlist_id = data["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    
+    # List uploads
+    videos = []
+    next_page = ""
+    while next_page is not None and len(videos) < max_results:
+        url = (
+            f"https://www.googleapis.com/youtube/v3/playlistItems"
+            f"?part=snippet&playlistId={uploads_playlist_id}"
+            f"&maxResults={min(50, max_results - len(videos))}&key={api_key}"
+        )
+        if next_page:
+            url += f"&pageToken={next_page}"
+        
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read())
+        except Exception as e:
+            log.warning(f"Failed to list uploads: {e}")
+            break
+        
+        for item in data.get("items", []):
+            snippet = item.get("snippet", {})
+            published_at = snippet.get("publishedAt", "")
+            if published_at < published_after_iso:
+                next_page = None
+                break
+            videos.append({
+                "video_id": snippet.get("resourceId", {}).get("videoId", ""),
+                "title": snippet.get("title", ""),
+                "description": snippet.get("description", ""),
+                "published_at": published_at,
+                "thumbnail": snippet.get("thumbnails", {}).get("default", {}).get("url", ""),
+                "views": 0,
+                "likes": 0,
+                "comments": 0,
+                "engagement_ratio": 0.0,
+            })
+        
+        if next_page is None:
+            break
+        next_page = data.get("nextPageToken", "")
+    
+    if not videos:
+        return []
+    
+    # Fetch stats for all videos
+    video_ids = [v["video_id"] for v in videos if v["video_id"]]
+    for i in range(0, len(video_ids), 50):
+        chunk = video_ids[i:i+50]
+        url = f"https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id={','.join(chunk)}&key={api_key}"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                stats_data = json.loads(resp.read())
+        except Exception as e:
+            log.warning(f"Failed to fetch video stats: {e}")
+            continue
+        
+        stats_map = {item["id"]: item["statistics"] for item in stats_data.get("items", [])}
+        content_map = {item["id"]: item.get("contentDetails", {}) for item in stats_data.get("items", [])}
+        
+        for video in videos:
+            vid = video["video_id"]
+            if vid in stats_map:
+                stats = stats_map[vid]
+                views = int(stats.get("viewCount", 0))
+                likes = int(stats.get("likeCount", 0))
+                comments = int(stats.get("commentCount", 0))
+                total_engagement = likes + comments
+                engagement_ratio = (total_engagement / views * 100) if views > 0 else 0
+                video["views"] = views
+                video["likes"] = likes
+                video["comments"] = comments
+                video["engagement_ratio"] = round(engagement_ratio, 4)
+                video["duration_seconds"] = parse_duration(content_map.get(vid, {}).get("duration", "PT0S"))
+                video["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    
+    return videos
+
+
 def get_recent_uploads(days: int = 7, max_results: int = 50) -> List[Dict[str, Any]]:
-    """Get recent video uploads from user's channel using OAuth2.
+    """Get recent video uploads from user's channel.
+    
+    Tries OAuth2 first, falls back to API key + channel ID.
     
     Args:
         days: Number of days to look back (default 7)
@@ -263,6 +393,7 @@ def get_recent_uploads(days: int = 7, max_results: int = 50) -> List[Dict[str, A
     Returns:
         List of dicts with video_id, title, published_at, thumbnail, views, likes, comments
     """
+    # Try OAuth path first
     try:
         youtube = _get_oauth_service()
         
@@ -303,7 +434,7 @@ def get_recent_uploads(days: int = 7, max_results: int = 50) -> List[Dict[str, A
                 
                 if published_at < published_after_iso:
                     hit_cutoff = True
-                    break  # Stop collecting, but continue to stats fetch
+                    break
                 
                 videos.append({
                     'video_id': snippet.get('resourceId', {}).get('videoId', ''),
@@ -360,9 +491,17 @@ def get_recent_uploads(days: int = 7, max_results: int = 50) -> List[Dict[str, A
         
         return videos
         
-    except Exception as e:
-        log.warning(f"Could not fetch recent uploads via OAuth: {e}")
+    except Exception:
+        log.warning("OAuth not available, falling back to API key")
+    
+    # Fallback: use API key + channel ID derived from PLAYLIST_URL
+    channel_id = _get_channel_id_from_env()
+    if not channel_id:
+        log.warning("No channel ID available for API key fallback")
         return []
+    
+    log.info(f"Fetching uploads via API key for channel {channel_id}")
+    return _fetch_uploads_with_api_key(channel_id, days, max_results)
 
 
 def fetch_video_details(url_or_id: str) -> Optional[Dict[str, Any]]:
@@ -454,7 +593,7 @@ if __name__ == "__main__":
     
     api_key = get_api_key()
     if api_key:
-        print(f"API Key: {api_key[:20]}...{api_key[-6:]}")
+        print(f"API Key configured: {api_key[:6]}...{api_key[-4:]}")
     else:
         print("No API key configured")
     

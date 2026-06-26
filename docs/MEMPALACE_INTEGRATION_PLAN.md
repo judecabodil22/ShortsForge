@@ -1,6 +1,6 @@
 # MemPalace Integration Implementation Plan
 
-**ShortsForge** — AI-Powered YouTube Shorts Pipeline  
+**Cogitator** — AI-Powered YouTube Shorts Pipeline  
 **Integration:** MemPalace (Local AI Memory System)  
 **Date:** 2026-04-09  
 **Status:** Plan (Not Yet Implemented)
@@ -10,7 +10,7 @@
 ## 1. Executive Summary
 
 ### Purpose
-Integrate **MemPalace** (local AI memory system with 96.6% LongMemEval recall) into ShortsForge to provide persistent game-specific memory across pipeline runs.
+Integrate **MemPalace** (local AI memory system with 96.6% LongMemEval recall) into Cogitator to provide persistent game-specific memory across pipeline runs.
 
 ### Goals
 1. **Persistent Memory** — Character, relationship, and location data persists across all runs (pipeline + Content Studio)
@@ -89,7 +89,7 @@ Video → Transcript → Context Extraction
 ### New Files to Create
 
 ```
-/home/alph4r1us/ShortsForge/
+/home/alph4r1us/Cogitator/
 ├── game_data/
 │   └── mempalace/
 │       ├── __init__.py
@@ -109,7 +109,7 @@ Video → Transcript → Context Extraction
 
 | File | Changes |
 |------|---------|
-| `workflows/shortsforge.py` | Add MemPalace calls at 3 integration points |
+| `workflows/cogitator.py` | Add MemPalace calls at 3 integration points |
 | `content_studio/context/*.md` | No changes — continues working as before |
 
 ---
@@ -126,13 +126,13 @@ Video → Transcript → Context Extraction
 
 2. **Create memory directory**
    ```bash
-   mkdir -p /home/alph4r1us/ShortsForge/memory
+   mkdir -p /home/alph4r1us/Cogitator/memory
    ```
 
 3. **Initialize MemPalace**
    ```bash
-   cd /home/alph4r1us/ShortsForge
-   mempalace init memory --name ShortsForge
+   cd /home/alph4r1us/Cogitator
+   mempalace init memory --name Cogitator
    ```
 
 4. **Create Tell Me Why wing**
@@ -144,7 +144,7 @@ Video → Transcript → Context Extraction
 - MemPalace installed
 - `memory/` directory created and initialized
 - Tell Me Why wing configured
-- **Security/Permissions**: Ensure the user running the pipeline has read/write access to `/home/alph4r1us/ShortsForge/memory/` directory
+- **Security/Permissions**: Ensure the user running the pipeline has read/write access to `/home/alph4r1us/Cogitator/memory/` directory
 
 ---
 
@@ -154,7 +154,7 @@ Video → Transcript → Context Extraction
 
 ```python
 class MemPalaceManager:
-    """Wrapper for MemPalace operations in ShortsForge"""
+    """Wrapper for MemPalace operations in Cogitator"""
     
     def __init__(self, palace_path: str = None):
         """Initialize with memory path"""
@@ -218,7 +218,7 @@ class MemPalaceManager:
 
 #### Integration Point 1: After Transcription (Line ~2521)
 
-**Location:** `workflows/shortsforge.py`, function `run_pipeline()`
+**Location:** `workflows/cogitator.py`, function `run_pipeline()`
 
 **Current code (around line 2600):**
 ```python
@@ -246,7 +246,7 @@ else:
 
 #### Integration Point 2: Before Script Generation (Line ~2035)
 
-**Location:** `workflows/shortsforge.py`, function `phase_scripts()`
+**Location:** `workflows/cogitator.py`, function `phase_scripts()`
 
 **Current code (around line 2036):**
 ```python
@@ -283,7 +283,7 @@ else:
 
 #### Integration Point 3: After Script Validation (Line ~2074)
 
-**Location:** `workflows/shortsforge.py`, function `phase_scripts()`
+**Location:** `workflows/cogitator.py`, function `phase_scripts()`
 
 **Current code (around line 2074):**
 ```python
@@ -348,7 +348,7 @@ else:
 
 ```python
 MEMPALACE_CONFIG = {
-    'palace_path': '/home/alph4r1us/ShortsForge/memory',
+    'palace_path': '/home/alph4r1us/Cogitator/memory',
     'default_wing': 'tell_me_why',
     'auto_mine': True,           # Automatically mine transcripts
     'auto_recall': True,         # Automatically recall before generation

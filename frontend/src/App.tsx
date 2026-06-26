@@ -8,7 +8,7 @@ import Scripts from '@/pages/Scripts'
 import Metrics from '@/pages/Metrics'
 import Context from '@/pages/Context'
 import Settings from '@/pages/Settings'
-import Pipeline from '@/pages/Pipeline'
+import PromptEditor from '@/pages/PromptEditor'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -48,7 +48,7 @@ function AppRoutes() {
       <Route path="/metrics" element={<AnimatedPage><Metrics /></AnimatedPage>} />
       <Route path="/context" element={<AnimatedPage><Context /></AnimatedPage>} />
       <Route path="/settings" element={<AnimatedPage><Settings /></AnimatedPage>} />
-      <Route path="/pipeline" element={<AnimatedPage><Pipeline /></AnimatedPage>} />
+      <Route path="/prompts" element={<AnimatedPage><PromptEditor /></AnimatedPage>} />
     </Routes>
   )
 }

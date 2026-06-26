@@ -70,7 +70,7 @@ export default function Dashboard() {
     if (showLogs && logsEndRef.current && logsData?.logs?.length) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [showLogs])
+  }, [showLogs, logsData?.logs?.length])
 
   const baseline = metrics?.baseline || {}
 

@@ -91,7 +91,7 @@ Add interactive inline keyboard menus to the Telegram bot for easier user intera
 ## Technical Implementation
 
 ### Files to Modify
-1. `workflows/shortsforge.py` - Add callback handlers and menu generator
+1. `workflows/cogitator.py` - Add callback handlers and menu generator
 
 ### New Functions Required
 1. `get_main_menu()` - Returns InlineKeyboardMarkup
