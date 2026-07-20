@@ -2,6 +2,7 @@
 
 # Environment variables and secrets
 .env
+.env.backup*
 *.env.local
 *.env.production
 gemini_keys.txt
@@ -71,3 +72,7 @@ Thumbs.db
 # Node.js
 node_modules/
 frontend/node_modules/
+frontend/dist/
+
+# Backup files
+*.bak

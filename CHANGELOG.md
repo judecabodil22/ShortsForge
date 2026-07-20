@@ -4,6 +4,39 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.4.0 (2026-07-20)
+
+### TTS Overhaul
+- **Kokoro TTS Provider** (`workflows/pipeline/phase_tts_kokoro.py`): 18 mapped Gemini→Kokoro voices, zero-cost CPU-based, fully offline after first model download
+- **Config-driven TTS dispatch** (`workflows/pipeline/phase_tts.py`): `TTS_PROVIDER=kokoro|edge|gemini` env var selects backend with Gemini fallback
+- **Edge TTS backend**: Free Microsoft cloud TTS via `edge-tts` library
+
+### Scene Detection
+- **PySceneDetect integration** (`workflows/audio_analysis.py`): Content-aware scene boundary detection + `rank_scenes_by_action()` motion scoring via ffmpeg + uniform segment fallback
+
+### Highlight Ranking
+- **LLM Highlight Ranker** (`workflows/highlight_ranker.py`): Sends transcript segments to Groq (Llama 3.3 70B) or Gemini for virality scoring (0-100), returns sorted top segments
+
+### Analytics Feedback Loop
+- **YouTube Analytics sync** (`workflows/learning_engine.py`): `sync_and_train_from_youtube()` fetches YouTube metrics + retrains XGBoost model
+- **Optimal param derivation**: `update_optimal_params_from_youtube()` derives optimal duration, voices, and styles from performance data
+- **Post-pipeline auto-sync**: `pipeline_runner.py` auto-calls `sync_and_train_from_youtube()` after each pipeline run
+
+### Game Lore Fetch
+- **Game Lore Phase** (`workflows/pipeline/phase_lore.py`): Parallel Gemini+Groq dispatch asking for plot_summary, characters, locations, factions, key_events, lore_terms
+- **Phase 3a integration**: `phase_context.py` calls `phase_lore()` before transcript extraction
+- **`[GAME LORE]` prompt block**: Lore rendered as PLOT SUMMARY, FACTIONS, KEY EVENTS, LORE TERMS in script generation prompts (`prompts/base.j2` + f-string fallback)
+
+### Frontend Pipeline Progress
+- **4 visualization modules**: CogitatorArray (SVG gears), Construction (CSS layers), PhaseTimeline (timeline + live logs), DataCanvas (CSS grid fill)
+- **Random selection per run**: Orchestrator (`index.tsx`) picks a random viz per pipeline run via `useRef`
+- **Shuffle button**: Manual re-roll of active visualization
+- **Dashboard integration**: `Dashboard.tsx` now uses `<PipelineProgress>` component replacing inline progress bar
+
+### Import Chain Fixes
+- **Lazy imports**: `pipeline/__init__.py` uses `__getattr__`; `phase_context.py`, `pipeline_runner.py`, `phase_tts.py` use function-level lazy imports to avoid import-chain failures
+- **`score_context_relevance()` / `summarize_context()`**: Preserve `lore` field through all context processing
+
 ## 2.3.0 (2026-06-22)
 
 ### Security

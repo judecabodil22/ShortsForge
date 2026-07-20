@@ -1,0 +1,18 @@
+# Python
+*.py linguist-language=Python
+
+# TypeScript / React
+*.ts linguist-language=TypeScript
+*.tsx linguist-language=TypeScriptReact
+
+# Shell scripts
+*.sh linguist-language=Shell
+
+# Markdown
+*.md linguist-language=Markdown
+
+# Auto-detect text vs binary
+* text=auto
+
+# Force LF line endings for all text files
+* text eol=lf

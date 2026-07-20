@@ -1,12 +1,16 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Save, Trash2, RefreshCw, Settings as SettingsIcon, Server, Cpu } from 'lucide-react'
+import { Save, Trash2, RefreshCw, Palette, Settings as SettingsIcon, Server, Cpu } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { useTheme, themes } from '@/contexts/ThemeContext'
+import { useToast } from '@/contexts/ToastContext'
 import { getConfig, updateConfig, cleanupFiles, restartListener, getGames } from '@/lib/api'
 
 export default function Settings() {
   const queryClient = useQueryClient()
+  const { theme, setTheme } = useTheme()
+  const { toast } = useToast()
   const [formData, setFormData] = useState({
     GAME_TITLE: '',
     TTS_VOICE: '',
@@ -44,21 +48,21 @@ export default function Settings() {
     mutationFn: (data: typeof formData) => updateConfig(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] })
-      alert('Configuration saved successfully!')
+      toast('success', 'Configuration saved successfully!')
     },
-    onError: (error: Error) => alert(`Failed to save config: ${error.message}`)
+    onError: (error: Error) => toast('error', `Failed to save config: ${error.message}`)
   })
 
   const cleanupMutation = useMutation({
     mutationFn: cleanupFiles,
-    onSuccess: () => alert('Files cleaned up successfully!'),
-    onError: (error: Error) => alert(`Failed to cleanup files: ${error.message}`)
+    onSuccess: () => toast('success', 'Generated files cleaned up successfully!'),
+    onError: (error: Error) => toast('error', `Failed to cleanup files: ${error.message}`)
   })
 
   const restartMutation = useMutation({
     mutationFn: restartListener,
-    onSuccess: () => alert('Listener restarted successfully!'),
-    onError: (error: Error) => alert(`Failed to restart listener: ${error.message}`)
+    onSuccess: () => toast('success', 'Telegram listener restarted successfully!'),
+    onError: (error: Error) => toast('error', `Failed to restart listener: ${error.message}`)
   })
 
   const handleSave = (e: React.FormEvent) => {
@@ -188,6 +192,34 @@ export default function Settings() {
 
         <motion.div variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }}>
           <Card hoverable className="h-full">
+            <h3 className="text-lg font-display font-semibold text-white mb-6 flex items-center gap-2">
+              <Palette className="w-5 h-5 text-40k-gold" />
+              UI Theme
+            </h3>
+
+            <div className="grid grid-cols-1 gap-3 mb-8">
+              {themes.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTheme(t.id)}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg border transition-all duration-200 text-left ${
+                    theme === t.id
+                      ? 'border-40k-gold bg-40k-gold/10 text-white'
+                      : 'border-40k-border bg-40k-card text-gray-400 hover:border-40k-gold/50 hover:text-gray-200'
+                  }`}
+                >
+                  <span className="text-xl">{t.icon}</span>
+                  <div>
+                    <div className="font-medium text-sm">{t.name}</div>
+                    <div className="text-xs opacity-70">{t.description}</div>
+                  </div>
+                  {theme === t.id && (
+                    <span className="ml-auto text-40k-gold text-xs font-bold">ACTIVE</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
             <h3 className="text-lg font-display font-semibold text-white mb-6 flex items-center gap-2">
               <Server className="w-5 h-5 text-40k-gold" />
               System Tools

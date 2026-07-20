@@ -56,7 +56,7 @@ if [ -d ".git" ]; then
 else
     echo -e "${YELLOW}This doesn't appear to be a git repository.${NC}"
     echo "For fresh install, clone first:"
-    echo "  git clone https://github.com/judecabodil22/ShortsForge.git"
+    echo "  git clone https://github.com/judecabodil22/Cogitator.git"
     echo ""
     echo "Continuing with local setup..."
 fi

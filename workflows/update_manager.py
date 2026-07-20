@@ -18,9 +18,9 @@ from datetime import datetime
 # Configuration
 # ==============================
 
-VERSION_URL = "https://raw.githubusercontent.com/judecabodil22/ShortsForge/main/VERSION"
-RELEASES_API_URL = "https://api.github.com/repos/judecabodil22/ShortsForge/releases/latest"
-DOWNLOAD_URL_TEMPLATE = "https://github.com/judecabodil22/ShortsForge/archive/refs/tags/v{version}.zip"
+VERSION_URL = "https://raw.githubusercontent.com/judecabodil22/Cogitator/main/VERSION"
+RELEASES_API_URL = "https://api.github.com/repos/judecabodil22/Cogitator/releases/latest"
+DOWNLOAD_URL_TEMPLATE = "https://github.com/judecabodil22/Cogitator/archive/refs/tags/v{version}.zip"
 
 MAX_BACKUPS = 2
 

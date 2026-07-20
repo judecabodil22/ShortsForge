@@ -164,12 +164,12 @@ Transcripts:
     
     for i in range(len(keys)):
         key = keys[i]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         
         for attempt in range(3):
             try:
                 _rate_limit()
-                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     r = json.loads(resp.read())
                     text = r["candidates"][0]["content"]["parts"][0]["text"]
@@ -1005,12 +1005,12 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
     
     for i in range(len(keys)):
         key = keys[i]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         
         for attempt in range(3):
             try:
                 _rate_limit()
-                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     r = json.loads(resp.read())
                     text = r["candidates"][0]["content"]["parts"][0]["text"]

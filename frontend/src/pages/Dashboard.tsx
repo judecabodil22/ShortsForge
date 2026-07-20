@@ -1,16 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, Square, RefreshCw, FileText, Video, Zap, Activity, FolderOpen, Settings, X } from 'lucide-react'
+import { Play, Square, RefreshCw, FileText, Video, Zap, Activity, FolderOpen, Settings, X, Download, ExternalLink } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
-import { getMetricsSummary, getStatus, getLearningWeights, runPipeline, stopPipeline, syncMetrics, getLogs } from '@/lib/api'
+import { getMetricsSummary, getStatus, getLearningWeights, runPipeline, stopPipeline, syncMetrics, getLogs, downloadFromUrl } from '@/lib/api'
 import { formatNumber } from '@/lib/utils'
 import { AnimatedCounter } from '@/components/ui/AnimatedCounter'
+import { useToast } from '@/contexts/ToastContext'
+import PipelineProgress from '@/components/pipeline-progress'
 
 export default function Dashboard() {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [videoSource, setVideoSource] = useState<'youtube' | 'local'>('youtube')
   const [showLogs, setShowLogs] = useState(false)
+  const [downloadUrl, setDownloadUrl] = useState('')
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   const { data: status } = useQuery({
@@ -35,7 +39,7 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ['status'] })
     },
     onError: (error: Error) => {
-      alert(`Failed to run pipeline: ${error.message}`)
+      toast('error', `Failed to run pipeline: ${error.message}`)
     },
   })
 
@@ -45,7 +49,7 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ['status'] })
     },
     onError: (error: Error) => {
-      alert(`Failed to stop pipeline: ${error.message}`)
+      toast('error', `Failed to stop pipeline: ${error.message}`)
     },
   })
 
@@ -55,7 +59,18 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ['metrics-summary'] })
     },
     onError: (error: Error) => {
-      alert(`Failed to sync metrics: ${error.message}`)
+      toast('error', `Failed to sync metrics: ${error.message}`)
+    },
+  })
+
+  const downloadMutation = useMutation({
+    mutationFn: (url: string) => downloadFromUrl(url),
+    onSuccess: () => {
+      toast('success', 'Download started')
+      setDownloadUrl('')
+    },
+    onError: (error: Error) => {
+      toast('error', `Download failed: ${error.message}`)
     },
   })
 
@@ -117,6 +132,21 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Pipeline Error Banner */}
+      {status?.pipeline?.error && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-40k-red-bright/10 border border-40k-red-bright/30 rounded-lg px-5 py-4 flex items-start gap-3"
+        >
+          <div className="w-2 h-2 mt-1.5 rounded-full bg-40k-red-bright flex-shrink-0 animate-pulse" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-40k-red-bright">Pipeline Error</p>
+            <p className="text-xs text-gray-300 font-mono mt-1 break-words">{status.pipeline.error}</p>
+          </div>
+        </motion.div>
+      )}
 
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -192,39 +222,33 @@ export default function Dashboard() {
               </span>
             </div>
 
-            {/* Current Phase */}
-            {status?.pipeline?.running && (
-              <div className="p-3 bg-40k-dark rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-gray-400 text-sm">Current Phase</span>
-                  <span className="text-40k-gold text-sm font-medium capitalize">
-                    {status?.pipeline?.current_phase?.replace('_', ' ') || 'Starting...'}
-                  </span>
-                </div>
-                <div className="h-2 bg-40k-border rounded-full overflow-hidden">
-                  <motion.div 
-                    className="h-full bg-gradient-to-r from-40k-gold to-40k-crimson-bright"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${status?.pipeline?.progress || 0}%` }}
-                    transition={{ type: 'spring', stiffness: 50, damping: 20 }}
-                  />
-                </div>
-                <div className="flex justify-between mt-1 text-xs text-gray-500">
-                  <span>{status?.pipeline?.progress || 0}%</span>
-                  <span>{status?.pipeline?.message || ''}</span>
-                </div>
-              </div>
-            )}
+            <PipelineProgress status={status} />
 
-            {/* Error Display */}
-            {status?.pipeline?.error && (
-              <div className="p-3 bg-40k-red-bright/10 border border-40k-red-bright/30 rounded-lg">
-                <div className="flex items-center gap-2 text-40k-red-bright text-sm font-medium mb-1">
-                  ⚠️ Error
-                </div>
-                <p className="text-xs text-gray-300 font-mono">{status.pipeline.error}</p>
+            {/* URL Download */}
+            <div className="p-3 bg-40k-dark rounded-lg space-y-2">
+              <label className="text-xs text-gray-400 flex items-center gap-1">
+                <Download className="w-3 h-3" /> Download from URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={downloadUrl}
+                  onChange={(e) => setDownloadUrl(e.target.value)}
+                  placeholder="https://youtube.com/watch?v=..."
+                  className="flex-1 bg-40k-darkest border border-40k-border rounded px-3 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-40k-gold/50"
+                />
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => downloadUrl.trim() && downloadMutation.mutate(downloadUrl.trim())}
+                  disabled={!downloadUrl.trim() || downloadMutation.isPending}
+                  className="cyber-button px-3 py-1.5 text-xs flex items-center gap-1"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  Get
+                </motion.button>
               </div>
-            )}
+            </div>
 
             <div className="flex items-center justify-between p-3 bg-40k-dark rounded-lg">
               <span className="text-gray-400">OAuth</span>
@@ -399,9 +423,17 @@ export default function Dashboard() {
             
             <div className="flex-1 bg-40k-dark border border-40k-border rounded p-4 overflow-y-auto font-mono text-xs text-40k-gold-dim">
               {logsData?.logs?.length ? (
-                logsData.logs.map((log: string, i: number) => (
-                  <div key={i} className="mb-1 whitespace-pre-wrap">{log}</div>
-                ))
+                logsData.logs.map((log: string, i: number) => {
+                  const lower = log.toLowerCase()
+                  const colorClass = lower.includes('error') || lower.includes('failed')
+                    ? 'text-red-400'
+                    : lower.includes('warn')
+                    ? 'text-yellow-400'
+                    : lower.includes('complete') || lower.includes('success')
+                    ? 'text-green-400'
+                    : ''
+                  return <div key={i} className={`mb-1 whitespace-pre-wrap ${colorClass}`}>{log}</div>
+                })
               ) : (
                 <div className="text-gray-500 italic">No logs available...</div>
               )}

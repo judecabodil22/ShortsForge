@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
@@ -13,6 +13,7 @@ import {
   FileEdit
 } from 'lucide-react'
 import clsx from 'clsx'
+import { useTheme } from '@/contexts/ThemeContext'
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -24,12 +25,22 @@ const navItems = [
   { path: '/prompts', label: 'Prompts', icon: FileEdit },
 ]
 
+const SIDEBAR_STORAGE_KEY = 'cogitator_sidebar_collapsed'
+
 interface LayoutProps {
   children: React.ReactNode
 }
 
 export default function Layout({ children }: LayoutProps) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY)
+    return stored ? JSON.parse(stored) : false
+  })
+  const { currentTheme } = useTheme()
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, JSON.stringify(sidebarCollapsed))
+  }, [sidebarCollapsed])
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -53,8 +64,8 @@ export default function Layout({ children }: LayoutProps) {
               animate={{ opacity: 1 }}
               className="font-display font-bold text-xl"
             >
-              <span className="text-40k-gold">SHORTS</span>
-              <span className="text-40k-crimson-bright">FORGE</span>
+              <span className="text-40k-gold">COGIT</span>
+              <span className="text-40k-crimson-bright">ATOR</span>
             </motion.div>
           )}
         </div>
@@ -121,7 +132,7 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Footer */}
         <footer className="px-6 py-3 border-t border-40k-border bg-40k-dark/50 flex items-center justify-between text-xs text-gray-500">
-          <span>Cogitator v2.0.0 | Imperium Edition</span>
+          <span>Cogitator v2.0.0 | {currentTheme.name} Edition</span>
           <span>Workspace: ~/Cogitator</span>
         </footer>
       </main>

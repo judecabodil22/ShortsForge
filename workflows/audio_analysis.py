@@ -236,8 +236,121 @@ def _calculate_audio_virality_score(audio_features: Dict, scene: Dict) -> float:
     return min(score, 100.0)
 
 
+def detect_scenes_pyscenedetect(video_path: str) -> List[Dict]:
+    """Detect scenes using PySceneDetect (CPU-based, content-aware).
+
+    Returns list of {start, end, score} dicts sorted by score descending.
+    Falls back to uniform segments if PySceneDetect unavailable.
+    """
+    try:
+        from scenedetect import open_video, SceneManager
+        from scenedetect.detectors import ContentDetector
+    except ImportError:
+        return _fallback_uniform_scenes(video_path)
+
+    if not video_path or not os.path.exists(video_path):
+        return _fallback_uniform_scenes(video_path)
+
+    try:
+        video = open_video(video_path)
+        scene_manager = SceneManager()
+        scene_manager.add_detector(ContentDetector(threshold=30.0))
+        scene_manager.detect_scenes(video)
+        scene_list = scene_manager.get_scene_list()
+
+        if not scene_list:
+            return _fallback_uniform_scenes(video_path)
+
+        scenes = []
+        for start, end in scene_list:
+            duration = end.get_seconds() - start.get_seconds()
+            if duration < 15:
+                continue
+            scenes.append({
+                "start": start.get_seconds(),
+                "end": end.get_seconds(),
+                "duration": duration,
+                "score": min(duration * 1.5, 100),
+                "source": "pyscenedetect",
+            })
+
+        if not scenes:
+            return _fallback_uniform_scenes(video_path)
+
+        scenes.sort(key=lambda x: x["score"], reverse=True)
+        return scenes
+    except Exception:
+        return _fallback_uniform_scenes(video_path)
+
+
+def _fallback_uniform_scenes(video_path: str = None, segment_duration: int = 60) -> List[Dict]:
+    """Fallback: split video into uniform segments."""
+    if not video_path or not os.path.exists(video_path):
+        return []
+
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=15,
+        )
+        total_duration = float(result.stdout.strip())
+    except Exception:
+        return []
+
+    scenes = []
+    for t in range(0, int(total_duration), segment_duration):
+        start = t
+        end = min(t + segment_duration, total_duration)
+        dur = end - start
+        if dur >= 15:
+            scenes.append({
+                "start": start,
+                "end": end,
+                "duration": dur,
+                "score": 50,
+                "source": "uniform",
+            })
+
+    return scenes
+
+
+def rank_scenes_by_action(video_path: str, scenes: List[Dict]) -> List[Dict]:
+    """Rank scenes by action/motion intensity using ffmpeg motion vectors.
+
+    Adds 'action_score' (0-100) to each scene based on motion activity.
+    """
+    for scene in scenes:
+        start = scene.get("start", 0)
+        end = scene.get("end", 0)
+        scene["action_score"] = _estimate_motion(video_path, start, end)
+
+    scenes.sort(key=lambda x: x.get("action_score", 0), reverse=True)
+    return scenes
+
+
+def _estimate_motion(video_path: str, start: float, end: float) -> float:
+    """Estimate motion intensity via ffmpeg scene detection on segment."""
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-ss", str(start), "-i", video_path,
+            "-t", str(end - start),
+            "-vf", "select='gt(scene,0.1)',showinfo",
+            "-vsync", "vfr", "-f", "null", "-",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        change_count = result.stderr.count("pts_time:")
+        duration = end - start
+        if duration <= 0:
+            return 0
+        density = change_count / duration
+        return min(density * 50, 100)
+    except Exception:
+        return 50
+
+
 def enhance_scene_selection(scenes: List[Dict], video_path: str = None) -> List[Dict]:
-    """Enhance scene selection with audio analysis."""
+    """Enhance scene selection with audio analysis + scene detection."""
     if not video_path or not os.path.exists(video_path):
         for scene in scenes:
             scene['audio_virality_score'] = scene.get('drama_score', 50)

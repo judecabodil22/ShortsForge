@@ -500,12 +500,16 @@ def score_context_relevance(context, transcript_text, max_items=8):
         scored.sort(key=lambda x: x[1], reverse=True)
         return [item for item, _ in scored[:max_items]]
 
-    return {
+    result = {
         "characters": filter_and_score(context.get("characters", [])),
         "locations": filter_and_score(context.get("locations", [])),
         "key_terms": filter_and_score(context.get("key_terms", [])),
         "relationships": filter_and_score(context.get("relationships", [])),
     }
+    lore = context.get("lore")
+    if lore:
+        result["lore"] = lore
+    return result
 
 
 def summarize_context(context, max_per_category=10):
@@ -515,7 +519,7 @@ def summarize_context(context, max_per_category=10):
     Prioritizes: recent appearance, frequency, plot importance.
     Maintains max N items per category.
     """
-    return {
+    result = {
         "characters": context.get("characters", [])[:max_per_category],
         "locations": context.get("locations", [])[:max_per_category],
         "key_terms": context.get("key_terms", [])[:max_per_category],
@@ -523,6 +527,10 @@ def summarize_context(context, max_per_category=10):
         "processed_transcripts": context.get("processed_transcripts", []),
         "previous_scripts": context.get("previous_scripts", []),
     }
+    lore = context.get("lore")
+    if lore:
+        result["lore"] = lore
+    return result
 
 
 # ── Quality Metrics Logging (Phase 5) ────────────────────────────────────────

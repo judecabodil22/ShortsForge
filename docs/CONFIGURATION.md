@@ -11,19 +11,22 @@ All configuration is done via the `.env` file.
 | `TELEGRAM_BOT_TOKEN` | Token from @BotFather | `123456789:ABCdefGHIjklMNOpqrsTUVwxyz` |
 | `TELEGRAM_CHAT_ID` | Your Telegram chat ID | `123456789` |
 | `GEMINI_API_KEY` | API key from Google AI Studio | `AIza...` |
+| `GROQ_API_KEY` | Groq API key for highlight ranking + Gemini fallback (free via console.groq.com) | `gsk_...` |
 
 ### Optional Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PLAYLIST_URL` | (none) | YouTube playlist to process |
-| `TTS_VOICE` | `Vindemiatrix` | Gemini TTS voice name |
+| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (CPU/free/offline), `edge` (free cloud), or `gemini` (API) |
+| `TTS_VOICE` | `Vindemiatrix` | TTS voice name (Gemini and Kokoro voice mappings supported) |
 | `TTS_STYLE` | (none) | Style instruction for TTS |
 | `GAME_TITLE` | (none) | Game title for script context |
 | `CLIPS_PER_HOUR` | `5` | Number of clips to generate per hour |
 | `PLAYLIST_INDEX` | `1` | Which video to download from playlist |
 | `WORKSPACE` | (auto) | Working directory path |
 | `RECORDING_PATH` | `~/Videos/Recordings/` | Local recordings folder |
+| `WHISPER_MODEL` | `medium` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
 
 ## Telegram Commands
 
@@ -64,9 +67,21 @@ All configuration is done via the `.env` file.
 
 ## TTS Voices
 
-Available Gemini TTS voices (default: Vindemiatrix):
+### Provider Selection
 
-### Female Voices
+Set `TTS_PROVIDER` in `.env` to choose the backend:
+
+| Provider | Cost | Requirement | Offline | Voices |
+|----------|------|-------------|---------|--------|
+| `kokoro` | Free | CPU (no GPU needed) | Yes (after first download) | 54 |
+| `edge` | Free | Internet | No | 200+ (Microsoft) |
+| `gemini` | API quota | Gemini API key + Internet | No | 29 |
+
+### Gemini Voices (used when `TTS_PROVIDER=gemini`)
+
+Default: `Vindemiatrix`.
+
+#### Female Voices
 
 | Voice | Style |
 |-------|-------|
@@ -85,7 +100,7 @@ Available Gemini TTS voices (default: Vindemiatrix):
 | **Vindemiatrix** | Gentle and kind |
 | **Achernar** | Soft and gentle |
 
-### Male Voices
+#### Male Voices
 
 | Voice | Style |
 |-------|-------|
@@ -105,6 +120,12 @@ Available Gemini TTS voices (default: Vindemiatrix):
 | **Schedar** | Even and balanced |
 | **Umbriel** | Easy-going and calm |
 | **Zubenelgenubi** | Casual and conversational |
+
+### Kokoro Voices (used when `TTS_PROVIDER=kokoro`)
+
+Kokoro uses a mapping layer to match Gemini voice names to Kokoro's built-in voices.
+18 voices are mapped including: af_sky, af_bella, af_sarah, am_adam, am_michael, bf_emma, bf_isabella, bm_george, etc.
+Set `TTS_VOICE` to a Gemini voice name (e.g. `Puck`, `Vindemiatrix`) and it maps to the closest Kokoro equivalent.
 
 ### Style Instructions
 

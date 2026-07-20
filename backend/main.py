@@ -17,7 +17,7 @@ from typing import Optional, Any, Tuple
 WORKSPACE = os.path.expanduser("~/Cogitator")
 sys.path.insert(0, WORKSPACE)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -49,11 +49,11 @@ from workflows.ws_manager import ConnectionManager, manager as ws_manager, pipel
 # SECURITY CONFIGURATION
 # ============================================================================
 
-SECRET_KEY_FILE = "/home/alph4r1us/Cogitator/.cogitator/api_key"
+SECRET_KEY_FILE = os.path.join(os.path.expanduser("~/.cogitator"), "api_key")
 
 def load_or_create_api_key():
     """Load existing API key or create a new one"""
-    os.makedirs(os.path.expanduser("~/Cogitator/.cogitator"), exist_ok=True)
+    os.makedirs(os.path.dirname(SECRET_KEY_FILE), exist_ok=True)
     key_file = SECRET_KEY_FILE
     if os.path.exists(key_file):
         with open(key_file, "r") as f:
@@ -520,7 +520,7 @@ async def save_pipeline_settings_endpoint(settings: dict, _: bool = Depends(veri
 
 
 @app.get("/api/pipeline/logs")
-async def get_pipeline_logs():
+async def get_pipeline_logs(_: bool = Depends(verify_api_key)):
     """Get pipeline execution logs"""
     try:
         if os.path.exists(PIPELINE_LOG):
@@ -990,7 +990,7 @@ async def save_script_prompt(request: Request, _: bool = Depends(verify_api_key)
 
 @app.put("/api/context/{game}/{item_type}/{item_id}")
 @limiter.limit("10/minute")
-async def update_context_item(request: Request, game: str, item_type: str, item_id: str, data: dict, _: bool = Depends(verify_api_key)):
+async def update_context_item(request: Request, game: str, item_type: str, item_id: str, _: bool = Depends(verify_api_key), data: dict = Body(...)):
     """Update a context item"""
     # Sanitize inputs
     game_title = sanitize_input(game, max_length=100)
@@ -1150,7 +1150,7 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
     return {"status": "started"}
 
 @app.get("/api/logs")
-async def get_logs(lines: int = 100):
+async def get_logs(_: bool = Depends(verify_api_key), lines: int = 100):
     """Get pipeline logs"""
     # Validate lines parameter
     if lines < 1:
@@ -1433,4 +1433,4 @@ async def serve_frontend(full_path: str):
 if __name__ == "__main__":
     import uvicorn
     print("Starting Cogitator Backend on http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

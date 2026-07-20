@@ -30,6 +30,15 @@ google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.4.0
 google-api-python-client>=2.0.0
 
+# TTS Providers
+# kokoro: CPU-based TTS, free, offline after first download
+kokoro>=0.8.0
+# edge-tts: Free Microsoft cloud TTS
+edge-tts>=6.0.0
+
+# Scene Detection
+scenedetect>=1.0.0
+
 # Optional: For better GPU acceleration
 # torch>=2.0.0
 # torchaudio>=2.0.0

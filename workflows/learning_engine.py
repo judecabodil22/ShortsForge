@@ -860,3 +860,159 @@ def train_virality_model(scripts_data: List[Dict]) -> Dict:
     """
     predictor = get_virality_predictor()
     return predictor.train(scripts_data)
+
+
+def get_learned_hook_examples(limit=3):
+    """Return top-performing hook examples from the learning engine.
+    
+    Queries the performance database for high-scoring scripts and extracts
+    their opening lines as hook pattern examples.
+    
+    Args:
+        limit: Maximum number of hook examples to return
+    
+    Returns:
+        List of hook text strings (opening lines of top scripts)
+    """
+    try:
+        from workflows.performance_database import get_successful_scripts
+        scripts = get_successful_scripts(limit=15)
+        if not scripts:
+            return []
+        hooks = []
+        for s in scripts:
+            text = s.get("script_text", "") or ""
+            lines = text.strip().split('\n')
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith(("TITLE:", "DESCRIPTION:", "TAGS:", "#", "=")):
+                    continue
+                if len(stripped) > 15 and len(stripped) < 120:
+                    hooks.append(stripped.rstrip('.!?')[:80])
+                    break
+        seen = set()
+        unique = []
+        for h in hooks:
+            normalized = h.lower().strip()
+            if normalized not in seen:
+                seen.add(normalized)
+                unique.append(h)
+        return unique[:limit]
+    except Exception:
+        return []
+
+
+def sync_and_train_from_youtube(days: int = 30, max_results: int = 50) -> Dict:
+    """Fetch YouTube Analytics, then retrain virality model with real performance data.
+
+    This is the core of the analytics feedback loop.
+    Call this after each pipeline run or on a schedule.
+
+    Returns dict with sync_results and training_results.
+    """
+    try:
+        from workflows.performance_database import sync_youtube_metrics, get_successful_scripts
+    except ImportError:
+        from performance_database import sync_youtube_metrics, get_successful_scripts
+
+    sync_result = sync_youtube_metrics(days=days, max_results=max_results)
+
+    scripts = get_successful_scripts(limit=100, min_views=10)
+    if not scripts:
+        return {
+            'sync_result': sync_result,
+            'training_result': {'success': False, 'error': 'No successful scripts found'},
+        }
+
+    scripts_data = []
+    for s in scripts:
+        features_str = s.get("features", "{}")
+        if isinstance(features_str, str):
+            try:
+                features = json.loads(features_str)
+            except (json.JSONDecodeError, TypeError):
+                features = {}
+        else:
+            features = features_str or {}
+
+        perf_score = s.get("performance_score", 0)
+        views = s.get("views", 0)
+
+        if views > 0 and perf_score > 0:
+            scripts_data.append({
+                "features": features,
+                "performance_score": perf_score,
+            })
+
+    training_result = train_virality_model(scripts_data)
+
+    return {
+        'sync_result': sync_result,
+        'training_result': training_result,
+        'scripts_analyzed': len(scripts_data),
+    }
+
+
+def update_optimal_params_from_youtube(days: int = 30) -> Dict:
+    """Update _LEARNING_OPTIMIZED_PARAMS based on YouTube performance data.
+
+    Analyzes top-performing clips to determine:
+    - optimal_duration_range
+    - content_type_weight
+    - top_performing_voices
+    """
+    try:
+        from workflows.performance_database import get_successful_scripts
+    except ImportError:
+        from performance_database import get_successful_scripts
+
+    scripts = get_successful_scripts(limit=50, min_views=10)
+    if not scripts:
+        return {"success": False, "error": "No data"}
+
+    durations = []
+    voices = []
+    styles = []
+
+    for s in scripts:
+        if s.get("duration", 0) > 0:
+            durations.append(s["duration"])
+        features_str = s.get("features", "{}")
+        if isinstance(features_str, str):
+            try:
+                features = json.loads(features_str)
+            except (json.JSONDecodeError, TypeError):
+                features = {}
+        else:
+            features = features_str or {}
+        if features.get("voice"):
+            voices.append(features["voice"])
+        if features.get("style"):
+            styles.append(features["style"])
+
+    optimal_params = {}
+
+    if durations:
+        avg_dur = sum(durations) / len(durations)
+        optimal_params["optimal_duration_range"] = (
+            max(20, int(avg_dur - 15)),
+            int(avg_dur + 15),
+        )
+
+    if voices:
+        from collections import Counter
+        voice_counts = Counter(voices)
+        optimal_params["top_voices"] = [v for v, _ in voice_counts.most_common(5)]
+
+    if styles:
+        from collections import Counter
+        style_counts = Counter(styles)
+        optimal_params["top_styles"] = [s for s, _ in style_counts.most_common(5)]
+
+    return {
+        "success": True,
+        "optimal_params": optimal_params,
+        "samples": len(scripts),
+    }

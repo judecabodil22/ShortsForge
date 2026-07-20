@@ -35,6 +35,8 @@ export default function Metrics() {
 
   const baseline = summary?.baseline || {}
 
+  const hasNoData = (videos?.videos || []).length === 0
+
   // Deduplicate by youtube_id — keep the latest metrics row per video
   const seenIds = new Set<string>()
   const uniqueVideos = (videos?.videos || [])
@@ -125,6 +127,18 @@ export default function Metrics() {
         />
       </motion.div>
 
+      {hasNoData ? (
+        <motion.div variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }}>
+          <Card>
+            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+              <TrendingUp className="w-16 h-16 mb-4 opacity-20" />
+              <p className="text-lg font-medium text-gray-400">No metrics yet</p>
+              <p className="text-sm mt-2">Upload videos and run the pipeline to see performance data.</p>
+            </div>
+          </Card>
+        </motion.div>
+      ) : (
+        <>
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Views Chart */}
@@ -253,6 +267,8 @@ export default function Metrics() {
         </div>
         </Card>
       </motion.div>
+        </>
+      )}
     </motion.div>
   )
 }

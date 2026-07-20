@@ -31,6 +31,9 @@ dependencies = [
     "google-auth-oauthlib>=1.0.0",
     "google-auth-httplib2>=0.4.0",
     "google-api-python-client>=2.0.0",
+    "kokoro>=0.8.0",
+    "edge-tts>=6.0.0",
+    "scenedetect>=1.0.0",
 ]
 
 [project.optional-dependencies]

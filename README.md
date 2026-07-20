@@ -77,10 +77,11 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 |-------|------|-------------|--------|
 | **1** | Download | Downloads videos from YouTube playlist | `streams/` |
 | **2** | Transcribe | Converts audio to text with timestamps | `transcripts/` |
-| **3** | Context | Extracts characters, locations, relationships | `Context/` |
-| **4** | Scripts | Generates AI-powered narration scripts | `scripts/` |
-| **5** | Clip | Frame-accurate cutting via PySceneDetect, portrait 9:16 crop, caption burn-in, HEVC VAAPI auto-detection, audio normalization | `shorts/` |
-| **6** | TTS | Creates AI voice narration with subtitles | `tts/` |
+| **3a** | Lore | Fetches game lore (plot, characters, factions, events) via parallel LLM | `Context/` |
+| **3b** | Context | Extracts characters, locations, relationships from transcript | `Context/` |
+| **4** | Scripts | Generates AI-powered narration scripts (includes `[GAME LORE]` block) | `scripts/` |
+| **5** | Clip | PySceneDetect scene detection, portrait 9:16 crop, caption burn-in, HEVC VAAPI auto-detection, highlight ranking | `shorts/` |
+| **6** | TTS | Config-driven voice narration (Kokoro/Edge/Gemini) with subtitles | `tts/` |
 
 ### Web Interface
 
@@ -93,6 +94,7 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 - **Graph Visual Settings**: Configurable link distance, repulsion, collision for easy viewing
 - **Graph Visual Themes**: 6 switchable themes (Star Chart, Brain Neurons, Digital Circuits, Hologram, Code Matrix, World Map)
 - **Zoom-Based Labels**: Node labels appear only when zoomed in for clarity
+- **Pipeline Progress Visualization**: 4 randomly-selected animated viz modules (Cogitator Array, Construction, Phase Timeline, Data Canvas) replaced inline progress bar
 
 ### Learning Engine
 
@@ -104,6 +106,26 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 - **Thompson Sampling**: Optimize content type selection (70/30 explore/exploit)
 - **Virality Prediction**: ML model predicting short performance
 - **Content Type Analysis**: Compare performance by script style
+- **YouTube Analytics Sync**: Auto-fetches metrics and retrains XGBoost model post-pipeline
+- **Optimal Parameter Derivation**: Learns best duration, voices, styles from historical performance
+
+### Highlight Ranking
+
+- **LLM-based Virality Scoring**: Transcript segments scored 0-100 by Groq (Llama 3.3 70B) or Gemini
+- **Sorted Top Segments**: Returns highest-scoring segments for clip extraction
+- **Free-tier LLM**: No-cost inference via Groq with Gemini fallback
+
+### Scene Detection
+
+- **PySceneDetect Integration**: Content-aware scene boundary detection (CPU-based, no GPU needed)
+- **Motion Scoring**: FFmpeg-derived action scores for ranking scenes
+- **Uniform Fallback**: Even segment distribution when detection fails
+
+### Game Lore Fetch
+
+- **Phase 3a — Lore Extraction**: Parallel dispatch to Gemini + Groq fetches plot summary, characters, factions, key events, lore terms
+- **`[GAME LORE]` Prompt Block**: Lore added to script generation prompts as PLOT SUMMARY, FACTIONS, KEY EVENTS, LORE TERMS
+- **Never Contradicts Transcript**: Lore enriches context but transcript takes precedence
 
 ### Metrics System
 
@@ -160,13 +182,20 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 | `context_manager.py` | Context storage and retrieval for scripts |
 | `context_manager_v2.py` | Enhanced context with graph visualization |
 | `metrics_fetcher.py` | YouTube API integration for video metrics |
-| `learning_engine.py` | ML-based performance prediction and optimization |
+| `learning_engine.py` | ML-based performance prediction and optimization (includes YouTube analytics sync) |
 | `performance_database.py` | SQLite storage for scripts, videos, metrics, learnings |
 | `script_validation.py` | Script quality scoring and content type detection |
-| `audio_analysis.py` | Audio feature extraction for clip selection |
+| `audio_analysis.py` | Audio feature extraction + PySceneDetect scene detection + motion scoring |
+| `highlight_ranker.py` | LLM-based virality scoring for transcript segments |
 | `llm_provider.py` | LLM abstraction layer (Gemini + Groq fallback) |
 | `keychain_manager.py` | Secure API key storage in system keychain |
 | `constants.py` | Centralized configuration (voices, styles, scoring, rotation) |
+| `pipeline/__init__.py` | Lazy-loaded pipeline phase stubs (import-chain safe) |
+| `pipeline/pipeline_runner.py` | Pipeline orchestrator with auto YouTube sync after run |
+| `pipeline/phase_tts.py` | Config-driven TTS dispatch (Kokoro / Edge / Gemini) |
+| `pipeline/phase_tts_kokoro.py` | Kokoro TTS provider (CPU-based, free, offline) |
+| `pipeline/phase_lore.py` | Game lore fetch via parallel Gemini+Groq |
+| `pipeline/phase_context.py` | Phase 3 — calls lore fetch before transcript extraction |
 | `backend/main.py` | FastAPI web server with REST API |
 | `core/round_robin.py` | Shuffled round-robin engine for voice/style/Groq rotation |
 | `core/config.py` | `.env` file management utilities |
@@ -196,9 +225,12 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 
 | Service | Required | Purpose |
 |---------|----------|---------|
-| **Google Gemini** | Yes | Script generation + TTS |
+| **Google Gemini** | Yes | Script generation + TTS fallback |
+| **Groq** | Recommended | Highlight ranking + Gemini fallback (free tier via Llama 3.3 70B) |
 | **YouTube Data API** | Yes | Video metrics |
 | **Telegram Bot** | Optional | Bot control |
+
+> **TTS Note**: Gemini API is no longer required for TTS. Set `TTS_PROVIDER=kokoro` (CPU, free, offline) or `TTS_PROVIDER=edge` (free cloud via edge-tts) to avoid TTS API costs.
 
 ---
 
@@ -209,7 +241,7 @@ You can use the automated `install.sh` script or follow the manual steps below.
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/judecabodil22/ShortsForge.git
+git clone https://github.com/judecabodil22/Cogitator.git
 cd Cogitator
 ```
 
@@ -281,8 +313,12 @@ GEMINI_API_KEY=AIzaSy...
 ### Optional Variables
 
 ```bash
-# AI Fallback (used when Gemini is unavailable)
+# AI Fallback (used when Gemini is unavailable, also for highlight ranking)
 GROQ_API_KEY=gsk_...
+
+# TTS Provider: "gemini" (API), "kokoro" (CPU/free/offline), or "edge" (free cloud)
+# Kokoro recommended — zero API cost, 54 voices, offline after first download
+TTS_PROVIDER=kokoro
 
 # Telegram Bot
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
@@ -296,6 +332,7 @@ CLIPS_PER_HOUR=5
 # Advanced
 SRT_MAX_WORDS=10
 PLAYLIST_INDEX=1
+WHISPER_MODEL=medium
 ```
 
 ### Getting API Keys
@@ -457,6 +494,7 @@ The Context page features an interactive force-directed graph:
 | `/api/context/{game}` | GET | Game context |
 | `/api/context/{game}/graph` | GET | Game knowledge graph |
 | `/api/context/all/graph` | GET | All games combined graph |
+| `/api/logs` | GET | Pipeline logs (query param: `lines=100`) |
 | `/api/config` | GET/POST | Configuration |
 | `/ws` | WS | WebSocket for real-time updates (status + log streaming) |
 
@@ -618,8 +656,10 @@ Cogitator/
 
 | Service | Purpose | Integration |
 |---------|---------|-------------|
-| **Google Gemini** | Script generation | API |
-| **Google Gemini TTS** | Voice synthesis | API |
+| **Google Gemini** | Script generation + TTS fallback | API |
+| **Groq (Llama 3.3 70B)** | Highlight ranking + Gemini fallback | API (free tier) |
+| **Kokoro TTS** | CPU-based voice synthesis (free, offline) | Local model |
+| **Edge TTS** | Microsoft cloud voice synthesis (free) | edge-tts |
 | **YouTube Data API** | Video metrics | API + OAuth |
 | **YouTube Data API** | Video downloading | yt-dlp |
 | **Telegram Bot** | Interactive control | Bot API |
@@ -630,6 +670,9 @@ Cogitator/
 |------------|---------|
 | **Faster-Whisper** | Speech-to-text |
 | **stable-ts** | Alternative STT |
+| **Kokoro TTS** | CPU-based TTS (free, offline, 54 voices) |
+| **Edge TTS** | Microsoft cloud TTS (free, `edge-tts`) |
+| **PySceneDetect** | Content-aware scene boundary detection |
 
 ### ML & Data Science
 
@@ -697,8 +740,10 @@ Path traversal protections are enforced on all file-related endpoints. Thread-sa
 - Check YouTube playlist is public
 
 **Q: TTS not generating**
-- Ensure `TTS_VOICE` is valid (use `/voices` command)
-- Check API key has TTS quota
+- Check `TTS_PROVIDER` is set correctly (kokoro/edge/gemini)
+- If `TTS_PROVIDER=kokoro`, first run downloads the model (~500MB) — may take a minute
+- If `TTS_PROVIDER=gemini`, ensure `TTS_VOICE` is valid and API key has quota
+- If `TTS_PROVIDER=edge`, ensure `edge-tts` is installed (`pip install edge-tts`)
 
 **Q: Telegram bot not responding**
 - Verify `TELEGRAM_BOT_TOKEN` in `.env`
@@ -710,6 +755,11 @@ Path traversal protections are enforced on all file-related endpoints. Thread-sa
 - Ensure the Short exists on YouTube and appears in recent uploads
 - Run sync via API: `curl -X POST http://localhost:8000/api/metrics/sync -H "X-Goog-Api-Key: YOUR_KEY"`
 - Check the database: stored YouTube IDs must match actual YouTube video IDs
+
+**Q: Scene detection produces poor cuts**
+- PySceneDetect is CPU-based and content-aware — try different content types (videos with clear scene changes work best)
+- Falls back to uniform segments if detection fails
+- Verify FFmpeg is installed and up to date
 
 ### Debug Mode
 

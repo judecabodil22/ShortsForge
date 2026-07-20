@@ -579,9 +579,15 @@ export default function Graph() {
     ctx.setLineDash([])
   }, [highlightLinks, showImplicitEdges, graphSettings.visualTheme])
 
+  // Resolve the effective game key for mutations (use node's game_key in All mode)
+  const effectiveGame = useMemo(() => {
+    if (selectedGame !== '__all__') return selectedGame
+    return selectedNode?.game_key || selectedGame
+  }, [selectedGame, selectedNode])
+
   const updateMutation = useMutation({
     mutationFn: ({ itemType, itemId, data }: { itemType: string; itemId: string; data: any }) =>
-      updateContextItem(selectedGame, itemType, itemId, data),
+      updateContextItem(effectiveGame, itemType, itemId, data),
     onSuccess: () => {
       refetch()
       setShowEditModal(false)
@@ -592,7 +598,7 @@ export default function Graph() {
 
   const deleteMutation = useMutation({
     mutationFn: ({ itemType, itemId }: { itemType: string; itemId: string }) =>
-      deleteContextItem(selectedGame, itemType, itemId),
+      deleteContextItem(effectiveGame, itemType, itemId),
     onSuccess: () => {
       refetch()
       setSelectedNode(null)

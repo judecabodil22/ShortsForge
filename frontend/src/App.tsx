@@ -1,6 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
+import { ThemeProvider } from '@/contexts/ThemeContext'
+import { ToastProvider } from '@/contexts/ToastContext'
+import ToastContainer from '@/components/ui/Toast'
 import Layout from '@/components/layout/Layout'
 import Dashboard from '@/pages/Dashboard'
 import Graph from '@/pages/Graph'
@@ -56,11 +59,16 @@ function AppRoutes() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Layout>
-          <AppRoutes />
-        </Layout>
-      </BrowserRouter>
+      <ThemeProvider>
+        <ToastProvider>
+          <BrowserRouter>
+            <Layout>
+              <AppRoutes />
+            </Layout>
+          </BrowserRouter>
+          <ToastContainer />
+        </ToastProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   )
 }

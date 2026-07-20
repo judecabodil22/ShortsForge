@@ -3,7 +3,7 @@
 Cogitator — YouTube Shorts Pipeline
 Combines: cogitator.sh, telegram_listener.sh, generate_script.sh, onboard.sh
 """
-import argparse, base64, datetime, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
+import argparse, base64, datetime, gc, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
 from datetime import datetime
 
 _workflow_dir = os.path.dirname(os.path.abspath(__file__))
@@ -92,7 +92,8 @@ try:
         extract_script_features,
         calculate_virality_score,
         analyze_performance_patterns,
-        get_optimized_params
+        get_optimized_params,
+        get_learned_hook_examples,
     )
     LEARNING_ENGINE_AVAILABLE = True
 except ImportError:
@@ -101,6 +102,7 @@ except ImportError:
     def calculate_virality_score(*args, **kwargs): return 50.0
     def analyze_performance_patterns(*args, **kwargs): return {}
     def get_optimized_params(*args, **kwargs): return {}
+    def get_learned_hook_examples(*args, **kwargs): return []
 
 try:
     from audio_analysis import enhance_scene_selection
@@ -1670,6 +1672,10 @@ def _summarize_transcript(transcript_text, game_title):
     if not transcript_text or len(transcript_text.strip()) < 100:
         return None
 
+    # Cap input to prevent multi-chunk processing which can cause OOM
+    if len(transcript_text) > 18000:
+        transcript_text = transcript_text[:18000]
+
     CHUNK_SIZE = 20000
     OVERLAP = 2000
 
@@ -1700,6 +1706,7 @@ def _summarize_transcript(transcript_text, game_title):
                         r = json.loads(resp.read())
                         text = r["candidates"][0]["content"]["parts"][0]["text"]
                         parsed = json.loads(text)
+                        gc.collect()
                         if isinstance(parsed, dict) and "narrative_summary" in parsed:
                             return parsed
                         return parsed
@@ -1733,7 +1740,9 @@ Respond ONLY with a valid JSON object matching this schema:
 
 Transcript:
 {transcript_text[:18000]}"""
-        return _call_summary_gemini(prompt)
+        result = _call_summary_gemini(prompt)
+        gc.collect()
+        return result
 
     # Multi-chunk: split into overlapping chunks
     chunks = []
@@ -1777,7 +1786,9 @@ Respond ONLY with a valid JSON object matching this schema:
     "emotional_tone": "one short phrase describing the overall tone across the whole story",
     "recommended_delivery": "one sentence describing the narrator delivery style for this content"
 }}"""
-    return _call_summary_gemini(combine_prompt, temperature=0.4)
+    result = _call_summary_gemini(combine_prompt, temperature=0.4)
+    gc.collect()
+    return result
 
 
 def _cs_generate_script(transcript_text, content_type, subject, angle, real_characters, key_plot_points):
@@ -1981,6 +1992,8 @@ def _cs_generate_tts(script, voice_style):
     """Generate TTS from script (handles 2 segments for 10 min)."""
     os.makedirs(CS_TTS_DIR, exist_ok=True)
     
+    provider = env("TTS_PROVIDER", "gemini").strip().lower()
+    
     # Get voice based on style
     voices_by_style = {
         "Mysterious": ["Zephyr", "Charon", "Umbriel"],
@@ -2000,63 +2013,89 @@ def _cs_generate_tts(script, voice_style):
     audio_files = []
     
     for text_part, name in segments:
-        # Generate TTS using same format as pipeline
-        voice_id = _get_voice_id(voice)
-        if not voice_id:
-            raise RuntimeError(f"Unknown voice: {voice}")
-        
-        # Use same format as pipeline _tts_api function
-        text_with_style = text_part
-        
-        body = json.dumps({
-            "contents": [{"parts": [{"text": text_with_style}]}],
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_id}}}
-            }
-        }).encode()
-        
-        keys = get_gemini_keys()
-        
-        api_keys = keys if keys else [env("GEMINI_API_KEY")]
-        time.sleep(2)  # Rate limit
-        
-        out_pcm = os.path.join(CS_TTS_DIR, f"{name}.pcm")
         out_wav = os.path.join(CS_TTS_DIR, f"{name}.wav")
         
-        tts_success = False
-        for key in api_keys:
-            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
-            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
+        if provider == "kokoro":
+            try:
+                from workflows.pipeline.phase_tts_kokoro import generate_tts_file
+                ok = generate_tts_file(text_part, out_wav, voice, None)
+                if ok:
+                    audio_files.append(out_wav)
+                    tts_success = True
+                else:
+                    tts_success = False
+            except Exception as e:
+                log(f"Kokoro TTS failed: {e}, falling back to Gemini")
+                provider = "gemini"
+                tts_success = False
+        elif provider == "edge":
+            try:
+                import edge_tts, asyncio
+                edge_voice = "en-US-JennyNeural"
+                async def _do():
+                    c = edge_tts.Communicate(text_part, edge_voice)
+                    await c.save(out_wav)
+                asyncio.run(_do())
+                if os.path.exists(out_wav) and os.path.getsize(out_wav) > 0:
+                    audio_files.append(out_wav)
+                    tts_success = True
+                else:
+                    tts_success = False
+            except Exception as e:
+                log(f"Edge TTS failed: {e}, falling back to Gemini")
+                provider = "gemini"
+                tts_success = False
+        
+        if provider == "gemini" or not tts_success:
+            voice_id = _get_voice_id(voice)
+            if not voice_id:
+                raise RuntimeError(f"Unknown voice: {voice}")
             
-            for attempt in range(3):
-                try:
-                    with urllib.request.urlopen(req, timeout=120) as resp:
-                        r = json.loads(resp.read())
-                        audio = r["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
-                        with open(out_pcm, "wb") as f:
-                            f.write(base64.b64decode(audio))
-                        
-                        # Convert PCM to WAV
-                        subprocess.run(["ffmpeg", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", out_pcm, "-ar", "24000", "-ac", "1", out_wav], capture_output=True)
-                        os.remove(out_pcm)
-                        audio_files.append(out_wav)
-                        tts_success = True
+            body = json.dumps({
+                "contents": [{"parts": [{"text": text_part}]}],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_id}}}
+                }
+            }).encode()
+            
+            keys = get_gemini_keys()
+            api_keys = keys if keys else [env("GEMINI_API_KEY")]
+            time.sleep(2)
+            
+            out_pcm = os.path.join(CS_TTS_DIR, f"{name}.pcm")
+            tts_success = False
+            
+            for key in api_keys:
+                url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
+                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
+                
+                for attempt in range(3):
+                    try:
+                        with urllib.request.urlopen(req, timeout=120) as resp:
+                            r = json.loads(resp.read())
+                            audio = r["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+                            with open(out_pcm, "wb") as f:
+                                f.write(base64.b64decode(audio))
+                            subprocess.run(["ffmpeg", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", out_pcm, "-ar", "24000", "-ac", "1", out_wav], capture_output=True)
+                            os.remove(out_pcm)
+                            audio_files.append(out_wav)
+                            tts_success = True
+                            break
+                    except urllib.error.HTTPError as e:
+                        if e.code == 429 and attempt < 2:
+                            wait = 30 * (2 ** attempt)
+                            log(f"Key ...{key[-6:]} rate limited, retry in {wait}s...")
+                            time.sleep(wait)
+                        else:
+                            log(f"TTS error with key ...{key[-6:]}: {e.code}")
+                            break
+                    except Exception as e:
+                        log(f"TTS error with key ...{key[-6:]}: {e}")
                         break
-                except urllib.error.HTTPError as e:
-                    if e.code == 429 and attempt < 2:
-                        wait = 30 * (2 ** attempt)
-                        log(f"Key ...{key[-6:]} rate limited, retry in {wait}s...")
-                        time.sleep(wait)
-                    else:
-                        log(f"TTS error with key ...{key[-6:]}: {e.code}")
-                        break
-                except Exception as e:
-                    log(f"TTS error with key ...{key[-6:]}: {e}")
+                
+                if tts_success:
                     break
-            
-            if tts_success:
-                break
         
         if not tts_success:
             raise RuntimeError(f"TTS generation failed for segment: {name}")
@@ -2328,6 +2367,20 @@ def _cs_load_context():
                         items.append(item)
         return items
     
+    # Load alias maps from verified_context.json for cross-run persistence
+    try:
+        game_title = env("GAME_TITLE", "")
+        if game_title:
+            from context_manager import load_verified_context
+            verified = load_verified_context(game_title)
+            if isinstance(verified, dict):
+                if verified.get("character_aliases"):
+                    ctx["character_aliases"] = verified["character_aliases"]
+                if verified.get("location_aliases"):
+                    ctx["location_aliases"] = verified["location_aliases"]
+    except Exception:
+        pass
+
     def extract_from_table_cell(cell):
         """Extract name from table cell."""
         cell = cell.strip()
@@ -2439,6 +2492,22 @@ def _cs_save_context(ctx):
     game = env("GAME_TITLE", "default").lower().replace(" ", "_")
     ctx_dir = os.path.join(CONTEXT_DIR, game)
     os.makedirs(ctx_dir, exist_ok=True)
+    # Save alias maps to verified_context.json for persistence between runs
+    try:
+        alias_data = {}
+        if ctx.get("character_aliases"):
+            alias_data["character_aliases"] = ctx["character_aliases"]
+        if ctx.get("location_aliases"):
+            alias_data["location_aliases"] = ctx["location_aliases"]
+        if alias_data:
+            game_title = env("GAME_TITLE", "default")
+            from context_manager import load_verified_context, save_verified_context
+            verified = load_verified_context(game_title)
+            if isinstance(verified, dict):
+                verified.update(alias_data)
+                save_verified_context(game_title, verified)
+    except Exception:
+        pass
     
     def wiki(name):
         return f"[[{name}]]"
@@ -3076,9 +3145,9 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
         }
     }).encode()
     key = keys[0]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
     _rate_limit()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             r = json.loads(resp.read())
@@ -3759,6 +3828,13 @@ def phase_transcribe(video):
         
         log("faster-whisper transcription complete")
         transcription_success = True
+
+        # Free WhisperModel memory — it can use several GB
+        try:
+            del model
+        except NameError:
+            pass
+        gc.collect()
         
         # Extract context from transcript after successful transcription
         if 'transcript_text' in locals() and transcript_text:
@@ -3915,53 +3991,60 @@ SCRIPT_VARIANTS = {
     "mystery_recap": {
         "style": "Mystery Recap",
         "voice_style": "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments. Build suspense through the story flow.",
-        "instruction": """Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity in the first sentence. Tell the story chronologically while hinting at secrets. Include a pattern interrupt mid-way using 'but here's the thing' or 'what nobody realizes'. End by looping back to your opening and include a CTA like 'follow for more'. Target 150-300 words.""",
+        "instruction": """Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity in the first sentence. Tell the story chronologically while hinting at secrets. Include a mid-way transition that moves the story forward — vary the phrasing each time, never repeat the same transition. End by looping back to your opening. Target 150-300 words.""",
     },
     "breakdown": {
         "style": "Breakdown",
         "voice_style": "Speak confidently and authoritatively. Explain causes and effects clearly, like an expert sharing knowledge.",
-        "instruction": """Write an analytical breakdown. Start with a hook that states a surprising insight in the first sentence. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Include a pattern interrupt with 'here is why that matters' or 'but the real story is'. End with a takeaway and CTA. Target 150-300 words.""",
+        "instruction": """Write an analytical breakdown. Start with a hook that states a surprising insight in the first sentence. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Use varied mid-script pivots — never the same transition phrase twice. End with a takeaway. Target 150-300 words.""",
     },
     "timeline": {
         "style": "Timeline",
         "voice_style": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-        "instruction": """Write a chronological timeline. Hook viewers immediately with a dramatic moment or outcome. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. Include a 'but then came' pattern interrupt. End with resolution and CTA. Target 150-300 words.""",
+        "instruction": """Write a chronological timeline. Hook viewers immediately with a dramatic moment or outcome. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. Vary your transitional phrases across scripts — never repeat the same pivot. End with resolution. Target 150-300 words.""",
     },
     "lesson": {
         "style": "Moral/Lesson",
         "voice_style": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-        "instruction": """Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. Use complete sentences that flow naturally. Include a pattern interrupt with 'but the biggest lesson' or 'here is what nobody tells you'. End with a thought-provoking question and CTA. Target 150-300 words.""",
+        "instruction": """Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. Use complete sentences that flow naturally. Use unique phrasing for each insight pivot — no repeated transition patterns. End with a thought-provoking question. Target 150-300 words.""",
     },
     "narrative": {
         "style": "Narrative",
         "voice_style": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-        "instruction": """Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid but natural descriptions. Flow from one moment to the next. Include a pattern interrupt like 'but what happened next changed everything'. Loop the ending back to the hook and add a CTA. Target 150-300 words.""",
+        "instruction": """Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid but natural descriptions. Flow from one moment to the next. Use fresh, varied pivot phrases — never the same one twice. Loop the ending back to the hook. Target 150-300 words.""",
     },
     "news_report": {
         "style": "News Report",
         "voice_style": "Speak like a professional news reporter. Clear, factual, objective. Present information in order of importance.",
-        "instruction": """Write a professional news report. Lead with the key fact or breaking news in the first sentence - no introductions. Add context in flowing paragraphs. Use objective, factual language. Include a pattern interrupt with 'but what this means is' or 'the deeper story involves'. End with impact and CTA. Target 150-300 words.""",
+        "instruction": """Write a professional news report. Lead with the key fact or breaking news in the first sentence - no introductions. Add context in flowing paragraphs. Use objective, factual language. Vary your analytical pivot phrases across scripts. End with impact. Target 150-300 words.""",
     },
     "documentary": {
         "style": "Documentary",
         "voice_style": "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
-        "instruction": """Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context naturally through flowing paragraphs. Include a pattern interrupt with 'but what most miss' or 'here is what the cameras captured'. End with a lasting insight and CTA. Target 150-300 words.""",
+        "instruction": """Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context naturally through flowing paragraphs. Use fresh narrative pivots each time — no repeated phrases. End with a lasting insight. Target 150-300 words.""",
     },
     "true_crime": {
         "style": "True Crime",
         "voice_style": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-        "instruction": """Write a true crime story. Hook with a shocking detail or question in the first sentence. Build investigation and tension through natural sentences. Include a pattern interrupt with 'but the twist came when' or 'here is where it gets darker'. End with revelation and CTA. Target 150-300 words.""",
+        "instruction": """Write a true crime story. Hook with a shocking detail or question in the first sentence. Build investigation and tension through natural sentences. Vary your tension-building transitions — never repeat the same pivot. End with revelation. Target 150-300 words.""",
     },
     "character_pov": {
         "style": "Character POV",
         "voice_style": "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
-        "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Include a pattern interrupt with 'but what I never told anyone was' or 'and then it hit me'. End with emotional payoff and CTA. Target 150-300 words.""",
+        "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Use unique emotional pivots each time — no repeated phrasing. End with emotional payoff. Target 150-300 words.""",
     },
-    "true_story": {
-        "style": "True Story",
-        "voice_style": "Speak like sharing an incredible story with a friend. Conversational, engaging, hook them early.",
-        "instruction": """Write like sharing an amazing true story with a friend. Hook immediately with something incredible or unexpected. Build naturally with vivid details. Include a pattern interrupt with 'but here is the crazy part' or 'and that is when everything changed'. End with impact, loop back to the hook, and add CTA. Target 150-300 words.""",
-    },
+}
+
+HOOK_ARCHETYPES = {
+    "mystery_recap": "Curiosity Gap — start with 'What if...' or 'The real reason...'",
+    "breakdown": "Bold Statement — start with 'Here is why...' or 'The real reason...'",
+    "timeline": "Pattern Interrupt — start with a dramatic moment out of context, then rewind",
+    "lesson": "Question Hook — start with 'What if...' or 'Would you...'",
+    "narrative": "Emotional Hook — start with a visceral, relatable moment or realization",
+    "news_report": "Bold Statement — lead with the most surprising fact from the transcript",
+    "documentary": "Curiosity Gap — start with 'Few people know...' or 'What most players miss...'",
+    "true_crime": "Question Hook — start with a shocking question or ominous statement",
+    "character_pov": "Emotional Hook — start with 'I never expected...' or an intimate realization",
 }
 
 
@@ -4030,6 +4113,140 @@ def _get_mempalace_prompt_hints(game_title):
     return "\n".join(hints) + "\n" if hints else ""
 
 
+MULTI_VARIANT_DELIMITER = "=====VARIANT BREAK====="
+
+
+def _parse_multi_variant_response(response):
+    """Parse a multi-variant Groq response into separate script texts."""
+    if not response:
+        return []
+    parts = response.split(MULTI_VARIANT_DELIMITER)
+    variants = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        # Must have at least a TITLE: line and some body text to be valid
+        if re.search(r'^TITLE:\s*\S', part, re.MULTILINE) and len(part.split()) > 20:
+            variants.append(part)
+    return variants
+
+
+def _postprocess_script(script):
+    """Clean up script output: strip scratchpad, fix flat format, remove repetitive CTAs."""
+    if not script:
+        return script
+
+    # Step 1: Strip scratchpad block (and anything before the final output)
+    script = re.sub(r'<scratchpad>.*?</scratchpad>\s*', '', script, count=1, flags=re.DOTALL)
+    script = script.strip()
+
+    # Step 2: Parse TITLE, DESCRIPTION, TAGS lines
+    title_m = re.search(r'^TITLE:\s*(.*)', script, re.MULTILINE)
+    desc_m  = re.search(r'^DESCRIPTION:\s*(.*)', script, re.MULTILINE)
+    tags_m  = re.search(r'^TAGS:\s*(.*)', script, re.MULTILINE)
+
+    title = title_m.group(1).strip() if title_m else ""
+    desc  = desc_m.group(1).strip()  if desc_m else ""
+    tags  = tags_m.group(1).strip()  if tags_m else ""
+
+    # Step 3: Find the body. It should be after the TAGS: line (or DESCRIPTION: if no TAGS).
+    body = ""
+    if tags_m:
+        body = script[tags_m.end():].strip()
+    elif desc_m:
+        body = script[desc_m.end():].strip()
+    elif title_m:
+        body = script[title_m.end():].strip()
+
+    # Step 4: If body is empty, check if it's embedded in the DESCRIPTION line after TAGS:
+    if not body and desc:
+        tags_in_desc = re.search(r'\bTAGS:\s*(.*)', desc)
+        if tags_in_desc:
+            tags_raw = tags_in_desc.group(1).strip()
+            desc = desc[:tags_in_desc.start()].strip()
+            desc = re.sub(r'\s+#\w+(?:\s+#\w+)*\s*$', '', desc).strip()
+            # Tags are comma-separated. Walk from the START to find where body text begins.
+            # Body text starts at the first part that reads like narrative prose.
+            tag_parts = [p.strip() for p in tags_raw.split(',')]
+            body_start_idx = len(tag_parts)
+            for idx, part in enumerate(tag_parts):
+                words = part.split()
+                if len(words) < 5:
+                    continue
+                # A part is body text if it contains sentence punctuation, a question,
+                # or starts with a known narrative sentence word (even after a stray prefix).
+                stripped = re.sub(r'^\S+\s+', '', part)
+                if (re.match(r'^(What|The|This|That|How|Why|But|And|So|Here|There|It'
+                             r'|In|On|At|When|Where|Who|Which|After|Before|During|While'
+                             r'|Despite|Although)\b', part, re.IGNORECASE)
+                    or re.match(r'^(What|The|This|That|How|Why|But|And|So|Here|There|It'
+                                r'|In|On|At|When|Where|Who|Which|After|Before|During|While'
+                                r'|Despite|Although)\b', stripped, re.IGNORECASE)
+                    or '?' in part
+                    or part.endswith(('.', '?', '!'))):
+                    body_start_idx = idx
+                    break
+            if body_start_idx < len(tag_parts):
+                body_parts = tag_parts[body_start_idx:]
+                body = ' '.join(body_parts)
+                # Drop leading stray words before the first narrative sentence word
+                _narrative_re = re.compile(
+                    r'^(What|The|This|That|How|Why|But|And|So|Here|There|It'
+                    r'|In|On|At|When|Where|Who|Which|After|Before|During|While'
+                    r'|Despite|Although)\b', re.IGNORECASE
+                )
+                body_words = body.split()
+                for _i, _w in enumerate(body_words):
+                    if _narrative_re.match(_w):
+                        body = ' '.join(body_words[_i:])
+                        break
+                tags = ', '.join(tag_parts[:body_start_idx])
+            else:
+                tags = tags_raw
+
+    # Step 4.5: Strip repetitive CTAs from description too
+    _cta_re = re.compile(
+        r'\s*(follow for (more|the latest|updates|our).*|'
+        r'stay tuned for more|'
+        r'subscribe for more|'
+        r"that's all for now|"
+        r'see you in the next one|'
+        r'thanks for watching|'
+        r'don\'t forget to (like|subscribe)).*$',
+        re.IGNORECASE
+    )
+    if desc:
+        desc = _cta_re.sub('', desc).strip().rstrip(',;:.')
+
+    # Step 5: Strip repetitive CTAs from the end of body
+    if body:
+        body = _cta_re.sub('', body).strip().rstrip(',;:.')
+        if body:
+            # Add terminal period if missing
+            if not body[-1] in '.!?':
+                body += '.'
+            # Clean up leading conjunctions and capitalize
+            body = re.sub(r'^(and|but|so|or|nor|yet)\s+', '', body, flags=re.IGNORECASE).strip()
+            if body and body[0].islower():
+                body = body[0].upper() + body[1:]
+
+    # Step 6: Reconstruct in proper format
+    result = ""
+    if title:
+        result += f"TITLE: {title}\n\n"
+    if desc:
+        result += f"DESCRIPTION: {desc}\n"
+    if tags:
+        result += f"TAGS: {tags}\n"
+    if body:
+        if desc or tags:
+            result += "\n"
+        result += body
+
+    return result.strip()
+
+
 def _build_script_prompt(variant_key, perspective, game_title, transcript, context=None):
     """Build script prompt using Jinja2 templates (Phase 1) with fallback to legacy."""
     variant = SCRIPT_VARIANTS[variant_key]
@@ -4046,6 +4263,37 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
 
     perf_context = _get_variant_performance_text(variant_key)
     mempalace_hints = _get_mempalace_prompt_hints(game_title)
+    hook_archetype = HOOK_ARCHETYPES.get(variant_key, "Strong Hook — grab attention in the first sentence")
+
+    learned_hooks_text = ""
+    try:
+        learned_hooks = get_learned_hook_examples()
+        if learned_hooks:
+            learned_hooks_text = "\n".join(f"- \"{h}\"" for h in learned_hooks)
+    except Exception:
+        pass
+
+    def _build_lore_info(ctx):
+        lore = (ctx or {}).get("lore", {})
+        if not lore:
+            return ""
+        parts = []
+        plot = lore.get("plot_summary", "")
+        if plot:
+            parts.append(f"PLOT SUMMARY: {plot[:500]}")
+        factions = lore.get("factions", [])
+        if factions:
+            faction_lines = [f"  - {f.get('name')} ({f.get('alignment', '?')}): {f.get('description', '')[:120]}" for f in factions]
+            parts.append("FACTIONS:\n" + "\n".join(faction_lines))
+        events = lore.get("key_events", [])
+        if events:
+            event_lines = [f"  - {e.get('event')}: {e.get('description', '')[:120]}" for e in events]
+            parts.append("KEY EVENTS:\n" + "\n".join(event_lines))
+        terms = lore.get("lore_terms", [])
+        if terms:
+            term_lines = [f"  - {t.get('term')} ({t.get('category', '?')}): {t.get('definition', '')[:120]}" for t in terms]
+            parts.append("LORE TERMS:\n" + "\n".join(term_lines))
+        return "\n\n".join(parts)
 
     if env is not None:
         try:
@@ -4073,15 +4321,35 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
                 tone = context.get("emotional_tone", "")
                 if tone:
                     context_info += f"Emotional Tone: {tone}\n"
+                char_aliases = context.get("character_aliases", {})
+                if char_aliases:
+                    alias_lines = []
+                    for variant, canonical in char_aliases.items():
+                        alias_lines.append(f"  '{variant}' → use '{canonical}'")
+                    context_info += "VERIFIED NAME MAPPINGS (use these canonical names, NOT the variants):\n" + "\n".join(alias_lines) + "\n"
+                loc_aliases = context.get("location_aliases", {})
+                if loc_aliases:
+                    alias_lines = []
+                    for variant, canonical in loc_aliases.items():
+                        alias_lines.append(f"  '{variant}' → use '{canonical}'")
+                    context_info += "VERIFIED LOCATION MAPPINGS:\n" + "\n".join(alias_lines) + "\n"
+
+            lore_info = _build_lore_info(context)
 
             prompt = template.render(
                 game_title=game_title,
                 style=variant["style"],
                 perspective=perspective,
+                hook_archetype=hook_archetype,
                 instruction=variant["instruction"],
                 context_info=context_info,
+                lore_info=lore_info,
                 transcript=transcript,
                 learned_constraints=learned_constraints_text,
+                perf_context=perf_context,
+                mempalace_hints=mempalace_hints,
+                learned_hooks=learned_hooks_text,
+                recent_titles="",
             )
             return prompt
         except Exception as e:
@@ -4089,6 +4357,7 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
 
     # Fallback to legacy f-string prompt
     game_line = f"This is from the game {game_title}.\n\n" if game_title else ""
+    hook_archetype_text = f"Hook Archetype: {hook_archetype}\n"
     context_info = ""
     if context:
         chars = context.get("characters", [])
@@ -4112,66 +4381,62 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
         tone = context.get("emotional_tone", "")
         if tone:
             context_info += f"Emotional Tone: {tone}\n"
-    
-    # Title generation guidance for diverse, non-repetitive titles
-    title_guidance = """
-TITLE DIVERSITY: Create varied YouTube titles — do NOT repeat the same patterns.
-- Vary the title structure across scripts (question, statement, contrast, etc.)
-- Avoid overused words: Uncovered, Secrets, Revealed, Hidden, Protocol, Truth, Exposed
-- Do NOT use "The [Noun] of [Noun]" structure more than once
-- Each title should feel distinct from previous ones
-"""
+        char_aliases = context.get("character_aliases", {})
+        if char_aliases:
+            alias_lines = []
+            for variant, canonical in char_aliases.items():
+                alias_lines.append(f"  '{variant}' → use '{canonical}'")
+            context_info += "VERIFIED NAME MAPPINGS (use these canonical names, NOT the variants):\n" + "\n".join(alias_lines) + "\n"
+        loc_aliases = context.get("location_aliases", {})
+        if loc_aliases:
+            alias_lines = []
+            for variant, canonical in loc_aliases.items():
+                alias_lines.append(f"  '{variant}' → use '{canonical}'")
+            context_info += "VERIFIED LOCATION MAPPINGS:\n" + "\n".join(alias_lines) + "\n"
+
+    lore_info = _build_lore_info(context)
 
     return f"""You are an expert YouTube Shorts scriptwriter specializing in gaming content. {game_line}{context_info}
 {learned_constraints_text}
 {perf_context}
 {mempalace_hints}
-{title_guidance}
+{hook_archetype_text}
 Style: {variant['style']}
 Perspective: {perspective}
-
 {variant['instruction']}
 
-CRITICAL: Write exactly 150-300 words (60-90 seconds max). This is the ONLY acceptable length. Do not exceed 300 words.
+{lore_info}
 
-HARD RULES (never break these):
-- NO dialogue — never write what anyone "said", "told", "asked", or "replied"
-- NO first/second/third person narrator framing ("I saw", "the narrator says", "according to him")
-- NO quotation marks anywhere
-- NO parentheticals, stage directions, or annotations
-- NO markdown formatting — plain text only
-- NO phrases like "in conclusion", "to summarize", "the point is"
-- NO abbreviations or symbols — spell everything out
-- Write ONLY facts and description as if narrating events directly
-- ONLY use information from the transcript — do NOT invent characters, events, or details
-- Use SHORT, punchy sentences (average 10-15 words)
+Target 200-250 words for the spoken script. Maximum 300 words. Every word must earn its place.
 
-WRITING STYLE:
-- Start with a HOOK in the first sentence (grab attention in 3 seconds)
-- Use short, punchy sentences - NOT long, complex run-on sentences
-- Every sentence should be self-contained
-- The script should sound like natural human speech when read aloud
-- End with impact — a revelation, question, or emotional beat
+STYLE:
+- Write in complete, natural sentences. No fragments.
+- Narrated speech is allowed: "She told him the truth", "He revealed his plan".
+- NO direct quotes with quotation marks.
+- NO parentheses, stage directions, or audio annotations.
+- NO markdown formatting — plain text only.
+- NO creator intros: "Hey guys", "Welcome back", "Today we are looking at".
+- NO filler transitions: "In conclusion", "To summarize".
+- Prefer active voice over passive. Short sentences (10-15 words average).
 
-OUTPUT FORMAT (strict):
-Line 1: TITLE: [6-10 word title, no punctuation, no clickbait caps]
-Line 2: (blank)
-Line 3+: The spoken script — pure text, no labels, no headers, no formatting
+FACTUAL ACCURACY:
+- NEVER invent character names, stats, dates, or game mechanics.
+- NEVER invent background lore not in the transcript.
+- ONLY use facts explicitly provided in the source material.
 
-TITLE RULES:
-- 6-10 words maximum, no punctuation, no ALL CAPS
-- Hint at topic without spoiling the ending
-- VARY the title structure — not every title should follow the same formula
-- Avoid overused patterns: Uncovered, Secrets, Revealed, Hidden, Protocol, Truth, Exposed
-- Do NOT use "The [Noun] of [Noun]" structure more than once
+TITLES (6-10 words):
+- Must reference a specific detail from the transcript.
+- Question marks and exclamation points are allowed.
+- Vary title structure: question, statement, contrast, etc.
+- Avoid "The [Noun] of [Noun]" structure.
+- No all-caps words.
 
-TITLE STRUCTURE EXAMPLES (rotate through different formats):
-- Character focus: "The Pilot Who Landed Without Wings"
-- Question statement: "Why Russia Fears One Ukrainian Drone"
-- Turning point: "One Decision That Changed the Battle"
-- Mystery/consequence: "The Weapon NATO Refused to Deploy"
-- Unexpected angle: "How a Typo Caused a Nuclear Scare"
-- Impact focus: "Three Seconds That Saved a Battalion"
+OUTPUT FORMAT:
+TITLE: [Your title]
+DESCRIPTION: [2-3 sentences summarizing hook, with hashtags at end]
+TAGS: [comma-separated keywords]
+
+[Script body starting with the hook. 200-250 words.]
 
 Transcript:
 {transcript}"""
@@ -4280,12 +4545,12 @@ def _gemini_script(text, script_num, context=None):
     for i in range(len(keys)):
         key = keys[(start + i) % len(keys)]
         log(f"   Trying key ...{key[-6:]}")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         for attempt in range(3):
             try:
                 _rate_limit()
                 req = urllib.request.Request(url, data=body,
-                                             headers={"Content-Type": "application/json"})
+                                             headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     r = json.loads(resp.read())
                     return r["candidates"][0]["content"]["parts"][0]["text"]
@@ -4335,13 +4600,23 @@ def phase_scripts(json_file, duration, num_hours, video=None):
     
     # Load and optimize context for script generation (Phase 4)
     ctx = _cs_load_context()
+    # Preserve alias maps before summarize_context strips them
+    _char_aliases = ctx.get("character_aliases", {})
+    _loc_aliases = ctx.get("location_aliases", {})
     ctx = summarize_context(ctx, max_per_category=10)
+    ctx["character_aliases"] = _char_aliases
+    ctx["location_aliases"] = _loc_aliases
     log(f"   Context loaded: {len(ctx.get('characters', []))} chars, {len(ctx.get('locations', []))} locs, {len(ctx.get('key_terms', []))} terms")
     
     # Get verified context for validation
     game_title = env("GAME_TITLE", "")
     verified_ctx = get_verified_context_for_validation(game_title)
     
+    # Merge lore from verified context into working context
+    if verified_ctx and verified_ctx.get("lore"):
+        ctx["lore"] = verified_ctx["lore"]
+        log(f"   Game lore loaded: {len(ctx['lore'].get('characters', []))} chars, {len(ctx['lore'].get('factions', []))} factions")
+
     # Merge: prefer verified context for validation
     validation_ctx = {}
     if verified_ctx:
@@ -4388,6 +4663,9 @@ def phase_scripts(json_file, duration, num_hours, video=None):
 
             # Phase 4: Optimize context relevance for this specific transcript
             relevant_ctx = score_context_relevance(ctx, transcript_text, max_items=8)
+            # Preserve alias maps through relevance scoring
+            relevant_ctx["character_aliases"] = ctx.get("character_aliases", {})
+            relevant_ctx["location_aliases"] = ctx.get("location_aliases", {})
 
             # Structured transcript summarization — replaces raw truncated text with a
             # condensed narrative summary, also providing key_events, themes, tone
@@ -4418,6 +4696,9 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                     log(f"   Transcript summarization failed: {sum_err}")
                     script_summary = None
 
+                finally:
+                    gc.collect()
+
             # Inject MemPalace memory into context
             if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
                 game_title = env("GAME_TITLE", "")
@@ -4435,27 +4716,30 @@ def phase_scripts(json_file, duration, num_hours, video=None):
             best_metadata = None
             candidates = []
 
-            # Attempt 1: Groq (primary) with adaptive temperature
+            prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx)
+
+            # Primary: Groq multi-variant (1 call, 2 variants)
+            multi_prompt = prompt + """
+
+Generate TWO complete variants of this script separated by the exact delimiter:
+=====VARIANT BREAK=====
+
+Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the same format."""
             try:
-                prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx)
-                groq_script = _groq_generate(prompt, max_tokens=500, model=groq_model, temperature=temperature)
-                if groq_script:
-                    candidates.append((groq_script, {"source": "groq", "model": groq_model, "temperature": temperature}))
-                    log(f"   Groq script generated ({len(groq_script.split())} words)")
+                groq_response = _groq_generate(multi_prompt, max_tokens=1500, model=groq_model, temperature=temperature)
+                if groq_response:
+                    variants = _parse_multi_variant_response(groq_response)
+                    if variants:
+                        for idx, v in enumerate(variants):
+                            candidates.append((v, {"source": "groq", "model": groq_model, "temperature": temperature, "variant": idx + 1}))
+                            log(f"   Groq variant {idx + 1} generated ({len(v.split())} words)")
+                    else:
+                        candidates.append((groq_response, {"source": "groq", "model": groq_model, "temperature": temperature}))
+                        log(f"   Groq script generated ({len(groq_response.split())} words)")
             except Exception as e:
-                log(f"   Groq generation failed: {e}, falling back to Gemini")
+                log(f"   Groq generation failed: {e}, trying Gemini")
 
-            # Attempt 2: Groq (second pass, slightly different temperature)
-            try:
-                prompt2 = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx)
-                groq_script2 = _groq_generate(prompt2, max_tokens=500, model=groq_model, temperature=min(temperature + 0.15, 1.0))
-                if groq_script2:
-                    candidates.append((groq_script2, {"source": "groq", "model": groq_model, "temperature": min(temperature + 0.15, 1.0)}))
-                    log(f"   Groq pass 2 generated ({len(groq_script2.split())} words)")
-            except Exception:
-                pass
-
-            # Attempt 3: Gemini (fallback) with validation
+            # Fallback: Gemini (single script) if Groq produced nothing
             if not candidates:
                 gemini_script = _gemini_script(transcript_text, i, relevant_ctx)
                 if gemini_script:
@@ -4522,17 +4806,35 @@ def phase_scripts(json_file, duration, num_hours, video=None):
                     except Exception as mp_err:
                         log(f"MemPalace: Quality logging failed - {mp_err}")
 
-            # Word count enforcement — trim body to max 300 words
+            # Post-process: strip scratchpad, fix flat format, remove repetitive CTAs
+            cleaned = _postprocess_script(best_script)
+            if cleaned and len(cleaned) > 20:
+                best_script = cleaned
+                log(f"   Script post-processed ({len(best_script.split())} words)")
+
+            # Word count enforcement — preserve TITLE/DESCRIPTION/TAGS, trim body at sentence boundary
             wc = len(best_script.split())
             if wc > 300:
                 log(f"   Script {i} exceeds 300 words ({wc}), trimming...")
-                title_line_match = re.search(r'^TITLE:.*$', best_script, re.MULTILINE)
-                if title_line_match:
-                    title_text = title_line_match.group(0)
-                    body = best_script[title_line_match.end():].strip()
+                header_end = 0
+                for prefix in ('TITLE:', 'DESCRIPTION:', 'TAGS:'):
+                    m = re.search(rf'^{prefix}.*$', best_script, re.MULTILINE)
+                    if m:
+                        header_end = max(header_end, m.end())
+                header = best_script[:header_end].strip()
+                body = best_script[header_end:].strip()
+                if body:
                     body_words = body.split()
-                    trimmed_body = ' '.join(body_words[:280])
-                    best_script = title_text + '\n\n' + trimmed_body
+                    max_words = 280
+                    if len(body_words) > max_words:
+                        trimmed = ' '.join(body_words[:max_words])
+                        # Find last sentence boundary before max_words
+                        for sep in ('. ', '? ', '! ', '.\n', '?\n', '!\n'):
+                            idx = trimmed.rfind(sep, 0, len(trimmed))
+                            if idx > max_words * 4:
+                                trimmed = trimmed[:idx + len(sep.rstrip())]
+                                break
+                        best_script = header + '\n\n' + trimmed
                     log(f"   Trimmed to {len(best_script.split())} words")
 
             with open(out, "w") as f:
@@ -4801,8 +5103,8 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                 if vaapi:
                     vf_parts.append("format=nv12")
                     if portrait:
-                        vf_parts.append("scale=-2:1920")
-                        vf_parts.append("crop=1080:1920")
+                        vf_parts.append("crop=1080:1080:(iw-1080)/2:(ih-1080)/2")
+                        vf_parts.append("scale=1080:1920")
                     vf_parts.append("hwupload")
                     cmd = ["ffmpeg", "-y",
                            "-vaapi_device", "/dev/dri/renderD128",
@@ -4816,8 +5118,8 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                     enc = "VAAPI"
                 else:
                     if portrait:
-                        vf_parts.append("scale=-2:1920")
-                        vf_parts.append("crop=1080:1920")
+                        vf_parts.append("crop=1080:1080:(iw-1080)/2:(ih-1080)/2")
+                        vf_parts.append("scale=1080:1920")
                     cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", video, "-t", f"{dur:.3f}"]
                     if vf_parts:
                         cmd += ["-vf", ",".join(vf_parts)]
@@ -4903,14 +5205,19 @@ def _tts_api(text, out_pcm, voice, style, retries=3, delay=60):
     time.sleep(2)  # Rate limit: 2 requests per second
     
     for key in api_keys:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={key}"
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
         
         for attempt in range(retries):
             try:
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     r = json.loads(resp.read())
-                    audio = r["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+                    candidate = r.get("candidates", [{}])[0]
+                    if "content" not in candidate:
+                        reason = candidate.get("finishReason", "unknown")
+                        log(f"   Gemini blocked TTS: {reason}")
+                        break
+                    audio = candidate["content"]["parts"][0]["inlineData"]["data"]
                     with open(out_pcm, "wb") as f:
                         f.write(base64.b64decode(audio))
                     return True
@@ -4922,6 +5229,9 @@ def _tts_api(text, out_pcm, voice, style, retries=3, delay=60):
                 else:
                     log(f"   Key {key[:20]}... failed: {e.code}")
                     break
+            except (KeyError, IndexError, json.JSONDecodeError) as e:
+                log(f"   TTS API response malformed: {e}")
+                break
         log(f"   Switching to next API key...")
     
     return False
@@ -5220,6 +5530,9 @@ def run_local_recordings(recording_path):
                 if check_stop(): return
 
             log(f"Video {i}/{len(video_files)} complete!")
+
+            # Garbage collect between videos to prevent memory accumulation
+            gc.collect()
 
             if i < len(video_files):
                 log("Waiting 300 seconds before next video...")
@@ -6321,8 +6634,8 @@ def onboard():
         body = json.dumps({"contents":[{"parts":[{"text":"hi"}]}],
                            "generationConfig":{"maxOutputTokens":5}}).encode()
         req = urllib.request.Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={env('GEMINI_API_KEY')}",
-            data=body, headers={"Content-Type":"application/json"})
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            data=body, headers={"Content-Type":"application/json", "X-Goog-Api-Key": env('GEMINI_API_KEY')})
         r = urllib.request.urlopen(req, timeout=15)
         json.loads(r.read())
         print(f"{ok()} OK")

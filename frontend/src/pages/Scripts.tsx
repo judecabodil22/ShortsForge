@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Search, FileText, BarChart2, Sparkles, Tag, Hash, Copy, Check } from 'lucide-react'
+import { Search, FileText, BarChart2, Sparkles, Tag, Hash, Copy, Check, ImageOff } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { getScripts, getScriptMetadata, analyzeScript } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -13,8 +13,9 @@ export default function Scripts() {
   const [selectedScript, setSelectedScript] = useState<string | null>(null)
   const [analyzedScript, setAnalyzedScript] = useState<any>(null)
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [brokenThumbnails, setBrokenThumbnails] = useState<Set<string>>(new Set())
 
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['scripts'],
     queryFn: getScripts,
   })
@@ -99,7 +100,11 @@ export default function Scripts() {
           </h3>
 
           <div className="space-y-3">
-            {filteredScripts.length === 0 ? (
+            {isLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="w-6 h-6 border-2 border-40k-gold border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : filteredScripts.length === 0 ? (
               <p className="text-gray-500 text-center py-8">No scripts found</p>
             ) : (
               filteredScripts.map((script: any) => (
@@ -113,12 +118,18 @@ export default function Scripts() {
                   )}
                   onClick={() => setSelectedScript(script.id)}
                 >
-                  <img
-                    src={thumbnailUrl(script)}
-                    alt=""
-                    className="w-16 h-24 rounded object-cover flex-shrink-0 bg-40k-darkest"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                  />
+                  {brokenThumbnails.has(script.id) ? (
+                    <div className="w-16 h-24 rounded flex items-center justify-center flex-shrink-0 bg-40k-darkest border border-40k-border">
+                      <ImageOff className="w-6 h-6 text-gray-600" />
+                    </div>
+                  ) : (
+                    <img
+                      src={thumbnailUrl(script)}
+                      alt=""
+                      className="w-16 h-24 rounded object-cover flex-shrink-0 bg-40k-darkest"
+                      onError={() => setBrokenThumbnails(prev => new Set(prev).add(script.id))}
+                    />
+                  )}
                   <div className="flex-1 min-w-0">
                     <h4 className="font-medium text-white truncate">{script.video_name}</h4>
                     <div className="flex items-center gap-2 mt-2">

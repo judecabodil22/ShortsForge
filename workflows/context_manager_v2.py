@@ -54,6 +54,7 @@ class ContextItem:
         self.metadata.setdefault("transcript_mentions", 0)
         self.metadata.setdefault("first_seen_transcript", "")
         self.metadata.setdefault("admission_threshold_met", False)
+        self.verified = self.source == "manual"  # manually added items are inherently verified
     
     def to_dict(self) -> Dict:
         return {
@@ -66,7 +67,8 @@ class ContextItem:
             "source": self.source,
             "tags": self.tags,
             "aliases": self.aliases,
-            "metadata": self.metadata
+            "metadata": self.metadata,
+            "verified": self.verified,
         }
     
     @classmethod
@@ -83,6 +85,7 @@ class ContextItem:
             metadata=data.get("metadata", {})
         )
         item.id = data.get("id", item.id)
+        item.verified = data.get("verified", item.source == "manual")
         return item
     
     def update(self, **kwargs):

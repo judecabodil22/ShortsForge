@@ -137,10 +137,8 @@ def sync_context_to_mempalace(game_title: str, context: Dict[str, Any]) -> Dict[
         # Mine the file into MemPalace
         mp_manager = _get_mempalace_manager()
         if mp_manager:
-            stdout, stderr, rc = mp_manager._run_command([
-                "mine", temp_dir, "--mode", "docs"
-            ])
-            result["mempalace_output"] = stdout
+            mp_result = mp_manager.mine_transcript(temp_file, game_title)
+            result["mempalace_output"] = json.dumps(mp_result)
             result["synced"] = len(chars) + len(locs) + len(terms) + len(rels)
         else:
             result["errors"].append("MemPalace not available")
@@ -586,36 +584,27 @@ def clear_verified_context(game_title: str):
 def clear_mempalace_for_game(game_title: str) -> Dict[str, Any]:
     """Clear MemPalace memory for a specific game."""
     result = {"cleared": False, "errors": []}
-    
+
     if not game_title:
         result["errors"].append("No game title provided")
         return result
-    
-    import re
-    game_sanitized = re.sub(r'[^a-z0-9_]', '_', game_title.lower().strip().replace(" ", "_"))
 
     try:
         mp_manager = _get_mempalace_manager()
         if not mp_manager:
             result["errors"].append("MemPalace not available")
             return result
-        
-        palace_path = mp_manager.palace_path
-        
-        game_wing_dir = os.path.join(palace_path, game_sanitized)
-        
-        if os.path.exists(game_wing_dir):
-            import shutil
-            shutil.rmtree(game_wing_dir)
+
+        if mp_manager.clear_game_memory(game_title):
             result["cleared"] = True
             result["message"] = f"Cleared MemPalace memory for {game_title}"
         else:
             result["cleared"] = True
             result["message"] = f"No MemPalace memory found for {game_title}"
-    
+
     except Exception as e:
         result["errors"].append(str(e))
-    
+
     return result
 
 

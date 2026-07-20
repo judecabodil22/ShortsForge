@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save, Gamepad2, Database, Layers } from 'lucide-react'
+import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save, Gamepad2, Database, Layers, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, createGameContext, getStatus } from '@/lib/api'
 
@@ -20,6 +20,7 @@ interface ContextItem {
   description?: string
   category?: string
   metadata?: Record<string, any>
+  verified?: boolean
 }
 
 interface GameEntry {
@@ -73,16 +74,31 @@ export default function Context() {
     setSelectedFranchise(status.parent_franchise)
   }, [status])
 
-  const { data: context } = useQuery({
+  const { data: context, isLoading: contextLoading } = useQuery({
     queryKey: ['context', selectedFranchise],
     queryFn: () => getGameContext(selectedFranchise),
     enabled: !!selectedFranchise,
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ itemType, itemId, data }: { itemType: string; itemId: string; data: any }) =>
-      updateContextItem(selectedFranchise, itemType, itemId, data),
-    onSuccess: () => {
+    mutationFn: async ({ itemType, itemId, data }: { itemType: string; itemId: string; data: any }) => {
+      const result = await updateContextItem(selectedFranchise, itemType, itemId, data)
+      return result
+    },
+    onSuccess: (result) => {
+      if (result?.item) {
+        queryClient.setQueryData(['context', selectedFranchise], (old: any) => {
+          if (!old) return old
+          const updated = result.item
+          const items = old[updated.type + 's'] || []
+          return {
+            ...old,
+            [updated.type + 's']: items.map((i: any) =>
+              i.id === updated.id ? { ...i, ...updated } : i
+            )
+          }
+        })
+      }
       queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
       setEditingItem(null)
     },
@@ -97,6 +113,15 @@ export default function Context() {
       setEditingItem(null)
     },
     onError: (error: Error) => alert(`Failed to delete: ${error.message}`)
+  })
+
+  const verifyMutation = useMutation({
+    mutationFn: ({ itemType, itemId }: { itemType: string; itemId: string }) =>
+      updateContextItem(selectedFranchise, itemType, itemId, { verified: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
+    },
+    onError: (error: Error) => alert(`Failed to verify: ${error.message}`)
   })
   
   const clearMutation = useMutation({
@@ -167,7 +192,8 @@ export default function Context() {
       type: 'character',
       description: c.description,
       category: c.category,
-      metadata: c.metadata
+      metadata: c.metadata,
+      verified: c.verified
     })),
     ...((context?.locations || []) as any[]).map((l: any) => ({
       id: l.id || l.name,
@@ -175,7 +201,8 @@ export default function Context() {
       type: 'location',
       description: l.description,
       category: l.category,
-      metadata: l.metadata
+      metadata: l.metadata,
+      verified: l.verified
     })),
     ...((context?.terms || []) as any[]).map((t: any) => ({
       id: t.id || t.name,
@@ -183,7 +210,8 @@ export default function Context() {
       type: 'term',
       description: t.description,
       category: t.category,
-      metadata: t.metadata
+      metadata: t.metadata,
+      verified: t.verified
     })),
     ...((context?.relationships || []) as any[]).map((r: any, idx: number) => ({
       id: r.id || (r.from && r.to ? `${r.from}-${r.to}` : `rel-${idx}`),
@@ -191,7 +219,8 @@ export default function Context() {
       type: 'relationship',
       description: r.relationship || '',
       category: r.relationship || '',
-      metadata: r.metadata
+      metadata: r.metadata,
+      verified: r.verified
     })),
   ]
 
@@ -289,6 +318,21 @@ export default function Context() {
 
       {selectedFranchise ? (
         <>
+          {contextLoading ? (
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                {[1,2,3,4,5].map(i => (
+                  <div key={i} className="h-10 w-24 bg-40k-dark rounded-lg animate-pulse" />
+                ))}
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {[1,2,3,4,5,6].map(i => (
+                  <div key={i} className="h-24 bg-40k-dark rounded-lg animate-pulse" />
+                ))}
+              </div>
+            </div>
+          ) : (
+          <>
           {/* Tabs and Counts */}
           <div className="flex items-center gap-4">
             <div className="flex gap-2">
@@ -342,8 +386,17 @@ export default function Context() {
                       <div className={`w-10 h-10 rounded-lg ${config.bg} flex items-center justify-center ${config.color}`}>
                         <Icon className="w-5 h-5" />
                       </div>
-                      <div className="flex-1">
-                        <h4 className="font-medium text-white">{item.name}</h4>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-medium text-white truncate flex items-center gap-1.5">
+                          {item.name}
+                          {item.verified === true ? (
+                            <ShieldCheck className="w-3.5 h-3.5 text-green-400 shrink-0" title="Verified" />
+                          ) : (
+                            <span className="inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-yellow-400 border border-yellow-400/30 rounded shrink-0">
+                              Unconfirmed
+                            </span>
+                          )}
+                        </h4>
                         <p className="text-xs text-gray-400 capitalize mt-1">
                           {item.type}
                           {item.category && ` • ${item.category}`}
@@ -357,7 +410,20 @@ export default function Context() {
                       </p>
                     )}
 
-                    <div className="mt-4 flex items-center justify-end">
+                    <div className="mt-4 flex items-center justify-end gap-2">
+                      {item.verified !== true && (
+                        <button 
+                          className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1 disabled:opacity-50"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            verifyMutation.mutate({ itemType: item.type, itemId: item.id })
+                          }}
+                          disabled={verifyMutation.isPending}
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          Confirm
+                        </button>
+                      )}
                       <button 
                         className="text-xs text-40k-gold hover:underline flex items-center gap-1"
                         onClick={(e) => {
@@ -382,6 +448,8 @@ export default function Context() {
               <p className="text-sm mt-2">Run the pipeline to extract context from videos</p>
             </div>
           )}
+          </>
+        )}
         </>
       ) : (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">

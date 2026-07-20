@@ -3,16 +3,155 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --40k-black: #0a0505;
-    --40k-dark: #140808;
-    --40k-card: #1c0e0e;
-    --40k-border: #4a2828;
-    --40k-crimson: #7a1029;
-    --40k-crimson-bright: #b71c3a;
-    --40k-gold: #c9a227;
-    --40k-gold-dim: #8b7312;
-    --40k-gold-bright: #e8c547;
+  :root,
+  [data-theme="imperium"] {
+    --40k-black-rgb: 10 5 5;
+    --40k-dark-rgb: 20 8 8;
+    --40k-card-rgb: 28 14 14;
+    --40k-border-rgb: 74 40 40;
+    --40k-crimson-rgb: 122 16 41;
+    --40k-crimson-bright-rgb: 183 28 58;
+    --40k-gold-rgb: 201 162 39;
+    --40k-gold-dim-rgb: 139 115 18;
+    --40k-gold-bright-rgb: 232 197 71;
+    --40k-bronze-rgb: 139 105 20;
+    --40k-red-rgb: 139 34 34;
+    --40k-red-bright-rgb: 212 85 85;
+    --40k-black: rgb(var(--40k-black-rgb));
+    --40k-dark: rgb(var(--40k-dark-rgb));
+    --40k-card: rgb(var(--40k-card-rgb));
+    --40k-border: rgb(var(--40k-border-rgb));
+    --40k-crimson: rgb(var(--40k-crimson-rgb));
+    --40k-crimson-bright: rgb(var(--40k-crimson-bright-rgb));
+    --40k-gold: rgb(var(--40k-gold-rgb));
+    --40k-gold-dim: rgb(var(--40k-gold-dim-rgb));
+    --40k-gold-bright: rgb(var(--40k-gold-bright-rgb));
+    --40k-bronze: rgb(var(--40k-bronze-rgb));
+    --40k-red: rgb(var(--40k-red-rgb));
+    --40k-red-bright: rgb(var(--40k-red-bright-rgb));
+    --40k-shadow-gold: 0 0 18px rgb(var(--40k-gold-rgb) / 0.35);
+    --40k-shadow-crimson: 0 0 18px rgb(var(--40k-crimson-rgb) / 0.35);
+    --40k-grid: rgb(var(--40k-gold-rgb) / 0.04);
+  }
+
+  [data-theme="mechanicus"] {
+    --40k-black-rgb: 10 5 5;
+    --40k-dark-rgb: 18 10 10;
+    --40k-card-rgb: 28 16 14;
+    --40k-border-rgb: 92 48 48;
+    --40k-crimson-rgb: 155 27 48;
+    --40k-crimson-bright-rgb: 220 38 38;
+    --40k-gold-rgb: 205 127 50;
+    --40k-gold-dim-rgb: 139 90 43;
+    --40k-gold-bright-rgb: 218 160 109;
+    --40k-bronze-rgb: 184 115 51;
+    --40k-red-rgb: 155 27 48;
+    --40k-red-bright-rgb: 239 68 68;
+    --40k-black: rgb(var(--40k-black-rgb));
+    --40k-dark: rgb(var(--40k-dark-rgb));
+    --40k-card: rgb(var(--40k-card-rgb));
+    --40k-border: rgb(var(--40k-border-rgb));
+    --40k-crimson: rgb(var(--40k-crimson-rgb));
+    --40k-crimson-bright: rgb(var(--40k-crimson-bright-rgb));
+    --40k-gold: rgb(var(--40k-gold-rgb));
+    --40k-gold-dim: rgb(var(--40k-gold-dim-rgb));
+    --40k-gold-bright: rgb(var(--40k-gold-bright-rgb));
+    --40k-bronze: rgb(var(--40k-bronze-rgb));
+    --40k-red: rgb(var(--40k-red-rgb));
+    --40k-red-bright: rgb(var(--40k-red-bright-rgb));
+    --40k-shadow-gold: 0 0 18px rgb(var(--40k-gold-rgb) / 0.35);
+    --40k-shadow-crimson: 0 0 18px rgb(var(--40k-crimson-rgb) / 0.35);
+    --40k-grid: rgb(var(--40k-gold-rgb) / 0.04);
+  }
+
+  [data-theme="chaos"] {
+    --40k-black-rgb: 5 0 8;
+    --40k-dark-rgb: 13 0 21;
+    --40k-card-rgb: 18 8 26;
+    --40k-border-rgb: 61 31 92;
+    --40k-crimson-rgb: 107 26 139;
+    --40k-crimson-bright-rgb: 147 51 234;
+    --40k-gold-rgb: 132 204 22;
+    --40k-gold-dim-rgb: 82 122 10;
+    --40k-gold-bright-rgb: 163 230 53;
+    --40k-bronze-rgb: 124 58 237;
+    --40k-red-rgb: 107 26 139;
+    --40k-red-bright-rgb: 168 85 247;
+    --40k-black: rgb(var(--40k-black-rgb));
+    --40k-dark: rgb(var(--40k-dark-rgb));
+    --40k-card: rgb(var(--40k-card-rgb));
+    --40k-border: rgb(var(--40k-border-rgb));
+    --40k-crimson: rgb(var(--40k-crimson-rgb));
+    --40k-crimson-bright: rgb(var(--40k-crimson-bright-rgb));
+    --40k-gold: rgb(var(--40k-gold-rgb));
+    --40k-gold-dim: rgb(var(--40k-gold-dim-rgb));
+    --40k-gold-bright: rgb(var(--40k-gold-bright-rgb));
+    --40k-bronze: rgb(var(--40k-bronze-rgb));
+    --40k-red: rgb(var(--40k-red-rgb));
+    --40k-red-bright: rgb(var(--40k-red-bright-rgb));
+    --40k-shadow-gold: 0 0 18px rgb(var(--40k-gold-rgb) / 0.35);
+    --40k-shadow-crimson: 0 0 18px rgb(var(--40k-crimson-rgb) / 0.35);
+    --40k-grid: rgb(var(--40k-gold-rgb) / 0.04);
+  }
+
+  [data-theme="ork"] {
+    --40k-black-rgb: 10 15 5;
+    --40k-dark-rgb: 16 20 8;
+    --40k-card-rgb: 22 28 12;
+    --40k-border-rgb: 61 74 31;
+    --40k-crimson-rgb: 92 122 26;
+    --40k-crimson-bright-rgb: 132 204 22;
+    --40k-gold-rgb: 234 179 8;
+    --40k-gold-dim-rgb: 154 122 0;
+    --40k-gold-bright-rgb: 250 204 21;
+    --40k-bronze-rgb: 139 105 20;
+    --40k-red-rgb: 122 58 26;
+    --40k-red-bright-rgb: 220 132 48;
+    --40k-black: rgb(var(--40k-black-rgb));
+    --40k-dark: rgb(var(--40k-dark-rgb));
+    --40k-card: rgb(var(--40k-card-rgb));
+    --40k-border: rgb(var(--40k-border-rgb));
+    --40k-crimson: rgb(var(--40k-crimson-rgb));
+    --40k-crimson-bright: rgb(var(--40k-crimson-bright-rgb));
+    --40k-gold: rgb(var(--40k-gold-rgb));
+    --40k-gold-dim: rgb(var(--40k-gold-dim-rgb));
+    --40k-gold-bright: rgb(var(--40k-gold-bright-rgb));
+    --40k-bronze: rgb(var(--40k-bronze-rgb));
+    --40k-red: rgb(var(--40k-red-rgb));
+    --40k-red-bright: rgb(var(--40k-red-bright-rgb));
+    --40k-shadow-gold: 0 0 18px rgb(var(--40k-gold-rgb) / 0.35);
+    --40k-shadow-crimson: 0 0 18px rgb(var(--40k-crimson-rgb) / 0.35);
+    --40k-grid: rgb(var(--40k-gold-rgb) / 0.04);
+  }
+
+  [data-theme="eldar"] {
+    --40k-black-rgb: 5 10 10;
+    --40k-dark-rgb: 8 21 21;
+    --40k-card-rgb: 12 26 26;
+    --40k-border-rgb: 26 74 74;
+    --40k-crimson-rgb: 13 148 136;
+    --40k-crimson-bright-rgb: 20 184 166;
+    --40k-gold-rgb: 167 139 250;
+    --40k-gold-dim-rgb: 124 58 237;
+    --40k-gold-bright-rgb: 196 181 253;
+    --40k-bronze-rgb: 107 33 168;
+    --40k-red-rgb: 26 74 107;
+    --40k-red-bright-rgb: 59 130 246;
+    --40k-black: rgb(var(--40k-black-rgb));
+    --40k-dark: rgb(var(--40k-dark-rgb));
+    --40k-card: rgb(var(--40k-card-rgb));
+    --40k-border: rgb(var(--40k-border-rgb));
+    --40k-crimson: rgb(var(--40k-crimson-rgb));
+    --40k-crimson-bright: rgb(var(--40k-crimson-bright-rgb));
+    --40k-gold: rgb(var(--40k-gold-rgb));
+    --40k-gold-dim: rgb(var(--40k-gold-dim-rgb));
+    --40k-gold-bright: rgb(var(--40k-gold-bright-rgb));
+    --40k-bronze: rgb(var(--40k-bronze-rgb));
+    --40k-red: rgb(var(--40k-red-rgb));
+    --40k-red-bright: rgb(var(--40k-red-bright-rgb));
+    --40k-shadow-gold: 0 0 18px rgb(var(--40k-gold-rgb) / 0.35);
+    --40k-shadow-crimson: 0 0 18px rgb(var(--40k-crimson-rgb) / 0.35);
+    --40k-grid: rgb(var(--40k-gold-rgb) / 0.04);
   }
 
   * {
@@ -46,7 +185,7 @@
   .cyber-card,
   .imperium-card {
     @apply bg-40k-card border border-40k-border rounded-lg p-4;
-    box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.08);
+    box-shadow: 0 0 0 1px rgb(var(--40k-gold-rgb) / 0.08);
   }
 
   .cyber-card-hover,
@@ -57,7 +196,7 @@
   .cyber-card-hover:hover,
   .imperium-card-hover:hover {
     @apply border-40k-gold/50;
-    box-shadow: 0 0 15px rgba(201, 162, 39, 0.2);
+    box-shadow: 0 0 15px rgb(var(--40k-gold-rgb) / 0.2);
   }
 
   .cyber-button,
@@ -69,7 +208,7 @@
   .cyber-button:hover,
   .imperium-button:hover {
     @apply border-40k-gold text-40k-gold;
-    box-shadow: 0 0 12px rgba(201, 162, 39, 0.25);
+    box-shadow: 0 0 12px rgb(var(--40k-gold-rgb) / 0.25);
   }
 
   .cyber-button-primary,
@@ -80,7 +219,7 @@
   .cyber-button-primary:hover,
   .imperium-button-primary:hover {
     @apply bg-40k-gold/20 border-40k-gold;
-    box-shadow: 0 0 20px rgba(201, 162, 39, 0.35);
+    box-shadow: 0 0 20px rgb(var(--40k-gold-rgb) / 0.35);
   }
 
   .cyber-input,
@@ -108,15 +247,15 @@
       0deg,
       transparent,
       transparent 2px,
-      rgba(122, 16, 41, 0.03) 2px,
-      rgba(122, 16, 41, 0.03) 4px
+      rgb(var(--40k-crimson-rgb) / 0.03) 2px,
+      rgb(var(--40k-crimson-rgb) / 0.03) 4px
     );
   }
 
   .grid-bg {
     background-image:
-      linear-gradient(rgba(201, 162, 39, 0.04) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(201, 162, 39, 0.04) 1px, transparent 1px);
+      linear-gradient(var(--40k-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--40k-grid) 1px, transparent 1px);
     background-size: 24px 24px;
   }
 }

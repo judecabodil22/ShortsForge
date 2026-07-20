@@ -1,4 +1,4 @@
-import glob, json, os, re, time
+import gc, glob, json, os, re, time
 
 from workflows.cogitator import (
     log, log_error, set_status, set_progress, env, MEDIA_DIR,
@@ -131,6 +131,13 @@ def phase_transcribe(video):
 
         log("faster-whisper transcription complete")
         transcription_success = True
+
+        # Free WhisperModel memory — it can use several GB
+        try:
+            del model
+        except NameError:
+            pass
+        gc.collect()
 
         if 'transcript_text' in locals() and transcript_text:
             game_title = env("GAME_TITLE", "Unknown Game")

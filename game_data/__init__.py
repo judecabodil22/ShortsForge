@@ -1,0 +1,3 @@
+"""
+Cogitator game data package.
+"""
