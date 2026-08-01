@@ -19,9 +19,9 @@ export default function PhaseTimeline({ status }: Props) {
   const [autoScroll, setAutoScroll] = useState(true)
 
   const { data: logsData } = useQuery({
-    queryKey: ['logs'],
+    queryKey: ['phase-logs'],
     queryFn: () => getLogs(100),
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   })
 
   const logs = logsData?.logs || []

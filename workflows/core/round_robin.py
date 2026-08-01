@@ -53,6 +53,7 @@ def init_round_robin(
         weight = variant_weights.get(variant, 1.0)
         slots = max(1, round(weight * 2))
         weighted_variants.extend([variant] * slots)
+    random.shuffle(weighted_variants)
 
     with _rr_lock:
         _rr_variants = (weighted_variants * ((num_scripts // max(len(weighted_variants), 1)) + 2))[:num_scripts]
@@ -88,8 +89,8 @@ def get_next_variant_perspective(
             return random.choice(variant_keys), random.choice(perspectives)
 
         idx = _rr_script_index
-        variant = _rr_variants[idx] if idx < len(_rr_variants) else random.choice(variant_keys)
-        perspective = _rr_perspectives[idx] if idx < len(_rr_perspectives) else random.choice(perspectives)
+        variant = _rr_variants[idx % len(_rr_variants)]
+        perspective = _rr_perspectives[idx % len(_rr_perspectives)]
         _rr_script_index = idx + 1
     return variant, perspective
 
@@ -102,8 +103,8 @@ def get_next_voice_style() -> Tuple[str, str]:
             return random.choice(TTS_VOICES), random.choice(TTS_STYLE_OPTIONS)
 
         idx = _rr_tts_index
-        voice = _rr_voices[idx] if idx < len(_rr_voices) else random.choice(_rr_voices)
-        style = _rr_styles[idx] if idx < len(_rr_styles) else random.choice(_rr_styles)
+        voice = _rr_voices[idx % len(_rr_voices)]
+        style = _rr_styles[idx % len(_rr_styles)]
         _rr_tts_index = idx + 1
     return voice, style
 

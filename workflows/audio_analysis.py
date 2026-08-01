@@ -165,25 +165,6 @@ def _detect_laughter(audio_path: str) -> bool:
         return False
 
 
-def _detect_laughter(audio_path: str) -> bool:
-    """Detect potential laughter based on audio patterns."""
-    try:
-        cmd = [
-            'ffmpeg', '-i', audio_path,
-            '-af', 'silencedetect=n=-40dB:d=0.3',
-            '-f', 'null', '-'
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        output = result.stderr
-        
-        silence_count = output.count('silencedetect')
-        return silence_count > 2 and silence_count < 20
-        
-    except:
-        return False
-
-
 def get_audio_features_for_scenes(video_path: str, scenes: List[Dict]) -> List[Dict]:
     """Analyze audio for all scenes and return enhanced scene data."""
     enhanced_scenes = []
@@ -353,14 +334,14 @@ def enhance_scene_selection(scenes: List[Dict], video_path: str = None) -> List[
     """Enhance scene selection with audio analysis + scene detection."""
     if not video_path or not os.path.exists(video_path):
         for scene in scenes:
-            scene['audio_virality_score'] = scene.get('drama_score', 50)
+            scene['audio_virality_score'] = scene.get('score', 50)
         return scenes
     
     try:
         return get_audio_features_for_scenes(video_path, scenes)
     except Exception as e:
         for scene in scenes:
-            scene['audio_virality_score'] = scene.get('drama_score', 50)
+            scene['audio_virality_score'] = scene.get('score', 50)
         return scenes
 
 

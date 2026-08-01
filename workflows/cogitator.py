@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Cogitator — YouTube Shorts Pipeline
-Combines: cogitator.sh, telegram_listener.sh, generate_script.sh, onboard.sh
+Combines: cogitator.sh, generate_script.sh, onboard.sh
 """
 import argparse, base64, datetime, gc, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 _workflow_dir = os.path.dirname(os.path.abspath(__file__))
 _workspace = os.path.dirname(_workflow_dir)
@@ -163,6 +163,26 @@ TEMPERATURE_BY_TYPE = {
     "true_story": 0.7,
 }
 
+LLM_PARAMS_BY_TYPE = {
+    "mystery_recap":    {"top_p": 0.90, "repetition_penalty": 1.1},
+    "breakdown":        {"top_p": 0.80, "repetition_penalty": 1.2},
+    "timeline":         {"top_p": 0.90, "repetition_penalty": 1.0},
+    "lesson":           {"top_p": 0.90, "repetition_penalty": 1.1},
+    "narrative":        {"top_p": 0.95, "repetition_penalty": 1.0},
+    "news_report":      {"top_p": 0.85, "repetition_penalty": 1.3},
+    "documentary":      {"top_p": 0.85, "repetition_penalty": 1.2},
+    "true_crime":       {"top_p": 0.90, "repetition_penalty": 1.1},
+    "character_pov":    {"top_p": 0.95, "repetition_penalty": 1.0},
+    "true_story":       {"top_p": 0.90, "repetition_penalty": 1.1},
+}
+
+def _get_llm_params(variant_key):
+    base = LLM_PARAMS_BY_TYPE.get(variant_key, {})
+    return {
+        "top_p": base.get("top_p", 0.9),
+        "repetition_penalty": base.get("repetition_penalty", 1.1),
+    }
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 DEFAULT_WORKSPACE = os.path.expanduser("~/Cogitator")
 
@@ -188,6 +208,7 @@ TRANSCRIPTS_DIR  = os.path.join(WORKSPACE, "transcripts")
 SCRIPTS_DIR      = os.path.join(WORKSPACE, "scripts")
 TTS_DIR          = os.path.join(WORKSPACE, "tts")
 SHORTS_DIR       = os.path.join(WORKSPACE, "shorts")
+ASSEMBLY_DIR     = os.path.join(WORKSPACE, "assembly")
 OUTPUT_DIR       = os.path.join(WORKSPACE, "output")
 
 # Media import directory (for local videos)
@@ -276,16 +297,9 @@ def get_cs_context_file():
 # CS_CONTEXT_FILE will be set after env() is defined - use a lazy approach
 CS_CONTEXT_FILE = None  # Will be set lazily
 
-STREAMING = False  # set True when called from listener
 PIPELINE_RUNNING = False
-LISTENER_RESTART = False  # set True when update requires restart
 PIPELINE_STOP_REQUESTED = False  # set True to request pipeline stop
 _pipeline_globals_lock = threading.Lock()
-LISTENER_RUNNING = True  # set False to stop listener
-_SF_DIR = os.path.join(os.path.expanduser("~/.cogitator"))
-os.makedirs(_SF_DIR, exist_ok=True)
-PID_FILE = os.path.join(_SF_DIR, "listener.pid")
-OFFSET_FILE = os.path.join(_SF_DIR, "listener_offset")
 
 # Learning state (refreshed at pipeline start)
 _LEARNING_BASELINE = {}
@@ -413,12 +427,11 @@ def load_env():
     return env
 
 ENV = load_env()
+os.environ.update({k: v for k, v in ENV.items() if v is not None})
 
 def env(key, default=""):
     keychain_map = {
         "GEMINI_API_KEY": "gemini-api-key",
-        "TELEGRAM_BOT_TOKEN": "telegram-bot-token",
-        "TELEGRAM_CHAT_ID": "telegram-chat-id",
     }
     if key in keychain_map:
         keychain_key = keychain_map[key]
@@ -456,69 +469,20 @@ def set_progress(phase_num, percent, label):
         percent = 100
     set_status(f"Phase {phase_num}: {label} ({percent}%)")
 
-# ─── Telegram ─────────────────────────────────────────────────────────────────
-def tg_send(msg, parse_mode=None):
-    token = env("TELEGRAM_BOT_TOKEN")
-    chat  = env("TELEGRAM_CHAT_ID")
-    if not token or not chat:
-        return
-    try:
-        params = {"chat_id": chat, "text": msg}
-        if parse_mode:
-            params["parse_mode"] = parse_mode
-        data = urllib.parse.urlencode(params).encode()
-        req  = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
-                                      data=data, method="POST")
-        urllib.request.urlopen(req, timeout=10)
-    except urllib.error.HTTPError as e:
-        print(f"Telegram send error: {e}")
-
-def tg_send_menu(msg, reply_markup=None):
-    token = env("TELEGRAM_BOT_TOKEN")
-    chat  = env("TELEGRAM_CHAT_ID")
-    if not token or not chat:
-        return
-    try:
-        params = {"chat_id": chat, "text": msg}
-        if reply_markup:
-            params["reply_markup"] = json.dumps(reply_markup)
-        data = urllib.parse.urlencode(params).encode()
-        req  = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
-                                      data=data, method="POST")
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as e:
-        print(f"Menu send error: {e}")
-
-def tg_answer_callback(callback_id, text=None):
-    token = env("TELEGRAM_BOT_TOKEN")
-    if not token:
-        return
-    try:
-        params = {"callback_query_id": callback_id}
-        if text:
-            params["text"] = text
-        data = urllib.parse.urlencode(params).encode()
-        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/answerCallbackQuery",
-                                    data=data, method="POST")
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as e:
-        print(f"Callback answer error: {e}")
-        if isinstance(e, urllib.error.HTTPError):
-            try:
-                body = e.read().decode()
-            except:
-                body = "No response body"
-            log_error(f"Telegram callback: {e.code} {e.reason} - {body[:200]}")
+# ─── Notifications ─────────────────────────────────────────────────────────────
+def log_notification(msg):
+    """Log a notification message."""
+    log(f"[NOTIFICATION] {msg}")
 
 def notify(msg):
-    if STREAMING:
-        tg_send(msg)
+    """Send a notification (always logs, no external services)."""
+    log_notification(msg)
 
 
 # ─── Context Confirmation Functions ────────────────────────────────────────────
 
 def send_context_confirmation(game_title, extracted, verified, comparison):
-    """Send context confirmation request via Telegram or CLI."""
+    """Send context confirmation request via Web UI."""
     # Auto-approve without waiting - context syncs to MemPalace for learning
     log(f"Context auto-approved for {game_title} (sync to MemPalace enabled)")
     return "auto_approved"
@@ -755,7 +719,7 @@ def handle_context_callback(callback_data, game_title, cb_id):
         removed = None
         if 0 <= idx < len(chars):
             removed = chars.pop(idx)
-            tg_answer_callback(cb_id, f"Removed {removed}")
+            log_notification(f"Removed {removed}")
         
         # Rebuild keyboard with updated list
         chars = state.get("extracted", {}).get("characters", [])
@@ -783,7 +747,7 @@ def handle_context_callback(callback_data, game_title, cb_id):
 PENDING_CONTEXT = {}
 
 def handle_context_edit_input(txt, chat_id):
-    """Handle context editing flow via Telegram."""
+    """Handle context editing flow via Web UI."""
     global CONTEXT_EDIT_STATE
     
     with _ctx_edit_lock:
@@ -800,7 +764,7 @@ def handle_context_edit_input(txt, chat_id):
                 CONTEXT_EDIT_STATE.update(state)
             
             items = "\n".join([f"{i+1}. {c}" for i, c in enumerate(chars)])
-            tg_send(f"📝 Current Characters:\n{items}\n\nEnter the number to remove, or type a name to add:")
+            log_notification(f"📝 Current Characters:\n{items}\n\nEnter the number to remove, or type a name to add:")
             return True
             
         elif txt == "2":
@@ -812,7 +776,7 @@ def handle_context_edit_input(txt, chat_id):
                 CONTEXT_EDIT_STATE.update(state)
             
             items = "\n".join([f"{i+1}. {l}" for i, l in enumerate(locs)])
-            tg_send(f"📍 Current Locations:\n{items}\n\nEnter the number to remove, or type a name to add:")
+            log_notification(f"📍 Current Locations:\n{items}\n\nEnter the number to remove, or type a name to add:")
             return True
             
         elif txt == "3":
@@ -824,10 +788,10 @@ def handle_context_edit_input(txt, chat_id):
                 CONTEXT_EDIT_STATE.update(state)
             
             items = "\n".join([f"{i+1}. {r}" for i, r in enumerate(rels[:10])])
-            tg_send(f"👥 Current Relationships:\n{items}\n\nEnter the number to remove, or type in format 'Name1 -> Name2: relationship' to add:")
+            log_notification(f"👥 Current Relationships:\n{items}\n\nEnter the number to remove, or type in format 'Name1 -> Name2: relationship' to add:")
             return True
         else:
-            tg_send("Invalid choice. Reply with 1, 2, or 3")
+            log_notification("Invalid choice. Reply with 1, 2, or 3")
             return True
             
     elif step == "edit_characters":
@@ -838,20 +802,20 @@ def handle_context_edit_input(txt, chat_id):
             if 0 <= idx < len(items):
                 removed = items.pop(idx)
                 state["current_items"] = items
-                tg_send(f"✅ Removed: {removed}")
+                log_notification(f"✅ Removed: {removed}")
             else:
-                tg_send("Invalid number")
+                log_notification("Invalid number")
         else:
             # Add new character
             items = state.get("current_items", [])
             items.append(txt)
             state["current_items"] = items
-            tg_send(f"✅ Added: {txt}")
+            log_notification(f"✅ Added: {txt}")
         
         with _ctx_edit_lock:
             state["extracted"]["characters"] = items
             CONTEXT_EDIT_STATE.update(state)
-        tg_send("Done editing? Reply 'done' to save, or continue editing.")
+        log_notification("Done editing? Reply 'done' to save, or continue editing.")
         return True
         
     elif step == "edit_locations":
@@ -861,19 +825,19 @@ def handle_context_edit_input(txt, chat_id):
             if 0 <= idx < len(items):
                 removed = items.pop(idx)
                 state["current_items"] = items
-                tg_send(f"✅ Removed: {removed}")
+                log_notification(f"✅ Removed: {removed}")
             else:
-                tg_send("Invalid number")
+                log_notification("Invalid number")
         else:
             items = state.get("current_items", [])
             items.append(txt)
             state["current_items"] = items
-            tg_send(f"✅ Added: {txt}")
+            log_notification(f"✅ Added: {txt}")
         
         with _ctx_edit_lock:
             state["extracted"]["locations"] = items
             CONTEXT_EDIT_STATE.update(state)
-        tg_send("Done editing? Reply 'done' to save, or continue editing.")
+        log_notification("Done editing? Reply 'done' to save, or continue editing.")
         return True
         
     elif step == "edit_relationships":
@@ -883,9 +847,9 @@ def handle_context_edit_input(txt, chat_id):
             if 0 <= idx < len(items):
                 removed = items.pop(idx)
                 state["current_items"] = items
-                tg_send(f"✅ Removed: {removed}")
+                log_notification(f"✅ Removed: {removed}")
             else:
-                tg_send("Invalid number")
+                log_notification("Invalid number")
         elif "->" in txt and ":" in txt:
             # Add new relationship: "Name1 -> Name2: relationship"
             try:
@@ -897,17 +861,17 @@ def handle_context_edit_input(txt, chat_id):
                 items = state.get("current_items", [])
                 items.append({"from": char1, "to": char2, "relationship": rel})
                 state["current_items"] = items
-                tg_send(f"✅ Added: {char1} -> {char2}: {rel}")
+                log_notification(f"✅ Added: {char1} -> {char2}: {rel}")
             except:
-                tg_send("Invalid format. Use: Name1 -> Name2: relationship")
+                log_notification("Invalid format. Use: Name1 -> Name2: relationship")
         else:
-            tg_send("Invalid. Enter number to remove, or 'Name1 -> Name2: relationship' to add")
+            log_notification("Invalid. Enter number to remove, or 'Name1 -> Name2: relationship' to add")
         
         items = state.get("current_items", [])
         with _ctx_edit_lock:
             state["extracted"]["relationships"] = items
             CONTEXT_EDIT_STATE.update(state)
-        tg_send("Done editing? Reply 'done' to save, or continue editing.")
+        log_notification("Done editing? Reply 'done' to save, or continue editing.")
         return True
         
     elif txt.lower() == "done":
@@ -920,13 +884,13 @@ def handle_context_edit_input(txt, chat_id):
         
         with _ctx_edit_lock:
             CONTEXT_EDIT_STATE.clear()
-        tg_send(f"✅ Context saved for {game_title}!\n\nRun Phase 2 to verify, then Phase 4 for scripts.")
+        log_notification(f"✅ Context saved for {game_title}!\n\nRun Phase 2 to verify, then Phase 4 for scripts.")
         return True
         
     elif txt.lower() == "cancel":
         with _ctx_edit_lock:
             CONTEXT_EDIT_STATE.clear()
-        tg_send("❌ Edit cancelled.")
+        log_notification("❌ Edit cancelled.")
         return True
     
     return False
@@ -963,7 +927,7 @@ def _cs_update_context_for_edit(extracted):
             elif isinstance(rel, str):
                 f.write(f"| {rel} |\n")
     
-    log(f"Context files updated from Telegram edit")
+    log(f"Context files updated from Web UI edit")
 
 
 def set_pending_context(game_title, extracted, verified, comparison):
@@ -1039,414 +1003,6 @@ def _reload_context_from_obsidian():
     rels = len(ctx.get("relationships", []))
     
     return f"✅ Reloaded from Obsidian and saved as verified!\n\n📝 {chars} chars\n📍 {locs} locs\n👥 {rels} rels"
-
-# ─── Inline Menu Functions ───────────────────────────────────────────────────
-def get_main_menu():
-    """Main menu reorganized by functionality groups."""
-    return {
-        "inline_keyboard": [
-            [{"text": "📊 Status", "callback_data": "menu_status"}],
-            [{"text": "▶️ Run Full Pipeline", "callback_data": "run_full"}],
-            [{"text": "────────── Tools ──────────", "callback_data": "noop"}],
-            [{"text": "🎨 Content Studio", "callback_data": "menu_content_studio"}, {"text": "🗂️ Context", "callback_data": "menu_context"}],
-            [{"text": "⚙️ Config", "callback_data": "menu_config"}, {"text": "ℹ️ Help", "callback_data": "menu_help"}]
-        ]
-    }
-
-def get_run_menu():
-    """Run menu - organized pipeline control."""
-    return {
-        "inline_keyboard": [
-            [{"text": "▶️ Run Full Pipeline", "callback_data": "run_full"}],
-            [{"text": "────────── Options ──────────", "callback_data": "noop"}],
-            [{"text": "⬅️ Back", "callback_data": "menu_back"}]
-        ]
-    }
-
-def get_context_menu():
-    """Context management submenu."""
-    game = env("GAME_TITLE", "No game set")
-    verified = load_verified_context(game)
-    verified_info = "✅ Verified" if verified else "❌ Not verified"
-    
-    return {
-        "inline_keyboard": [
-            [{"text": "📝 View Context", "callback_data": "ctx_view"}],
-            [{"text": "🔄 Reload from Obsidian", "callback_data": "ctx_reload"}],
-            [{"text": "🗑️ Clear Context", "callback_data": "ctx_clear_verified"}],
-            [{"text": "⬅️ Back", "callback_data": "menu_back"}]
-        ]
-    }
-
-def get_config_menu():
-    return {
-        "inline_keyboard": [
-            [{"text": "🎤 Voice", "callback_data": "config_voice"}, {"text": "📝 Index", "callback_data": "config_index"}],
-            [{"text": "🎵 Style", "callback_data": "config_style"}, {"text": "🎮 Game", "callback_data": "config_game"}],
-            [{"text": "📁 Source", "callback_data": "config_source"}, {"text": "📂 Files", "callback_data": "files_browse"}],
-            [{"text": "⬅️ Back", "callback_data": "menu_back"}]
-        ]
-    }
-
-def get_help_menu():
-    """Help menu with organized information."""
-    return {
-        "inline_keyboard": [
-            [{"text": "📖 Commands", "callback_data": "help_commands"}],
-            [{"text": "💬 Pipeline Phases", "callback_data": "help_phases"}],
-            [{"text": "🎤 TTS Voices", "callback_data": "help_voices"}],
-            [{"text": "📚 Context System", "callback_data": "help_context"}],
-            [{"text": "⬅️ Back to Menu", "callback_data": "menu_back"}]
-        ]
-    }
-
-# ─── Help Content Functions ─────────────────────────────────────────────────
-
-def handle_help_callback(callback_data):
-    """Handle help submenu callbacks."""
-    if callback_data == "help_commands":
-        return """📖 Telegram Commands
-
-📊 Status & Info:
-/status - Show listener & pipeline status
-/config - Show current settings
-/version - Show version info
-/debug - Show recent logs
-/menu - Show interactive menu
-
-▶️ Pipeline Control:
-/run - Run full pipeline
-/stop_pipeline - Stop running pipeline
-
-🎨 Content Studio:
-/cs - Open Content Studio
-/cs_context - View context
-/context_clear - Clear all context
-
-🛠️ Tools:
-/cleanup - Delete all generated files
-/learning_stats - Show AI learning stats
-/update - Check for updates"""
-    
-    elif callback_data == "help_phases":
-        return """💬 Pipeline Phases
-
-Phase 1 (📥) - Download
-Downloads videos from YouTube playlist
-
-Phase 2 (📝) - Transcribe + Context
-Converts audio to text with timestamps
-Extracts context (characters, locations)
-🔧 NEW: Pauses for context confirmation!
-
-Phase 4 (📝) - Scripts
-Generates AI-powered scripts
-Uses verified context for accuracy
-
-Phase 5 (🎬) - Clips
-Extracts video clips based on scenes
-
-Phase 6 (🎤) - TTS
-Creates AI voice narration
-Generates SRT subtitles"""
-
-    elif callback_data == "help_voices":
-        return """🎤 Available TTS Voices
-
-Categories:
-🧙 Mysterious: Zephyr, Charon, Umbriel
-👥 Conversational: Aoede, Leda, Kore
-📺 Documentary: Vindemiatrix, Gacrux, Sadachbia
-🔥 Intense: Fenrir, Orus, Rasalgethi
-📚 Educational: Alnilam, Algieba, Schedar
-
-Change via:
-• Menu → Config → Voice
-• /set_voice [name]"""
-
-    elif callback_data == "help_context":
-        return """📚 Context System
-
-How it works:
-1. Phase 2 extracts context from transcript
-2. If first run → pauses for confirmation
-3. If changes detected → pauses for review
-4. You approve → saved as verified
-
-Why verify?
-• Validation uses verified context
-• Prevents hallucinated characters
-• More accurate scripts
-
-Edit via:
-• Click Edit on confirmation message
-• Edit Obsidian files directly"""
-    
-    return None
-
-def get_voice_menu():
-    voices = TTS_VOICES
-    current = env("TTS_VOICE", "")
-    keyboard = []
-    for i in range(0, len(voices), 3):
-        row = []
-        for v in voices[i:i+3]:
-            mark = "✓" if v == current else ""
-            row.append({"text": f"{v} {mark}".strip(), "callback_data": f"set_voice_{v}"})
-        keyboard.append(row)
-    keyboard.append([{"text": "⬅️ Back", "callback_data": "menu_config"}])
-    return {"inline_keyboard": keyboard}
-
-def get_index_menu():
-    keyboard = [
-        [{"text": "1", "callback_data": "set_index_1"}, {"text": "2", "callback_data": "set_index_2"}, {"text": "3", "callback_data": "set_index_3"}, {"text": "4", "callback_data": "set_index_4"}, {"text": "5", "callback_data": "set_index_5"}],
-        [{"text": "6", "callback_data": "set_index_6"}, {"text": "7", "callback_data": "set_index_7"}, {"text": "8", "callback_data": "set_index_8"}, {"text": "9", "callback_data": "set_index_9"}, {"text": "10", "callback_data": "set_index_10"}],
-        [{"text": "⬅️ Back", "callback_data": "menu_config"}]
-    ]
-    return {"inline_keyboard": keyboard}
-
-def get_style_menu():
-    styles = ["Default", "Narrative", "Exciting", "Mysterious", "Funny", "Emotional", "Action", "Horror", "Romance", "Documentary"]
-    current = env("TTS_STYLE", "")
-    keyboard = []
-    for i in range(0, len(styles), 2):
-        row = []
-        for s in styles[i:i+2]:
-            mark = "✓" if s == current else ""
-            row.append({"text": f"{s} {mark}".strip(), "callback_data": f"set_style_{s}"})
-        keyboard.append(row)
-    keyboard.append([{"text": "⬅️ Back", "callback_data": "menu_config"}])
-    return {"inline_keyboard": keyboard}
-
-def get_game_menu():
-    games = ["Life is Strange", "Before the Storm", "True Colors", "Double Exposure", "Spider-Man", "God of War", "Hogwarts Legacy", "The Last of Us"]
-    current = env("GAME_TITLE", "")
-    keyboard = []
-    for i in range(0, len(games), 2):
-        row = []
-        for g in games[i:i+2]:
-            mark = "✓" if g == current else ""
-            row.append({"text": f"{g} {mark}".strip(), "callback_data": f"set_game_{g}"})
-        keyboard.append(row)
-    keyboard.append([{"text": "🗑️ Clear", "callback_data": "set_game__clear"}])
-    keyboard.append([{"text": "⬅️ Back", "callback_data": "menu_config"}])
-    return {"inline_keyboard": keyboard}
-
-def get_files_menu():
-    sc = count_files(os.path.join(SCRIPTS_DIR, "*.txt"))
-    cc = count_files(os.path.join(SHORTS_DIR, "*.mp4"))
-    wc = count_files(os.path.join(TTS_DIR, "*.wav"))
-    return {
-        "inline_keyboard": [
-            [{"text": f"📝 Scripts ({sc})", "callback_data": "files_scripts"}, {"text": f"🎬 Clips ({cc})", "callback_data": "files_clips"}],
-            [{"text": f"🎤 TTS ({wc})", "callback_data": "files_tts"}],
-            [{"text": "🧹 Cleanup All", "callback_data": "cleanup_files"}, {"text": "⬅️ Back", "callback_data": "menu_config"}]
-        ]
-    }
-
-def get_content_studio_menu():
-    tc = count_files(os.path.join(CS_TRANSCRIPTS_DIR, "*.json"))
-    sc = count_files(os.path.join(CS_SHORTS_DIR, "*.mp4"))
-    cc = count_files(os.path.join(CS_SCRIPTS_DIR, "*.txt"))
-    return {
-        "inline_keyboard": [
-            [{"text": "📥 Import Pipeline Data", "callback_data": "cs_import"}],
-            [{"text": "🎬 Generate Script", "callback_data": "cs_generate"}],
-            [{"text": "🎤 Generate TTS", "callback_data": "cs_generate_tts"}],
-            [{"text": "🗑️ Clear All", "callback_data": "cs_clear"}],
-            [{"text": f"📊 {tc} transcripts, {sc} shorts, {cc} scripts", "callback_data": "cs_status"}],
-            [{"text": "⬅️ Back", "callback_data": "menu_back"}]
-        ]
-    }
-
-def handle_menu_callback(callback_data, cb_id=None):
-    """Handle menu button callbacks."""
-    if callback_data == "menu_status":
-        return _get_rich_status()
-    elif callback_data == "menu_pipeline":
-        return None, get_run_menu()
-    elif callback_data == "menu_restart":
-        return "🔄 Restarting listener...", "do_restart"
-    elif callback_data == "menu_config":
-        return None, get_config_menu()
-    elif callback_data == "menu_help":
-        return None, get_help_menu()
-    elif callback_data.startswith("help_"):
-        return handle_help_callback(callback_data)
-    elif callback_data == "menu_content_studio":
-        return None, get_content_studio_menu()
-    elif callback_data == "menu_context":
-        return None, get_context_menu()
-    elif callback_data == "menu_update":
-        script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        update_info = check_for_updates(script_root)
-        if update_info.get("update_available"):
-            remote_ver = update_info.get("remote_version", "Unknown")
-            return f"🔔 Update available: v{remote_ver}\nRun /update to install.", "run_update"
-        return "✅ You have the latest version."
-    elif callback_data == "menu_stop":
-        return "🛑 Stopping pipeline...", "stop_pipeline"
-    elif callback_data == "menu_back":
-        return None, get_main_menu()
-    elif callback_data == "noop":
-        return None, None  # Do nothing for separator rows
-    elif callback_data == "run_full":
-        return "▶️ Running full pipeline...", "run_pipeline"
-    elif callback_data == "config_voice":
-        return None, get_voice_menu()
-    elif callback_data == "config_index":
-        return None, get_index_menu()
-    elif callback_data == "config_style":
-        return None, get_style_menu()
-    elif callback_data == "config_game":
-        return None, get_game_menu()
-    elif callback_data == "config_source":
-        return "📁 Recording path: " + env("RECORDING_PATH", "~/Videos/Recordings")
-    elif callback_data == "files_browse":
-        return None, get_files_menu()
-    elif callback_data == "files_scripts":
-        return _get_files_list("scripts")
-    elif callback_data == "files_clips":
-        return _get_files_list("clips")
-    elif callback_data == "files_tts":
-        return _get_files_list("tts")
-    elif callback_data == "files_shorts":
-        return _get_files_list("shorts")
-    elif callback_data == "quick_stop":
-        return "🛑 Stopping pipeline...", "stop_pipeline"
-    elif callback_data == "quick_restart":
-        return "🔄 Restarting listener...", "do_restart"
-    elif callback_data == "quick_status":
-        return _get_rich_status()
-    elif callback_data == "quick_clean":
-        return "🧹 Cleaning up files...", "cleanup_files"
-    elif callback_data == "run_update":
-        return "🔄 Updating Cogitator...", "do_update"
-    elif callback_data == "set_voice_":
-        return None, get_voice_menu()
-    elif callback_data.startswith("set_voice_"):
-        voice = callback_data.replace("set_voice_", "")
-        update_env_var("TTS_VOICE", voice)
-        return f"✅ Voice set to: {voice}"
-    elif callback_data.startswith("set_index_"):
-        index = callback_data.replace("set_index_", "")
-        update_env_var("PLAYLIST_INDEX", index)
-        return f"✅ Playlist index set to: {index}"
-    elif callback_data.startswith("set_style_"):
-        style = callback_data.replace("set_style_", "")
-        update_env_var("TTS_STYLE", style)
-        return f"✅ Style set to: {style}"
-    elif callback_data.startswith("set_game_"):
-        game = callback_data.replace("set_game_", "")
-        if game == "_clear":
-            update_env_var("GAME_TITLE", "")
-            return "✅ Game title cleared"
-        update_env_var("GAME_TITLE", game)
-        return f"✅ Game set to: {game}"
-    elif callback_data == "ctx_view":
-        return _show_context_view()
-    elif callback_data == "ctx_reload":
-        return _reload_context_from_obsidian()
-    elif callback_data == "ctx_clear_verified":
-        game = env("GAME_TITLE", "")
-        clear_verified_context(game)
-        return "✅ Context cleared"
-    elif callback_data.startswith("ctx_"):
-        # Context callbacks are routed directly in the listener with cb_id
-        # This path should not be reached for ctx_ callbacks
-        return "Use context menu directly"
-    elif callback_data == "cleanup_files":
-        count = cleanup_all_files()
-        return f"🧹 Cleaned up {count} file(s)"
-    elif callback_data == "do_update":
-        return _do_update_menu()
-    elif callback_data == "cs_import":
-        return "📥 Importing pipeline data...", "cs_do_import"
-    elif callback_data == "cs_generate":
-        return "🎬 Analyzing transcripts...", "cs_do_generate"
-    elif callback_data == "cs_generate_tts":
-        return "🎤 Generating TTS...", "cs_do_generate_tts"
-    elif callback_data == "cs_clear":
-        return "🗑️ Clearing Content Studio...", "cs_do_clear"
-    elif callback_data == "cs_status":
-        tc = count_files(os.path.join(CS_TRANSCRIPTS_DIR, "*.json"))
-        sc = count_files(os.path.join(CS_SHORTS_DIR, "*.mp4"))
-        return f"📊 Content Studio:\n📝 Transcripts: {tc}\n🎬 Shorts: {sc}"
-    else:
-        return "Unknown action"
-
-
-def _get_rich_status():
-    """Get rich status card with file counts and pipeline info."""
-    from context_manager import load_verified_context, get_verified_context_for_validation
-    
-    script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    local_ver = get_local_version(script_root)
-    
-    # File counts
-    sc = count_files(os.path.join(SCRIPTS_DIR, "*.txt"))
-    cc = count_files(os.path.join(SHORTS_DIR, "*.mp4"))
-    wc = count_files(os.path.join(TTS_DIR, "*.wav"))
-    tc = count_files(os.path.join(TRANSCRIPTS_DIR, "*.json"))
-    
-    # Pipeline status
-    s = open(STATUS_FILE).read() if os.path.exists(STATUS_FILE) else ""
-    if PIPELINE_RUNNING:
-        status_line = f"🔄 Running: {s}"
-    elif s:
-        status_line = f"💤 Idle — Last: {s}"
-    else:
-        status_line = "💤 Idle"
-    
-    # Voice and style
-    voice = env("TTS_VOICE", "Not set")
-    style = env("TTS_STYLE", "Default")
-    game = env("GAME_TITLE", "Not set")
-    
-    # Context status
-    game_title = game if game else "No game set"
-    verified = load_verified_context(game_title)
-    if verified:
-        ctx = verified.get("context", {})
-        ctx_chars = len(ctx.get("characters", []))
-        ctx_locs = len(ctx.get("locations", []))
-        ctx_rels = len(ctx.get("relationships", []))
-        verified_info = f"✅ Verified ({ctx_chars} chars, {ctx_locs} locs, {ctx_rels} rels)"
-    else:
-        verified_info = "❌ Not verified"
-    
-    status = f"""📊 Cogitator Status — v{local_ver}
-
-🔹 Pipeline: {status_line}
-
-📁 Files:
-  📝 Scripts: {sc}
-  🎬 Clips: {cc}
-  🎤 TTS: {wc}
-  📄 Transcripts: {tc}
-
-🎮 Game: {game_title}
-🗂️ Context: {verified_info}
-
-⚙️ Config:
-  🎤 Voice: {voice}
-  🎵 Style: {style[:20]}..."""
-    return status
-
-
-def _get_files_list(folder):
-    """Get list of files in a folder."""
-    folder_map = {"scripts": SCRIPTS_DIR, "clips": SHORTS_DIR, "tts": TTS_DIR, "shorts": SHORTS_DIR}
-    dir_path = folder_map.get(folder)
-    if not dir_path:
-        return "Unknown folder"
-    
-    files = sorted(glob.glob(os.path.join(dir_path, "*")), key=os.path.getmtime, reverse=True)[:10]
-    if not files:
-        return f"No files in {folder}"
-    
-    names = [os.path.basename(f) for f in files]
-    return f"📁 {folder.capitalize()} ({len(names)} total):\n" + "\n".join(f"• {n[:40]}" for n in names)
 
 
 # ─── Content Studio Functions ─────────────────────────────────────────────────
@@ -1826,6 +1382,16 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
         prev_script_info += "\n\nThis is a continuation. Build on previous content naturally without repeating what's already been said."
     
     type_prompts = {
+        "Mystery Recap": "Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity. Tell the story chronologically while hinting at secrets. Target 1500-2000 words.",
+        "Breakdown": "Write an analytical breakdown. Start with a hook that states a surprising insight. Explain WHY things happened, not just WHAT. Connect cause and effect. Target 1500-2000 words.",
+        "Timeline": "Write a chronological timeline. Hook viewers immediately with a dramatic moment. Tell events in order from beginning to climax. Build momentum. Target 1500-2000 words.",
+        "Moral/Lesson": "Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. End with a thought-provoking question. Target 1500-2000 words.",
+        "Narrative": "Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid descriptions. Target 1500-2000 words.",
+        "News Report": "Write a professional news report. Lead with the key fact in the first sentence. Add context. Use objective, factual language. Target 1500-2000 words.",
+        "Documentary": "Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context. Target 1500-2000 words.",
+        "True Crime": "Write a true crime story. Hook with a shocking detail. Build investigation and tension. End with revelation. Target 1500-2000 words.",
+        "True Story": "Write a true story narration. Hook with the most unbelievable true detail. Let the facts carry the drama. Target 1500-2000 words.",
+        "Character POV": "Write from the main character's perspective. Hook with an immediate emotional moment. Show internal thoughts in first person. Target 1500-2000 words.",
         "Theory": "Create a 'what if' theory video. Speculate about plot possibilities, character motivations, and future story directions. Make it intriguing and engaging.",
         "Analysis": "Create a character analysis video. Deep dive into character motivations, psychology, relationships, and character arcs. Be informative and educational.",
         "Review": "Create an opinion and review video. Share hot takes, rank elements, and give honest opinions about story beats. Be conversational and engaging.",
@@ -1833,10 +1399,9 @@ def _cs_generate_script(transcript_text, content_type, subject, angle, real_char
         "Lore": "Create a lore and world-building video. Explore game world details, backstory, history, and hidden lore. Be educational and informative."
     }
     
-    type_prompt = type_prompts.get(content_type, type_prompts["Analysis"])
+    type_instruction = type_prompts.get(content_type, type_prompts["Analysis"])
     
     # Get learned constraints for self-improvement
-    game_title = env("GAME_TITLE", "the game")
     learned = get_learned_constraints(game_title=game_title, content_type=content_type.lower() if content_type else "unknown")
     learned_constraints_text = ""
     if learned.get("negative_constraints") or learned.get("positive_emphasis"):
@@ -1868,11 +1433,30 @@ CRITICAL RESTRICTIONS:
 - DO NOT make up roles for characters (e.g., don't say "Chief Bank is leading the inquiry" unless explicitly stated in transcript)
 - Only describe characters and events that are explicitly mentioned in the transcript - do not infer or assume details not directly stated"""
 
-    prompt = f"""You are an expert YouTube scriptwriter specializing in gaming content analysis.
+    # Try Jinja2 template first
+    try:
+        env = _get_prompt_env()
+        template = env.get_template("content_studio.j2")
+        prompt = template.render(
+            game_title=game_title,
+            content_type=content_type,
+            angle=angle,
+            context_info=context_info,
+            type_instruction=type_instruction,
+            learned_constraints=learned_constraints_text,
+            perf_context="",
+            recent_titles="",
+            lore_info="",
+            transcript=transcript_text,
+        )
+    except Exception as e:
+        log(f"   Content Studio Jinja2 template error: {e}, using legacy prompt")
+        # Fallback to legacy f-string prompt
+        prompt = f"""You are an expert YouTube scriptwriter specializing in gaming content analysis.
 
 Create a 1500-2000-word video script (5-10 minutes) about {subject} from {game_title}.
 
-{type_prompt}
+{type_instruction}
 
 {context_info}
 
@@ -2180,31 +1764,31 @@ def _cs_generate_script_only():
     # Find newest unprocessed transcript
     transcript = _cs_find_newest_transcript()
     if not transcript:
-        tg_send("✅ No new transcripts. All have scripts generated.")
+        log_notification("✅ No new transcripts. All have scripts generated.")
         ctx = _cs_load_context()
-        tg_send(f"Scripts generated: {len(ctx.get('previous_scripts', []))}")
+        log_notification(f"Scripts generated: {len(ctx.get('previous_scripts', []))}")
         return
     
     transcript_name = os.path.basename(transcript)
-    tg_send(f"📖 Reading transcript: {transcript_name}")
+    log_notification(f"📖 Reading transcript: {transcript_name}")
     
     transcript_text = _cs_read_transcript(transcript)
     if not transcript_text:
-        tg_send(f"❌ Could not read {transcript_name}")
+        log_notification(f"❌ Could not read {transcript_name}")
         return
     
-    tg_send(f"📖 Read {len(transcript_text)} characters")
+    log_notification(f"📖 Read {len(transcript_text)} characters")
     
     # Extract and update context from transcript
     game_title = env("GAME_TITLE", "Unknown Game")
     game_key = game_title.lower().replace(" ", "_")
-    tg_send("🔍 Extracting context from transcript...")
+    log_notification("🔍 Extracting context from transcript...")
     extracted = _cs_extract_context_from_transcript(transcript_text, game_title)
     ctx = _cs_load_context()
     if extracted:
         ctx = _cs_update_context(extracted, transcript_name)
         _save_segment_references(game_key, transcript_name, extracted, transcript_file=transcript)
-        tg_send(f"📚 Context updated: {len(ctx['characters'])} characters, {len(ctx['locations'])} locations")
+        log_notification(f"📚 Context updated: {len(ctx['characters'])} characters, {len(ctx['locations'])} locations")
         
         # NEW: Also mine to MemPalace for persistent memory
         if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
@@ -2213,19 +1797,19 @@ def _cs_generate_script_only():
                 if mp_manager and transcript:
                     result = mp_manager.mine_transcript(transcript, game_title)
                     if result.get("status") == "success":
-                        tg_send(f"🧠 MemPalace: Mined transcript for {game_title}")
+                        log_notification(f"🧠 MemPalace: Mined transcript for {game_title}")
                     else:
-                        tg_send(f"🧠 MemPalace: Mining skipped")
+                        log_notification(f"🧠 MemPalace: Mining skipped")
             except Exception as mp_err:
-                tg_send(f"🧠 MemPalace: Mining failed - {mp_err}")
+                log_notification(f"🧠 MemPalace: Mining failed - {mp_err}")
     else:
-        tg_send("⚠️ Could not extract context, using existing")
+        log_notification("⚠️ Could not extract context, using existing")
     
-    tg_send("🔍 Analyzing content (this may take a moment)...")
+    log_notification("🔍 Analyzing content (this may take a moment)...")
     content_type, subject, angle, voice_style, real_characters, key_plot_points = _cs_analyze_transcript(transcript_text)
-    tg_send(f"📝 Detected: {content_type}\n👤 Subject: {subject}\n🎤 Voice: {voice_style}\n📋 Characters: {', '.join(real_characters[:5]) if real_characters else 'None'}\n🔑 Plot: {key_plot_points[0] if key_plot_points else 'None'}")
+    log_notification(f"📝 Detected: {content_type}\n👤 Subject: {subject}\n🎤 Voice: {voice_style}\n📋 Characters: {', '.join(real_characters[:5]) if real_characters else 'None'}\n🔑 Plot: {key_plot_points[0] if key_plot_points else 'None'}")
 
-    tg_send("✍️ Generating script (~1500 words)...")
+    log_notification("✍️ Generating script (~1500 words)...")
     
     # NEW: Inject MemPalace memory into context
     if MEMPALACE_AVAILABLE and env("MEMORY_ENABLED", "true").lower() == "true":
@@ -2236,14 +1820,14 @@ def _cs_generate_script_only():
                 if mp_manager:
                     game_memory = mp_manager.get_game_memory(game_title)
                     if game_memory and game_memory.get("success"):
-                        tg_send(f"🧠 MemPalace: Retrieved memory for {game_title}")
+                        log_notification(f"🧠 MemPalace: Retrieved memory for {game_title}")
             except Exception as mp_err:
-                tg_send(f"🧠 MemPalace: Memory retrieval failed - {mp_err}")
+                log_notification(f"🧠 MemPalace: Memory retrieval failed - {mp_err}")
     
     try:
         script = _cs_generate_script(transcript_text, content_type, subject, angle, real_characters, key_plot_points)
     except Exception as e:
-        tg_send(f"❌ Script generation failed: {e}")
+        log_notification(f"❌ Script generation failed: {e}")
         return
     
     script_file = os.path.join(CS_SCRIPTS_DIR, f"content_{content_type.lower()}_{int(time.time())}.txt")
@@ -2263,7 +1847,7 @@ def _cs_generate_script_only():
                     'word_count': len(script.split()),
                 }
                 mp_manager.add_quality_metric(game_title, metric)
-                tg_send(f"🧠 MemPalace: Logged quality metric")
+                log_notification(f"🧠 MemPalace: Logged quality metric")
         except Exception as mp_err:
             pass  # Don't fail on quality logging
     
@@ -2271,7 +1855,7 @@ def _cs_generate_script_only():
     script_summary = f"Script {len(ctx.get('previous_scripts', [])) + 1}: {subject} - {content_type} - {angle[:50]}..."
     _cs_update_context({}, transcript_name, script_summary)
     
-    tg_send(f"✅ Script generated!\n📝 Saved: {os.path.basename(script_file)}")
+    log_notification(f"✅ Script generated!\n📝 Saved: {os.path.basename(script_file)}")
 
 
 def _cs_clean_script_for_tts(script):
@@ -2304,7 +1888,7 @@ def _cs_generate_tts_only():
     """Generate TTS from existing scripts."""
     scripts = sorted(glob.glob(os.path.join(CS_SCRIPTS_DIR, "*.txt")), key=os.path.getmtime, reverse=True)
     if not scripts:
-        tg_send("❌ No scripts found. Generate a script first.")
+        log_notification("❌ No scripts found. Generate a script first.")
         return
     
     latest_script = scripts[0]
@@ -2313,17 +1897,17 @@ def _cs_generate_tts_only():
     
     script = _cs_clean_script_for_tts(original_script)
     word_count = len(script.split())
-    tg_send(f"📄 Found script: {os.path.basename(latest_script)}")
-    tg_send(f"🧹 Cleaned script for TTS: {word_count} words")
-    tg_send("🎤 Generating TTS audio...")
+    log_notification(f"📄 Found script: {os.path.basename(latest_script)}")
+    log_notification(f"🧹 Cleaned script for TTS: {word_count} words")
+    log_notification("🎤 Generating TTS audio...")
     
     try:
         audio_file, voice = _cs_generate_tts(script, "Documentary")
     except Exception as e:
-        tg_send(f"❌ TTS generation failed: {e}")
+        log_notification(f"❌ TTS generation failed: {e}")
         return
     
-    tg_send(f"✅ TTS generated!\n🎤 Voice: {voice}\n📁 Saved: {os.path.basename(audio_file)}")
+    log_notification(f"✅ TTS generated!\n🎤 Voice: {voice}\n📁 Saved: {os.path.basename(audio_file)}")
 
 
 # ── ASR ErrorCorrector ───────────────────────────────────────────────────────────
@@ -3003,6 +2587,10 @@ def _detect_corrections(old_ctx, new_ctx):
     Detect corrections by comparing old context vs newly extracted context.
     Uses fuzzy matching to avoid false positives from alias variations.
     Returns a dict of corrections found.
+    
+    NOTE: This only flags items that are in old_ctx but NOT in new_ctx.
+    Items that are in new_ctx but NOT in old_ctx are additions, not corrections.
+    The caller should decide whether to treat additions as corrections.
     """
     corrections = {
         "removed_characters": [],
@@ -3028,29 +2616,35 @@ def _detect_corrections(old_ctx, new_ctx):
                 added.append(item)
         return removed, added
 
-    removed, added = fuzzy_set_diff(
-        old_ctx.get("characters", []),
-        new_ctx.get("characters", [])
-    )
-    corrections["removed_characters"] = removed
-    corrections["added_characters"] = added
+    # Only compare if both contexts have data
+    # If new_ctx is empty (extraction failed), don't flag anything as removed
+    if new_ctx.get("characters"):
+        removed, added = fuzzy_set_diff(
+            old_ctx.get("characters", []),
+            new_ctx.get("characters", [])
+        )
+        corrections["removed_characters"] = removed
+        corrections["added_characters"] = added
 
-    removed, added = fuzzy_set_diff(
-        old_ctx.get("locations", []),
-        new_ctx.get("locations", [])
-    )
-    corrections["removed_locations"] = removed
-    corrections["added_locations"] = added
+    if new_ctx.get("locations"):
+        removed, added = fuzzy_set_diff(
+            old_ctx.get("locations", []),
+            new_ctx.get("locations", [])
+        )
+        corrections["removed_locations"] = removed
+        corrections["added_locations"] = added
 
-    old_terms = set(old_ctx.get("key_terms", []))
-    new_terms = set(new_ctx.get("key_terms", []))
-    corrections["removed_terms"] = list(old_terms - new_terms)
-    corrections["added_terms"] = list(new_terms - old_terms)
+    if new_ctx.get("key_terms"):
+        old_terms = set(old_ctx.get("key_terms", []))
+        new_terms = set(new_ctx.get("key_terms", []))
+        corrections["removed_terms"] = list(old_terms - new_terms)
+        corrections["added_terms"] = list(new_terms - old_terms)
 
-    old_rels_list = old_ctx.get("relationships", [])
-    new_rels_list = new_ctx.get("relationships", [])
-    corrections["removed_relationships"] = [r for r in old_rels_list if r not in new_rels_list]
-    corrections["added_relationships"] = [r for r in new_rels_list if r not in old_rels_list]
+    if new_ctx.get("relationships"):
+        old_rels_list = old_ctx.get("relationships", [])
+        new_rels_list = new_ctx.get("relationships", [])
+        corrections["removed_relationships"] = [r for r in old_rels_list if r not in new_rels_list]
+        corrections["added_relationships"] = [r for r in new_rels_list if r not in old_rels_list]
 
     return corrections
 
@@ -3099,12 +2693,22 @@ def _store_corrections_as_constraints(corrections):
                 except:
                     pass
             
-            existing.extend([{"constraint": c, "timestamp": datetime.now().isoformat()} for c in constraints])
+            # Deduplicate: only add constraints that don't already exist
+            existing_constraints = {item.get("constraint") for item in existing if "constraint" in item}
+            new_constraints = []
+            for c in constraints:
+                if c not in existing_constraints:
+                    new_constraints.append({"constraint": c, "timestamp": datetime.now().isoformat()})
+                    existing_constraints.add(c)
             
-            with open(constraints_file, 'w') as f:
-                json.dump(existing, f, indent=2)
+            if new_constraints:
+                existing.extend(new_constraints)
+                with open(constraints_file, 'w') as f:
+                    json.dump(existing, f, indent=2)
+                log(f"[LEARNING] {len(new_constraints)} new constraints saved")
             
-            log(f"[LEARNING] Constraints saved to {constraints_file}")
+    except Exception as e:
+        log(f"[ERROR] Failed to store corrections as constraints: {e}")
             
     except Exception as e:
         log(f"[ERROR] Failed to store corrections as constraints: {e}")
@@ -3114,6 +2718,7 @@ def _get_learned_constraints():
     """
     Get learned constraints from previous corrections.
     Returns list of constraint strings to include in prompts.
+    Prunes constraints older than 30 days.
     """
     constraints = []
     
@@ -3122,9 +2727,30 @@ def _get_learned_constraints():
         try:
             with open(constraints_file, 'r') as f:
                 data = json.load(f)
-                for item in data:
-                    if "constraint" in item:
+                
+            cutoff = datetime.now() - timedelta(days=30)
+            pruned = []
+            for item in data:
+                if "constraint" in item and "timestamp" in item:
+                    try:
+                        ts = datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00"))
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=None)
+                        if ts > cutoff:
+                            pruned.append(item)
+                            constraints.append(item["constraint"])
+                    except (ValueError, TypeError):
+                        pruned.append(item)
                         constraints.append(item["constraint"])
+                elif "constraint" in item:
+                    pruned.append(item)
+                    constraints.append(item["constraint"])
+            
+            if len(pruned) < len(data):
+                with open(constraints_file, 'w') as f:
+                    json.dump(pruned, f, indent=2)
+                log(f"[LEARNING] Pruned {len(data) - len(pruned)} old constraints")
+                
         except Exception as e:
             log(f"[DEBUG] Could not load learned constraints: {e}")
     
@@ -3152,6 +2778,14 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
         with urllib.request.urlopen(req, timeout=60) as resp:
             r = json.loads(resp.read())
             text = r["candidates"][0]["content"]["parts"][0]["text"]
+            text = text.strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            elif text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
             return json.loads(text)
     except (json.JSONDecodeError, KeyError, urllib.error.HTTPError) as e:
         log(f"Gemini JSON prompt failed: {e}")
@@ -3536,7 +3170,7 @@ def delete_partial_files():
 def cleanup_all_files():
     """Delete generated files but keep scripts and cogitator data for learning."""
     count = 0
-    for d in [MEDIA_DIR, TRANSCRIPTS_DIR, TTS_DIR, SHORTS_DIR]:
+    for d in [MEDIA_DIR, TRANSCRIPTS_DIR, TTS_DIR, SHORTS_DIR, ASSEMBLY_DIR]:
         for f in glob.glob(os.path.join(d, "**/*"), recursive=True):
             if os.path.isfile(f):
                 try:
@@ -3781,6 +3415,7 @@ def phase_transcribe(video):
             beam_size=5,
             temperature=0.2,
             condition_on_previous_text=True,
+            word_timestamps=True,
             compression_ratio_threshold=2.4,
             log_prob_threshold=-1.0,
         )
@@ -3798,6 +3433,7 @@ def phase_transcribe(video):
             return f"{hrs:02}:{mins:02}:{secs:02},{ms:03}"
         
         seg_list = []
+        word_list = []
         transcript_text = ""
         with open(srt_path, "w") as srt_f:
             sidx = 1
@@ -3808,6 +3444,10 @@ def phase_transcribe(video):
                 if text:
                     seg_list.append({"start": start, "end": end, "text": text})
                     transcript_text += text + " "
+                    for w in (segment.words or []):
+                        word_text = w.word.strip() if hasattr(w, 'word') else ''
+                        if word_text:
+                            word_list.append({"word": word_text, "start": w.start, "end": w.end})
                     srt_f.write(f"{sidx}\n")
                     srt_f.write(f"{fmt_srt_time(start)} --> {fmt_srt_time(end)}\n")
                     srt_f.write(f"{text}\n\n")
@@ -3821,7 +3461,7 @@ def phase_transcribe(video):
         
         import json
         with open(json_path, "w") as json_f:
-            json.dump({"segments": seg_list}, json_f)
+            json.dump({"segments": seg_list, "words": word_list}, json_f)
         
         # Post-process: Correct known gaming ASR errors
         _correct_transcript_asr_errors(json_path)
@@ -3862,9 +3502,6 @@ def phase_transcribe(video):
                         log(f"MemPalace mining failed: {mp_err}")
     except Exception as e:
         log(f"faster-whisper failed: {e}")
-        
-        if not transcription_success:
-            log("Falling back to stable-ts CLI...")
         
         if not transcription_success:
             log("Falling back to stable-ts CLI...")
@@ -4033,6 +3670,11 @@ SCRIPT_VARIANTS = {
         "voice_style": "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
         "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Use unique emotional pivots each time — no repeated phrasing. End with emotional payoff. Target 150-300 words.""",
     },
+    "true_story": {
+        "style": "True Story",
+        "voice_style": "Speak like sharing an incredible true story. Authentic, amazed, grounded. Let the facts speak for themselves.",
+        "instruction": """Write a true story narration. Hook with the most unbelievable true detail from the transcript. Let the facts carry the drama — no embellishment needed. Present events as they happened, with natural amazement at what's real. Use varied transitions between story beats. End with the real outcome that makes it all stranger than fiction. Target 150-300 words.""",
+    },
 }
 
 HOOK_ARCHETYPES = {
@@ -4045,6 +3687,7 @@ HOOK_ARCHETYPES = {
     "documentary": "Curiosity Gap — start with 'Few people know...' or 'What most players miss...'",
     "true_crime": "Question Hook — start with a shocking question or ominous statement",
     "character_pov": "Emotional Hook — start with 'I never expected...' or an intimate realization",
+    "true_story": "Curiosity Gap — start with 'This actually happened...' or 'The craziest part is...'",
 }
 
 
@@ -4247,7 +3890,7 @@ def _postprocess_script(script):
     return result.strip()
 
 
-def _build_script_prompt(variant_key, perspective, game_title, transcript, context=None):
+def _build_script_prompt(variant_key, perspective, game_title, transcript, context=None, recent_titles=None):
     """Build script prompt using Jinja2 templates (Phase 1) with fallback to legacy."""
     variant = SCRIPT_VARIANTS[variant_key]
     env = _get_prompt_env()
@@ -4262,6 +3905,18 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
             learned_constraints_text += f"- {pe}\n"
 
     perf_context = _get_variant_performance_text(variant_key)
+    
+    # Add learning insights from relative performance analysis
+    try:
+        from workflows.performance_database import get_learning_insights
+        learning_insights = get_learning_insights()
+        if learning_insights.get('has_insights'):
+            perf_context += "\n\nLEARNING INSIGHTS (from channel performance):\n"
+            for insight in learning_insights.get('insights', []):
+                perf_context += f"- {insight}\n"
+    except Exception:
+        pass
+    
     mempalace_hints = _get_mempalace_prompt_hints(game_title)
     hook_archetype = HOOK_ARCHETYPES.get(variant_key, "Strong Hook — grab attention in the first sentence")
 
@@ -4349,7 +4004,7 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
                 perf_context=perf_context,
                 mempalace_hints=mempalace_hints,
                 learned_hooks=learned_hooks_text,
-                recent_titles="",
+                recent_titles="\n".join(recent_titles) if recent_titles else "",
             )
             return prompt
         except Exception as e:
@@ -4476,7 +4131,36 @@ def _rate_limit():
     with open(LAST_CALL, "w") as f:
         f.write(str(time.time()))
 
-def _groq_generate(prompt, max_tokens=500, model=None, temperature=0.7):
+def _retry_with_backoff(func, max_retries=3, base_delay=2, max_delay=30):
+    """Retry a function with exponential backoff for network and HTTP errors."""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            error_str = str(e).lower()
+            is_network_error = any(x in error_str for x in [
+                'name resolution', 'connection refused', 'connection reset',
+                'connection aborted', 'temporary failure', 'timeout',
+                'network is unreachable', 'no route to host'
+            ])
+            is_rate_limit = '429' in error_str or 'rate limit' in error_str
+            is_server_error = any(x in error_str for x in ['500', '502', '503', '504'])
+            
+            if is_rate_limit:
+                delay = min(base_delay * (2 ** attempt) * 3, max_delay)
+                log(f"   Rate limited, waiting {delay}s before retry...")
+                time.sleep(delay)
+                continue
+            
+            if (is_network_error or is_server_error) and attempt < max_retries - 1:
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                log(f"   Network/server error, retrying in {delay}s... ({attempt+1}/{max_retries})")
+                time.sleep(delay)
+                continue
+            
+            raise
+
+def _groq_generate(prompt, max_tokens=500, model=None, temperature=0.7, top_p=None, repetition_penalty=None):
     """Generate text using Groq API with key rotation and adaptive model/temperature."""
     global GROQ_KEY_INDEX
     
@@ -4502,11 +4186,18 @@ def _groq_generate(prompt, max_tokens=500, model=None, temperature=0.7):
             "model": groq_model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": temperature
+            "temperature": temperature,
         }
+        if top_p is not None:
+            data["top_p"] = top_p
+        if repetition_penalty is not None:
+            data["frequency_penalty"] = (repetition_penalty - 1.0) * 2  # map 1.0-1.3 → 0.0-0.6
+        
+        def _make_request():
+            return requests.post(url, json=data, headers=headers, timeout=60)
         
         try:
-            response = requests.post(url, json=data, headers=headers, timeout=60)
+            response = _retry_with_backoff(_make_request, max_retries=2, base_delay=3)
             if response.status_code == 200:
                 GROQ_KEY_INDEX = key_index
                 result = response.json()
@@ -4524,7 +4215,7 @@ def _groq_generate(prompt, max_tokens=500, model=None, temperature=0.7):
     
     raise RuntimeError("All Groq API keys failed")
 
-def _gemini_script(text, script_num, context=None):
+def _gemini_script(text, script_num, context=None, recent_titles=None):
     """Generate script using Gemini API with key rotation, context, and validation (Phase 1-2)."""
     keys = get_gemini_keys()
     if not keys:
@@ -4533,12 +4224,13 @@ def _gemini_script(text, script_num, context=None):
     variant_key, perspective = _get_next_round_robin()
     game_title = env("GAME_TITLE", "")
     temperature = _get_temperature(variant_key)
-    prompt = _build_script_prompt(variant_key, perspective, game_title, text[:3000], context)
+    llm_params = _get_llm_params(variant_key)
+    prompt = _build_script_prompt(variant_key, perspective, game_title, text[:3000], context, recent_titles=recent_titles)
     log(f"   Variant: {SCRIPT_VARIANTS[variant_key]['style']}, Perspective: {perspective[:50]}...")
-    log(f"   Temperature: {temperature}, Context entities: {len(context.get('characters', [])) if context else 0} characters")
+    log(f"   Temperature: {temperature}, top_p: {llm_params['top_p']}, Context entities: {len(context.get('characters', [])) if context else 0} characters")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": 3072}
+        "generationConfig": {"temperature": temperature, "topP": llm_params['top_p'], "maxOutputTokens": 3072}
     }).encode()
 
     start = (script_num - 1) % len(keys)
@@ -4660,6 +4352,7 @@ def phase_scripts(json_file, duration, num_hours, video=None):
             variant_key, perspective = _get_next_round_robin()
             groq_model = _get_groq_model(variant_key)
             temperature = _get_temperature(variant_key)
+            llm_params = _get_llm_params(variant_key)
 
             # Phase 4: Optimize context relevance for this specific transcript
             relevant_ctx = score_context_relevance(ctx, transcript_text, max_items=8)
@@ -4716,7 +4409,7 @@ def phase_scripts(json_file, duration, num_hours, video=None):
             best_metadata = None
             candidates = []
 
-            prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx)
+            prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx, recent_titles=_RECENT_TITLES)
 
             # Primary: Groq multi-variant (1 call, 2 variants)
             multi_prompt = prompt + """
@@ -4726,7 +4419,7 @@ Generate TWO complete variants of this script separated by the exact delimiter:
 
 Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the same format."""
             try:
-                groq_response = _groq_generate(multi_prompt, max_tokens=1500, model=groq_model, temperature=temperature)
+                groq_response = _groq_generate(multi_prompt, max_tokens=1500, model=groq_model, temperature=temperature, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
                 if groq_response:
                     variants = _parse_multi_variant_response(groq_response)
                     if variants:
@@ -4741,7 +4434,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
 
             # Fallback: Gemini (single script) if Groq produced nothing
             if not candidates:
-                gemini_script = _gemini_script(transcript_text, i, relevant_ctx)
+                gemini_script = _gemini_script(transcript_text, i, relevant_ctx, recent_titles=_RECENT_TITLES)
                 if gemini_script:
                     candidates.append((gemini_script, {"source": "gemini", "model": "gemini-2.5-flash-lite", "temperature": temperature}))
                     log(f"   Gemini script generated ({len(gemini_script.split())} words)")
@@ -4768,9 +4461,11 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                 # Retry on low factuality — one regeneration attempt with stricter guidance
                 if fact_check["score"] < 0.5 and best_metadata.get("source") in ("groq", "gemini"):
                     log(f"   Retrying script {i} due to low factuality ({fact_check['score']})...")
-                    retry_prompt = prompt + "\n\nCRITICAL: The previous script contained factual errors. ONLY use information from the transcript above. Do NOT invent any characters, events, or locations."
+                    flagged = fact_check.get("flagged_entities", [])
+                    flagged_str = ", ".join(str(e) for e in flagged[:10]) if flagged else "unknown entities"
+                    retry_prompt = prompt + f"\n\nCRITICAL: The previous script contained factual errors. The following were NOT found in the transcript and must NOT appear: {flagged_str}. ONLY use information from the transcript above."
                     try:
-                        retry_script = _groq_generate(retry_prompt, max_tokens=500, model=groq_model, temperature=temperature * 0.8)
+                        retry_script = _groq_generate(retry_prompt, max_tokens=500, model=groq_model, temperature=temperature * 0.8, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
                         if retry_script:
                             retry_fact = validate_script_factuality(retry_script, validation_ctx)
                             if retry_fact["score"] > fact_check["score"]:
@@ -4872,7 +4567,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                 _RECENT_TITLES.append(normalized)
 
             # ── Metadata extraction (title, description, hashtags, tags) ──
-            script_metadata = {"title": "", "description": "", "hashtags": [], "tags": []}
+            script_metadata = {"title": "", "description": "", "hashtags": [], "tags": [], "variant": variant_key}
             if title_match:
                 script_metadata["title"] = title_match.group(1).strip()
             desc_match = re.search(r'^DESCRIPTION:\s*(.+)$', best_script, re.MULTILINE)
@@ -4961,6 +4656,23 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
 def _extract_scenes(json_file, h_start, h_end):
     scenes = []
     try:
+        pacing = env("CLIP_PACING", "normal").lower()
+        if pacing == "fast":
+            max_clips = 7
+            min_dur, min_words = 20, 10
+            max_gap = 20
+            max_group_dur = 450
+        elif pacing == "slow":
+            max_clips = 3
+            min_dur, min_words = 40, 20
+            max_gap = 12
+            max_group_dur = 700
+        else:
+            max_clips = 5
+            min_dur, min_words = 30, 15
+            max_gap = 15
+            max_group_dur = 600
+
         with open(json_file) as f:
             data = json.load(f)
 
@@ -4985,7 +4697,7 @@ def _extract_scenes(json_file, h_start, h_end):
         for j in range(1, len(entries)):
             gap = entries[j]["start"] - entries[j-1]["end"]
             dur = entries[j]["end"] - groups[-1][0]["start"]
-            if gap <= 15 and dur <= 600:
+            if gap <= max_gap and dur <= max_group_dur:
                 groups[-1].append(entries[j])
             else:
                 groups.append([entries[j]])
@@ -4993,7 +4705,7 @@ def _extract_scenes(json_file, h_start, h_end):
         for grp in groups:
             words = sum(e["words"] for e in grp)
             dur = grp[-1]["end"] - grp[0]["start"]
-            if words < 15 or dur < 30:
+            if words < min_words or dur < min_dur:
                 continue
             density = words / max(dur, 1)
             txt = " ".join(e["text"] for e in grp)
@@ -5017,7 +4729,6 @@ def _extract_scenes(json_file, h_start, h_end):
         scenes.sort(key=lambda x: x["score"], reverse=True)
     except Exception as e:
         log_error(f"Scene extraction: {e}")
-    max_clips = int(env("CLIPS_PER_HOUR", "5"))
     return scenes[:max_clips]
 
 def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
@@ -5038,6 +4749,17 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
     notify("Phase 5 Started: Generating clips...")
     vaapi = os.path.exists("/dev/dri/renderD128")
     log(f"   Encoding method: {'VAAPI' if vaapi else 'CPU (libx264)'}")
+
+    v_w = v_h = 0
+    try:
+        r = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height", "-of", "csv=p=0", video], check=False)
+        if r.returncode == 0 and r.stdout.strip():
+            parts = r.stdout.strip().split(",")
+            v_w, v_h = int(parts[0]), int(parts[1])
+            log(f"   Video dimensions: {v_w}x{v_h}")
+    except Exception:
+        pass
 
     ffmpeg_check = run(["ffmpeg", "-version"], check=False)
     if ffmpeg_check.returncode != 0:
@@ -5075,14 +4797,14 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
             except Exception as audio_err:
                 log(f"   Audio analysis skipped: {audio_err}")
         
-        scenes.sort(key=lambda x: x.get('audio_virality_score', x.get('drama_score', 0)), reverse=True)
+        scenes.sort(key=lambda x: x.get('audio_virality_score', x.get('score', 0)), reverse=True)
         
         for idx, sc in enumerate(scenes, 1):
             clip_counter += 1
             pct = int(((clip_counter - 1) / max(total_clips_estimate, 1)) * 100) if total_clips_estimate > 0 else 0
             set_progress(4, pct, f"Generating clips ({clip_counter}/{total_clips_estimate})")
             
-            name = f"{video_basename}-Short{idx}.mp4"
+            name = f"{video_basename}-Short{padded}_{idx}.mp4"
             out  = os.path.join(SHORTS_DIR, name)
             if os.path.exists(out) and os.path.getsize(out) > 0:
                 log(f"   Skipping {name} (exists)")
@@ -5100,12 +4822,16 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                 portrait = env("PORTRAIT_CLIPS", "true").lower() == "true"
                 vf_parts = []
 
+                if portrait and v_w and v_h and v_w >= 1080 and v_h >= 1080:
+                    vf_parts += ["crop=1080:1080:(iw-1080)/2:(ih-1080)/2", "scale=1080:1920"]
+                elif portrait:
+                    vf_parts += [
+                        "scale=1080:1920:force_original_aspect_ratio=decrease",
+                        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
+                    ]
+
                 if vaapi:
-                    vf_parts.append("format=nv12")
-                    if portrait:
-                        vf_parts.append("crop=1080:1080:(iw-1080)/2:(ih-1080)/2")
-                        vf_parts.append("scale=1080:1920")
-                    vf_parts.append("hwupload")
+                    vf_parts = ["format=nv12"] + vf_parts + ["hwupload"]
                     cmd = ["ffmpeg", "-y",
                            "-vaapi_device", "/dev/dri/renderD128",
                            "-ss", f"{s:.3f}", "-i", video, "-t", f"{dur:.3f}",
@@ -5117,9 +4843,6 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                            out]
                     enc = "VAAPI"
                 else:
-                    if portrait:
-                        vf_parts.append("crop=1080:1080:(iw-1080)/2:(ih-1080)/2")
-                        vf_parts.append("scale=1080:1920")
                     cmd = ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-i", video, "-t", f"{dur:.3f}"]
                     if vf_parts:
                         cmd += ["-vf", ",".join(vf_parts)]
@@ -5129,6 +4852,24 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                     enc = "CPU"
 
                 r = run(cmd, check=False)
+                if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
+                    log(f"   {enc} failed for {name}, retrying with CPU slow seek...")
+                    vf_cpu = []
+                    if portrait and v_w and v_h and v_w >= 1080 and v_h >= 1080:
+                        vf_cpu += ["crop=1080:1080:(iw-1080)/2:(ih-1080)/2", "scale=1080:1920"]
+                    elif portrait:
+                        vf_cpu += [
+                            "scale=1080:1920:force_original_aspect_ratio=decrease",
+                            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
+                        ]
+                    cmd = ["ffmpeg", "-y", "-i", video, "-ss", f"{s:.3f}", "-t", f"{dur:.3f}"]
+                    if vf_cpu:
+                        cmd += ["-vf", ",".join(vf_cpu)]
+                    cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", "18",
+                            "-profile:v", "high", "-level", "4.2", "-pix_fmt", "yuv420p",
+                            "-c:a", "aac", "-b:a", "192k", out]
+                    enc = "CPU (slow seek)"
+                    r = run(cmd, check=False)
                 if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
                     log(f"   {name} created ({enc})")
                     clips_generated += 1
@@ -5181,261 +4922,7 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
     set_status("Phase 5 Complete")
     notify(f"Phase 5 Complete: {clips_generated} clips generated")
 
-# ─── Phase 6: TTS ─────────────────────────────────────────────────────────────
-def _load_api_keys():
-    """Load API keys from keychain (fallback to empty list)."""
-    from workflows.keychain_manager import get_gemini_keys
-    return get_gemini_keys()
-
-def _tts_api(text, out_pcm, voice, style, retries=3, delay=60):
-    if style:
-        text = f"{style} {text}"
-    body = json.dumps({
-        "contents": [{"parts": [{"text": text}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}
-        }
-    }).encode()
-    
-    api_keys = _load_api_keys()
-    if not api_keys:
-        api_keys = [env("GEMINI_API_KEY")]
-    
-    time.sleep(2)  # Rate limit: 2 requests per second
-    
-    for key in api_keys:
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
-        
-        for attempt in range(retries):
-            try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    r = json.loads(resp.read())
-                    candidate = r.get("candidates", [{}])[0]
-                    if "content" not in candidate:
-                        reason = candidate.get("finishReason", "unknown")
-                        log(f"   Gemini blocked TTS: {reason}")
-                        break
-                    audio = candidate["content"]["parts"][0]["inlineData"]["data"]
-                    with open(out_pcm, "wb") as f:
-                        f.write(base64.b64decode(audio))
-                    return True
-            except urllib.error.HTTPError as e:
-                if e.code in (429, 500, 503) and attempt < retries - 1:
-                    wait = delay * (2 ** attempt) + random.uniform(0, 15)
-                    log(f"   Key {key[:20]}... HTTP {e.code}, retry {attempt+1}/{retries} in {wait:.0f}s...")
-                    time.sleep(wait)
-                else:
-                    log(f"   Key {key[:20]}... failed: {e.code}")
-                    break
-            except (KeyError, IndexError, json.JSONDecodeError) as e:
-                log(f"   TTS API response malformed: {e}")
-                break
-        log(f"   Switching to next API key...")
-    
-    return False
-
-def _strip_title(script_text):
-    lines = script_text.strip().split("\n")
-    if lines and lines[0].startswith("TITLE:"):
-        return "\n".join(lines[1:]).strip()
-    return script_text.strip()
-
-def phase_tts(duration, num_hours, video=None):
-    video_basename = os.path.splitext(os.path.basename(video))[0] if video else "tts"
-    voice = env("TTS_VOICE", "Vindemiatrix")
-    if not voice:
-        log_error("Phase 6 Failed: TTS_VOICE not configured")
-        notify("Phase 6 Failed: TTS voice not set")
-        set_status("Phase 6 FAILED")
-        raise RuntimeError("TTS_VOICE not configured")
-
-    api_key = env("GEMINI_API_KEY")
-    if not api_key:
-        log_error("Phase 6 Failed: GEMINI_API_KEY not configured")
-        notify("Phase 6 Failed: No API key configured")
-        set_status("Phase 6 FAILED")
-        raise RuntimeError("GEMINI_API_KEY not configured")
-
-    if _rr_get_state()['voices'] == 0:
-        _init_round_robin(num_hours)
-    
-    set_status("Phase 6: Generating TTS...")
-    log("Phase 6: Generating TTS...")
-    notify("Phase 6 Started: Generating TTS...")
-    delay = int(env("TTS_DELAY", "120"))
-
-    tts_generated = 0
-    for i in range(1, num_hours + 1):
-        pct = int(((i - 1) / num_hours) * 100)
-        set_progress(5, pct, f"Generating TTS ({i}/{num_hours})")
-        
-        padded = f"{i:03d}"
-        wav = os.path.join(TTS_DIR, f"{video_basename}-TTS{padded}.wav")
-        srt = os.path.join(TTS_DIR, f"{video_basename}-TTS{padded}.srt")
-        script_file = os.path.join(SCRIPTS_DIR, f"{video_basename}-Script{padded}.txt")
-
-        if not os.path.exists(wav):
-            if not os.path.exists(script_file):
-                log(f"   Warning: Script {i} not found, skipping TTS")
-                continue
-            log(f"   Generating TTS for script {i}...")
-            try:
-                with open(script_file) as f:
-                    txt = f.read()
-                if not txt.strip():
-                    log_error(f"   Warning: Script {i} is empty, skipping")
-                    continue
-
-                pcm = os.path.join(TTS_DIR, f"tts_{padded}.pcm")
-                tts_text = _strip_title(txt)
-                
-                # Use round-robin voice and style (default)
-                rr_voice, rr_style = get_next_voice_style()
-
-                # Check if .meta.json has an emotional_tone to bias style selection
-                meta_path = script_file.replace(".txt", ".meta.json")
-                if os.path.exists(meta_path):
-                    try:
-                        with open(meta_path) as _mf:
-                            _meta = json.load(_mf)
-                        _tone = _meta.get("emotional_tone", "").lower().strip()
-                        if _tone:
-                            # Map emotional tone to a delivery style
-                            _tone_styles = {
-                                "tense": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-                                "suspenseful": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-                                "dramatic": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-                                "somber": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-                                "emotional": "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
-                                "action": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-                                "energetic": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-                                "exciting": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-                                "humorous": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-                                "lighthearted": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-                                "mysterious": "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments.",
-                                "educational": "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
-                                "informative": "Speak like a professional news reporter. Clear, factual, objective. Present information in order.",
-                                "investigative": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-                            }
-                            _matched = False
-                            for _keyword, _style in _tone_styles.items():
-                                if _keyword in _tone:
-                                    rr_style = _style
-                                    log(f"   Tone '{_tone}' matched '{_keyword}' → style overridden")
-                                    _matched = True
-                                    break
-                            if not _matched:
-                                log(f"   Tone '{_tone}' (no style override, using round-robin)")
-                    except Exception:
-                        pass
-
-                log(f"   Using voice: {rr_voice}, style: {rr_style[:40]}...")
-                
-                _tts_api(tts_text, pcm, rr_voice, rr_style)
-
-                if not os.path.exists(pcm):
-                    log_error(f"   TTS API call failed for script {i}")
-                    continue
-
-                r = run(["ffmpeg", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1",
-                         "-i", pcm, "-ar", "44100", "-ac", "2", wav], check=False)
-                if r.returncode != 0:
-                    log_error(f"   ffmpeg failed for script {i}: {r.stderr[-200:] if r.stderr else 'Unknown'}")
-                    continue
-                
-                if os.path.exists(pcm):
-                    os.remove(pcm)
-                log(f"   tts_{padded}.wav created")
-                tts_generated += 1
-
-                if PERFORMANCE_DB_AVAILABLE:
-                    try:
-                        clip_pattern = f"{video_basename}-Short{padded}.mp4"
-                        import performance_database as pdb
-                        conn = pdb.get_db()
-                        cur = conn.cursor()
-                        cur.execute("""
-                            SELECT c.id, c.features FROM clips c
-                            WHERE c.source_file LIKE ?
-                            ORDER BY c.created_at DESC LIMIT 1
-                        """, (f"%{clip_pattern}%",))
-                        row = cur.fetchone()
-                        conn.close()
-                        if row:
-                            existing_features = json.loads(row['features'] or '{}') if row['features'] else {}
-                            existing_features['voice'] = rr_voice
-                            existing_features['style'] = rr_style
-                            import json as json_mod
-                            conn2 = pdb.get_db()
-                            cur2 = conn2.cursor()
-                            cur2.execute("UPDATE clips SET features = ? WHERE id = ?",
-                                        (json_mod.dumps(existing_features), row['id']))
-                            conn2.commit()
-                            conn2.close()
-                            log(f"   TTS learning: voice '{rr_voice}' recorded for clip")
-                    except Exception:
-                        pass
-                set_status(f"Phase 6: TTS {i}/{num_hours} generated")
-                notify(f"TTS {i}/{num_hours} generated")
-            except Exception as e:
-                log_error(f"   Error generating TTS for script {i}: {e}")
-                continue
-        else:
-            log(f"   TTS {i} WAV exists, skipping")
-
-        if not os.path.exists(srt):
-            if not os.path.exists(wav):
-                log(f"   Warning: Cannot generate SRT, WAV not found for script {i}")
-            else:
-                log(f"   Generating SRT for tts_{padded}.wav...")
-                srt_out = os.path.splitext(wav)[0] + ".srt"
-                srt_max_words = int(env("SRT_MAX_WORDS", "10"))
-                try:
-                    from faster_whisper import WhisperModel
-                    model = WhisperModel(env("WHISPER_MODEL", "medium"), device="cpu", compute_type="int8")
-                    segments, _ = model.transcribe(wav, language="en", vad_filter=True)
-                    with open(srt_out, "w") as f:
-                        idx = 1
-                        for seg in segments:
-                            start, end, text = seg.start, seg.end, seg.text.strip()
-                            if text:
-                                words = text.split()
-                                if len(words) <= srt_max_words:
-                                    f.write(f"{idx}\n")
-                                    f.write(f"{int(start//3600):02d}:{int((start%3600)//60):02d}:{int(start%60):02d},000 --> {int(end//3600):02d}:{int((end%3600)//60):02d}:{int(end%60):02d},000\n")
-                                    f.write(f"{text}\n\n")
-                                    idx += 1
-                                else:
-                                    chunk_duration = (end - start) / ((len(words) + srt_max_words - 1) // srt_max_words)
-                                    for chunk_idx in range(0, len(words), srt_max_words):
-                                        chunk_words = words[chunk_idx:chunk_idx + srt_max_words]
-                                        chunk_text = ' '.join(chunk_words)
-                                        chunk_start = start + (chunk_idx // srt_max_words) * chunk_duration
-                                        chunk_end = chunk_start + chunk_duration
-                                        f.write(f"{idx}\n")
-                                        f.write(f"{int(chunk_start//3600):02d}:{int((chunk_start%3600)//60):02d}:{int(chunk_start%60):02d},000 --> {int(chunk_end//3600):02d}:{int((chunk_end%3600)//60):02d}:{int(chunk_end%60):02d},000\n")
-                                        f.write(f"{chunk_text}\n\n")
-                                        idx += 1
-                    log(f"   tts_{padded}.srt created (faster-whisper)")
-                except Exception as e:
-                    log_error(f"   SRT failed for tts_{padded}: {e}")
-        else:
-            log(f"   tts_{padded}.srt exists, skipping")
-
-        if i < num_hours:
-            log(f"   Waiting {delay}s")
-            time.sleep(delay)
-
-    if tts_generated == 0:
-        log_error("Phase 6 Failed: No TTS files were generated")
-        notify("Phase 6 Failed: No TTS generated")
-        set_status("Phase 6 FAILED")
-        raise RuntimeError("No TTS generated")
-
-    set_status("Phase 6 Complete")
-    notify(f"Phase 6 Complete: {tts_generated} TTS files generated")
+# (Phase 6 moved to workflows/pipeline/phase_tts.py — multi-provider, see _get_cogitator() import)
 
 # ─── Find latest video ────────────────────────────────────────────────────────
 def find_video():
@@ -5526,7 +5013,12 @@ def run_local_recordings(recording_path):
                 phase_clips(video_file, json_file, duration, num_hours, script_id_map=_SCRIPT_ID_MAP)
                 if check_stop(): return
 
+                from workflows.pipeline.phase_tts import phase_tts
                 phase_tts(duration, num_hours, video=video_file)
+                if check_stop(): return
+
+                from workflows.pipeline.phase_assemble import phase_assemble
+                phase_assemble(duration, num_hours, video=video_file)
                 if check_stop(): return
 
             log(f"Video {i}/{len(video_files)} complete!")
@@ -5630,6 +5122,7 @@ def run_pipeline(skip=None):
         log_error("No transcript for clip generation")
 
     if 6 not in skip:
+        from workflows.pipeline.phase_tts import phase_tts
         phase_tts(duration, num_hours, video=video)
         if check_stop(): return
 
@@ -5655,750 +5148,6 @@ TTS SRTs: {ts}
 Transcripts: {tc}
 
 Total output files: {sc + cc + tw + ts}""")
-
-# ─── Telegram Listener ────────────────────────────────────────────────────────
-def tg_api(method, params=None):
-    token = env("TELEGRAM_BOT_TOKEN")
-    url = f"https://api.telegram.org/bot{token}/{method}"
-    if params:
-        data = urllib.parse.urlencode(params).encode()
-        req = urllib.request.Request(url, data=data, method="POST")
-    else:
-        req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=35) as resp:
-        return json.loads(resp.read())
-
-def process_cmd(text, chat_id):
-    parts = text.split(None, 1)
-    cmd  = parts[0].split("@", 1)[0]
-    args = parts[1] if len(parts) > 1 else ""
-
-    if cmd in ("/run_pipeline", "/runpipeline"):
-        if not _check_configured():
-            tg_send("Not configured yet. Run onboarding first:\n  python3 cogitator.py onboard")
-        else:
-            tg_send("Pipeline triggered! Source: YouTube playlist")
-            def _run():
-                global PIPELINE_RUNNING
-                PIPELINE_RUNNING = True
-                try:
-                    run_pipeline()
-                except Exception as e:
-                    tg_send(f"Pipeline error: {e}")
-                finally:
-                    PIPELINE_RUNNING = False
-            threading.Thread(target=_run, daemon=True).start()
-
-    elif cmd in ("/run_local", "/runlocal"):
-        if not _check_configured():
-            tg_send("Not configured yet. Run onboarding first:\n  python3 cogitator.py onboard")
-        else:
-            recording_path = env("RECORDING_PATH", os.path.expanduser("~/Videos/Recordings"))
-            tg_send(f"Current source: YouTube playlist (default)\nProcessing local recordings from: {recording_path}")
-            def _run():
-                global PIPELINE_RUNNING
-                PIPELINE_RUNNING = True
-                try:
-                    run_local_recordings(recording_path)
-                except Exception as e:
-                    tg_send(f"Local recording error: {e}")
-                finally:
-                    PIPELINE_RUNNING = False
-            threading.Thread(target=_run, daemon=True).start()
-
-    elif cmd in ("/set_voice", "/setvoice"):
-        if not args:
-            tg_send("Usage: /set_voice Algenib\nGemini Voices: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, Sulafat, Achernar, Alnilam, Laomedeia")
-        else:
-            update_env_var("TTS_VOICE", args)
-            tg_send(f"Voice set to: {args}")
-
-    elif cmd in ("/voices", "/listvoices"):
-        tg_send("""Gemini TTS Voices (Chirp 3):
-
-Female: Vindemiatrix, Aoede, Callirrhoe, Gacrux, Sulafat, Leda, Kore, Enceladus, Erinome, Despina, Alnilam, Laomedeia, Achernar, Pulcherrima, Zephyr
-Male: Puck, Charon, Fenrir, Orus, Iapetus, Umbriel, Algieba, Rasalgethi, Schedar, Sadachbia, Sadaltager, Achird, Zubenelgenubi, Algenib, Autonoe
-
-Random voice selection is enabled - voice rotates on each listener restart.
-Use /set_voice <name> to select a specific voice.
-Example: /set_voice Vindemiatrix""")
-
-    elif cmd in ("/set_style", "/setstyle"):
-        if not args:
-            update_env_var("TTS_STYLE", "")
-            tg_send("Style cleared.")
-        else:
-            update_env_var("TTS_STYLE", args)
-            tg_send(f"Style set to: {args}")
-
-    elif cmd in ("/set_index", "/setindex"):
-        if not args:
-            update_env_var("PLAYLIST_INDEX", "")
-            tg_send("Playlist index reset to default (1).")
-        else:
-            try:
-                idx = int(args)
-                if idx < 1:
-                    tg_send("Index must be 1 or greater.")
-                else:
-                    update_env_var("PLAYLIST_INDEX", str(idx))
-                    tg_send(f"Playlist index set to: {idx}")
-            except ValueError:
-                tg_send("Invalid index. Use /set_index 3")
-
-    elif cmd in ("/set_clips", "/setclips"):
-        if not args:
-            current = env("CLIPS_PER_HOUR", "5")
-            tg_send(f"Current clips per hour: {current}\nUsage: /set_clips 10")
-        else:
-            try:
-                clips = int(args)
-                if clips < 1 or clips > 20:
-                    tg_send("Clips per hour must be between 1 and 20.")
-                else:
-                    update_env_var("CLIPS_PER_HOUR", str(clips))
-                    tg_send(f"Clips per hour set to: {clips}")
-            except ValueError:
-                tg_send("Invalid number. Use /set_clips 10")
-
-    elif cmd in ("/set_srt_words", "/setsrt"):
-        if not args:
-            current = env("SRT_MAX_WORDS", "10")
-            tg_send(f"Current SRT max words: {current}\nUsage: /set_srt_words 10")
-        else:
-            try:
-                words = int(args)
-                if words < 3 or words > 20:
-                    tg_send("SRT max words must be between 3 and 20.")
-                else:
-                    update_env_var("SRT_MAX_WORDS", str(words))
-                    tg_send(f"SRT max words set to: {words}")
-            except ValueError:
-                tg_send("Invalid number. Use /set_srt_words 10")
-
-    elif cmd in ("/set_game", "/setgame"):
-        if not args:
-            current = env("GAME_TITLE", "")
-            if current:
-                tg_send(f"Current game: {current}\nUsage: /set_game The Last of Us Part II\nClear with: /set_game clear")
-            else:
-                tg_send("No game set.\nUsage: /set_game The Last of Us Part II")
-        elif args.lower() == "clear":
-            update_env_var("GAME_TITLE", "")
-            _cs_clear_context()
-            tg_send("Game title cleared. Context cleared.")
-        else:
-            update_env_var("GAME_TITLE", args)
-            tg_send(f"Game set to: {args}")
-
-    elif cmd in ("/cs_context", "/context"):
-        ctx = _cs_load_context()
-        chars = ctx.get("characters", [])
-        locs = ctx.get("locations", [])
-        terms = ctx.get("key_terms", [])
-        rels = ctx.get("relationships", [])
-        transcripts = ctx.get("processed_transcripts", [])
-        scripts = ctx.get("previous_scripts", [])
-        
-        msg = "📚 Content Studio Context:\n\n"
-        msg += f"Characters ({len(chars)}): {', '.join(chars) if chars else 'none'}\n"
-        msg += f"Locations ({len(locs)}): {', '.join(locs) if locs else 'none'}\n"
-        msg += f"Key Terms ({len(terms)}): {', '.join(terms[:10]) if terms else 'none'}\n"
-        msg += f"Relationships ({len(rels)}): {', '.join(rels) if rels else 'none'}\n"
-        msg += f"\nProcessed Transcripts: {len(transcripts)}\n"
-        msg += f"Previous Scripts: {len(scripts)}"
-        
-        tg_send(msg)
-
-    elif cmd == "/context_clear":
-        _cs_clear_context()
-        tg_send("Context cleared.")
-
-    elif cmd in ("/config", "/settings"):
-        voice = env("TTS_VOICE", "Vindemiatrix")
-        style = env("TTS_STYLE") or "(none)"
-        index = env("PLAYLIST_INDEX", "1")
-        clips = env("CLIPS_PER_HOUR", "5")
-        game = env("GAME_TITLE", "") or "(none)"
-        status = "Running" if PIPELINE_RUNNING else "Idle"
-
-        wc = count_files(os.path.join(WORKSPACE, "tts/*.wav"))
-        sc = count_files(os.path.join(WORKSPACE, "tts/*.srt"))
-        rc = count_files(os.path.join(WORKSPACE, "scripts/*.txt"))
-        cc = count_files(os.path.join(WORKSPACE, "shorts/*.mp4"))
-        tg_send(f"Config:\nGame: {game}\nVoice: {voice}\nStyle: {style}\nIndex: {index}\nClips/hr: {clips}\nStatus: {status}\n\nFiles:\nScripts: {rc}\nClips: {cc}\nTTS WAVs: {wc}\nTTS SRTs: {sc}")
-
-    elif cmd == "/status":
-        listener_status = "No"
-        listener_pid = "-"
-        listener_dir = "-"
-        if os.path.exists(PID_FILE):
-            try:
-                with open(PID_FILE) as f:
-                    pid = int(f.read().strip())
-                try:
-                    os.kill(pid, 0)
-                    listener_status = "Yes"
-                    listener_pid = str(pid)
-                    listener_dir = os.readlink(f"/proc/{pid}/cwd")
-                except (ProcessLookupError, PermissionError):
-                    os.remove(PID_FILE)
-            except (ValueError, OSError):
-                pass
-
-        s = open(STATUS_FILE).read() if os.path.exists(STATUS_FILE) else ""
-        pipeline_status = f"Running: {s}" if PIPELINE_RUNNING else f"Idle. Last: {s}" if s else "Idle"
-        
-        # Get version and update status
-        script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        local_ver = get_local_version(script_root)
-        update_info = check_for_updates(script_root)
-        update_status = ""
-        if update_info.get("update_available"):
-            remote_ver = update_info.get("remote_version", "?")
-            update_status = f"\n\nUpdate: v{remote_ver} available ✨"
-
-        tg_send(f"Listener: {listener_status}\nPID: {listener_pid}\nDir: {listener_dir}\nVersion: v{local_ver}\n\nPipeline: {pipeline_status}{update_status}")
-
-    elif cmd == "/debug":
-        if os.path.exists(LOG_FILE):
-            with open(LOG_FILE) as f:
-                lines = f.readlines()[-10:]
-            important = []
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                if len(line) > 150:
-                    continue
-                if "Transcribe:" in line or "transcribing" in line.lower():
-                    continue
-                important.append(line)
-            if important:
-                txt = "\n".join(important[-8:])
-                tg_send(f"🐛 Recent Log:\n\n{txt}")
-            else:
-                tg_send("No recent log entries.")
-        else:
-            tg_send("No logs found.")
-
-    elif cmd == "/memory":
-        # Show MemPalace memory status + learned constraints
-        try:
-            mp_manager = get_mempalace_manager()
-            status = mp_manager.status()
-            
-            # Get list of all games (from Context directory)
-            context_dir = os.path.join(WORKSPACE, "Context")
-            games = []
-            if os.path.exists(context_dir):
-                for item in os.listdir(context_dir):
-                    item_path = os.path.join(context_dir, item)
-                    if os.path.isdir(item_path) and item != "history":
-                        # Check if has markdown context files
-                        has_chars = os.path.exists(os.path.join(item_path, "characters.md"))
-                        has_context = "✅" if has_chars else "❌"
-                        games.append(f"- {item.replace('_', ' ').title()}: Context {has_context}")
-            
-            msg = "📚 MemPalace Memory:\n\n"
-            if status.get("status_output"):
-                msg += status["status_output"]
-            else:
-                msg += "No memory indexed yet.\n"
-            
-            if games:
-                msg += "\n🎮 Games in Context:\n"
-                msg += "\n".join(games)
-            else:
-                msg += "\nNo games in Context directory yet."
-            
-            # Show learned constraints
-            constraints = _get_learned_constraints()
-            if constraints:
-                msg += f"\n\n🧠 Learned Constraints ({len(constraints)}):\n"
-                for c in constraints[:5]:
-                    msg += f"- {c[:60]}...\n" if len(c) > 60 else f"- {c}\n"
-                if len(constraints) > 5:
-                    msg += f"  ... and {len(constraints) - 5} more"
-            
-            tg_send(msg)
-        except Exception as e:
-            tg_send(f"Memory check failed: {e}")
-
-    elif cmd == "/games":
-        # Show all games with their status
-        context_dir = os.path.join(WORKSPACE, "Context")
-        game_data_dir = os.path.join(WORKSPACE, "game_data")
-        
-        msg = "🎮 Cogitator Games:\n\n"
-        
-        # Current game
-        current_game = env("GAME_TITLE", "None")
-        msg += f"Current: {current_game}\n\n"
-        
-        # Games in Context directory
-        games = []
-        if os.path.exists(context_dir):
-            for item in os.listdir(context_dir):
-                item_path = os.path.join(context_dir, item)
-                if os.path.isdir(item_path) and item != "history":
-                    ctx_file = os.path.join(item_path, "context.json")
-                    has_context = os.path.exists(ctx_file)
-                    games.append((item, has_context))
-        
-        if games:
-            msg += "📁 Context Directory:\n"
-            for game, has_context in sorted(games):
-                name = game.replace("_", " ").title()
-                status = "✅" if has_context else "❌"
-                msg += f"- {name}: Context {status}\n"
-        else:
-            msg += "No games in Context directory.\n"
-        
-        msg += "\nUse /set_game <name> to switch games."
-        tg_send(msg)
-
-
-    elif cmd == "/help":
-        tg_send("""Cogitator — YouTube Shorts Pipeline
-Converts long-form YouTube videos into shorts with AI scripts and TTS.
-
-Pipeline Phases:
-1️⃣ Download  - Download latest video (best quality)
-2️⃣ Transcribe - Generate transcript with stable-ts
-3️⃣ Scripts   - AI-generated short scripts via Gemini
-4️⃣ Clips    - Extract video clips based on scenes
-5️⃣ TTS       - Generate narration audio + subtitles
-
-Commands:
-/run_pipeline    - Run full pipeline
-/run_local       - Run pipeline on local recording
-
-/set_voice Puck    - Change TTS voice
-/voices          - List available voices
-/set_style Say...  - Set style prefix
-/set_style         - Clear style
-/set_index 3      - Set playlist index (1=first video)
-/set_clips 10     - Set clips per hour (1-20)
-/set_srt_words 10 - Set SRT max words per line (default: 10)
-/set_game Title   - Set game title for scripts
-/set_game clear   - Clear game title
-/cs_context       - Show Content Studio context
-/context_clear     - Clear all context
-
-/config     - Settings and file counts
-/status     - Listener and pipeline status
-/debug      - Show recent debug log entries
-/learning_stats - Show self-improvement learning stats
-
-/version    - Show current version
-/update     - Check for and install updates
-
-/restart_listener - Restart the listener
-/stop_pipeline   - Stop running pipeline
-
-/delete_partial  - Delete incomplete files
-/cleanup         - Delete all generated files
-/clean_backups  - Clean old backup versions
-
-/menu      - Show interactive inline menu
-/help - This message""")
-
-    elif cmd == "/menu":
-        main_menu = get_main_menu()
-        tg_send_menu("📋 Cogitator Menu — Select an action:", main_menu)
-
-    elif cmd in ("/cs", "/content_studio"):
-        cs_menu = get_content_studio_menu()
-        tg_send_menu("🎨 Content Studio — Select an action:", cs_menu)
-
-    elif cmd in ("/restart_listener", "/restart"):
-        tg_send("Restarting listener via systemd...")
-        subprocess.run(["systemctl", "--user", "restart", "lambda-cut-listener.service"], capture_output=True)
-
-    elif cmd == "/stop_pipeline":
-        if PIPELINE_RUNNING:
-            global PIPELINE_STOP_REQUESTED
-            PIPELINE_STOP_REQUESTED = True
-            tg_send("Pipeline stop requested. Finishing current phase...")
-        else:
-            tg_send("No pipeline is currently running.")
-
-    elif cmd == "/delete_partial":
-        count = delete_partial_files()
-        tg_send(f"Deleted {count} partial file(s).")
-
-    elif cmd == "/cleanup":
-        count = cleanup_all_files()
-        tg_send(f"Deleted {count} file(s) from all output directories.")
-
-    elif cmd == "/clean_backups":
-        cleanup_old_backups(WORKSPACE)
-        tg_send("Old backups cleaned up.")
-
-    elif cmd == "/version":
-        script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        local_ver = get_local_version(script_root)
-        update_info = check_for_updates(script_root)
-        remote_ver = update_info.get("remote_version", "Unknown")
-        if update_info.get("update_available"):
-            tg_send(f"Current version: v{local_ver}\nLatest version: v{remote_ver}\n\nUpdate available! Run /update to install.")
-        else:
-            tg_send(f"Current version: v{local_ver}\nLatest version: v{remote_ver or 'Unknown'}\n\nYou're up to date!")
-
-    elif cmd == "/learning_stats":
-        from script_validation import get_learning_summary, analyze_recent_failures
-        try:
-            summary = get_learning_summary()
-            week_analysis = analyze_recent_failures(window_hours=168)
-            
-            status_emoji = "🟢" if summary.get("learning_status") == "active" else "🟡"
-            
-            msg = f"""🧠 Cogitator Learning Stats
-
-{status_emoji} Status: {summary.get('learning_status', 'unknown').replace('_', ' ').title()}
-
-📊 Last 24 Hours:
-- Failures: {summary.get('last_24h', {}).get('failures', 0)}"""
-            
-            if summary.get('last_24h', {}).get('top_hallucinations'):
-                msg += f"\n- Top hallucinations: {', '.join(summary['last_24h']['top_hallucinations'])}"
-            
-            msg += f"""
-
-📈 Last 7 Days:
-- Total failures: {summary.get('last_7_days', {}).get('total_failures', 0)}
-- Content types: {summary.get('last_7_days', {}).get('content_types_analyzed', 0)}
-- High-quality scripts: {summary.get('effective_configs', 0)}"""
-            
-            hall_dict = week_analysis.get("character_hallucinations", {})
-            if hall_dict and isinstance(hall_dict, dict):
-                top_hall = list(hall_dict.items())[:3]
-                if top_hall:
-                    msg += f"\n\n⚠️ Top Character Hallucinations:"
-                    for char, count in top_hall:
-                        msg += f"\n- {char}: {count}x"
-            
-            tg_send(msg)
-        except Exception as e:
-            tg_send(f"Learning stats unavailable: {e}")
-
-    elif cmd == "/update":
-        script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        update_info = check_for_updates(script_root)
-        
-        if not update_info.get("update_available"):
-            tg_send("No update available. You're on the latest version!")
-        else:
-            remote_ver = update_info.get("remote_version", "Unknown")
-            release_notes = get_release_notes()
-            # Truncate release notes if too long
-            if len(release_notes) > 500:
-                release_notes = release_notes[:500] + "..."
-            
-            tg_send(f"""Update Available: v{remote_ver}
-
-Release Notes:
-{release_notes[:500]}
-
-This will:
-1. Backup current installation (up to 2 backups)
-2. Download and install new files
-3. Preserve your .env and settings
-4. Restart listener
-
-Type /confirm_update to proceed.""")
-    
-    elif cmd == "/confirm_update":
-        script_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        tg_send("Updating... Please wait.")
-        
-        def _update():
-            global LISTENER_RESTART
-            result = perform_update(script_root)
-            if result.get("success"):
-                tg_send(f"✅ {result.get('message')}\n\nRestarting listener...")
-                time.sleep(1)
-                LISTENER_RESTART = True
-            else:
-                tg_send(f"❌ {result.get('message')}")
-        
-        t = threading.Thread(target=_update)
-        t.start()
-        t.join()  # Wait for update to complete before continuing
-
-    else:
-        tg_send("Unknown command. Use /help for available commands.")
-
-def listen():
-    global LISTENER_RESTART
-    
-    if not _telegram_configured():
-        print("Telegram not configured. Run onboard and enable Telegram to use the listener.")
-        sys.exit(1)
-
-    script_path = os.path.abspath(__file__)
-    workspace = os.path.dirname(os.path.dirname(script_path))
-
-    if os.path.exists(PID_FILE):
-        try:
-            with open(PID_FILE) as f:
-                old_pid = int(f.read().strip())
-            try:
-                os.kill(old_pid, 0)
-                os.kill(old_pid, 15)
-                time.sleep(1)
-                try:
-                    os.kill(old_pid, 0)
-                    os.kill(old_pid, 9)
-                except ProcessLookupError:
-                    pass
-                print(f"Stopped existing listener (PID {old_pid})")
-                tg_send(f"Stopped existing listener (PID {old_pid}). Starting new listener.")
-            except ProcessLookupError:
-                pass
-        except (ValueError, OSError):
-            pass
-        try:
-            os.remove(PID_FILE)
-        except OSError:
-            pass
-
-    svc_dir = os.path.expanduser("~/.config/systemd/user")
-    svc_file = os.path.join(svc_dir, "lambda-cut-listener.service")
-    if os.path.exists(svc_file):
-        with open(svc_file) as f:
-            svc_content = f.read()
-        python = sys.executable
-        new_svc = f"""[Unit]
-Description=Cogitator Telegram Listener
-After=network.target
-
-[Service]
-Type=simple
-ExecStartPre=/bin/sleep 10
-ExecStart={python} {script_path} listen
-WorkingDirectory={workspace}
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-"""
-        if svc_content != new_svc:
-            with open(svc_file, "w") as f:
-                f.write(new_svc)
-            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-            print(f"Updated systemd service to point to {workspace}")
-            tg_send(f"Systemd service updated to point to {workspace}")
-
-    with open(PID_FILE, "w") as f:
-        f.write(str(os.getpid()))
-
-    env("TELEGRAM_BOT_TOKEN")  # Ensure token is loaded
-    chat  = env("TELEGRAM_CHAT_ID")
-
-    global STREAMING
-    STREAMING = True
-
-    me = tg_api("getMe")
-    print(f"Cogitator Listener — @{me['result']['username']}")
-    
-    # Check for updates
-    print("Checking for updates...")
-    script_root = os.path.dirname(os.path.dirname(script_path))
-    update_info = check_for_updates(script_root)
-    local_ver = update_info.get("local_version", "Unknown")
-    print(f"Version: v{local_ver}")
-    
-    if update_info.get("update_available"):
-        remote_ver = update_info.get("remote_version", "Unknown")
-        print(f"Update available: v{remote_ver}")
-        tg_send(f"🔔 Update available: v{remote_ver}\nRun /update to install.")
-    else:
-        print("No updates available.")
-
-    # Rotate TTS voice on each listener start (all voices - male and female)
-    rotated_voice = random.choice(TTS_VOICES)
-    
-    # Also rotate TTS style randomly
-    rotated_style = random.choice(TTS_STYLE_OPTIONS)
-    update_env_var("TTS_VOICE", rotated_voice)
-    update_env_var("TTS_STYLE", rotated_style)
-    print(f"Voice rotated to: {rotated_voice}")
-    print(f"Style rotated to: {rotated_style[:50]}...")
-
-    tg_send(f"Cogitator listener started (v{local_ver}).\nVoice: {rotated_voice}\nStyle: {rotated_style[:50]}...")
-
-    oauth_file = os.path.join(WORKSPACE, ".cogitator", "youtube_oauth.json")
-    if os.path.exists(oauth_file):
-        print("[BACKGROUND] Syncing YouTube metrics...")
-        try:
-            from performance_database import sync_youtube_metrics
-            print("[BACKGROUND] Syncing YouTube metrics...")
-            result = sync_youtube_metrics(days=30, max_results=50)
-            synced = result.get('matched_count', 0)
-            new_metrics = result.get('new_metrics', 0)
-            print(f"[BACKGROUND] YouTube sync: {synced} matched, {new_metrics} new metrics")
-            if synced > 0 or new_metrics > 0:
-                tg_send(f"📊 YouTube sync complete: {synced} matched, {new_metrics} new metrics")
-        except Exception as sync_err:
-            print(f"[BACKGROUND] YouTube sync failed: {sync_err}")
-
-    offset = 0
-    if os.path.exists(OFFSET_FILE):
-        try:
-            offset = int(open(OFFSET_FILE).read().strip())
-        except (ValueError, OSError):
-            pass
-
-    global LISTENER_RUNNING
-    while LISTENER_RUNNING:
-        try:
-            r = tg_api("getUpdates", {"limit": 3, "timeout": 30, "offset": offset})
-            if not r.get("ok"):
-                time.sleep(5)
-                continue
-            for upd in r["result"]:
-                offset = upd["update_id"] + 1
-                with open(OFFSET_FILE, "w") as f:
-                    f.write(str(offset))
-                
-                # Handle callback_query (menu button clicks)
-                cb = upd.get("callback_query", {})
-                if cb:
-                    cb_id = cb.get("id", "")
-                    cb_data = cb.get("data", "")
-                    cb_msg = cb.get("message", {})
-                    cb_chat = str(cb_msg.get("chat", {}).get("id", ""))
-                    
-                    if cb_chat == str(chat) and cb_data:
-                        print(f"Callback: {cb_data}")
-                        
-                        # Route to appropriate handler
-                        if cb_data.startswith("ctx_"):
-                            result = handle_context_callback(cb_data, env("GAME_TITLE", ""), cb_id)
-                        else:
-                            result = handle_menu_callback(cb_data)
-                        
-                        if result:
-                            if isinstance(result, tuple):
-                                response_text, action_or_markup = result
-                            else:
-                                response_text = result
-                                action_or_markup = None
-                            
-                            # Answer the callback to dismiss loading spinner
-                            if response_text:
-                                tg_answer_callback(cb_id, response_text[:200])
-                            
-                            # If there's a keyboard markup to show, update the message
-                            if isinstance(action_or_markup, dict):
-                                token = env("TELEGRAM_BOT_TOKEN")
-                                if token:
-                                    msg_id = cb_msg.get("message_id", "")
-                                    try:
-                                        text = response_text if response_text else "📋 Select option:"
-                                        params = {"chat_id": cb_chat, "message_id": msg_id, "text": text, "reply_markup": json.dumps(action_or_markup)}
-                                        data = urllib.parse.urlencode(params).encode()
-                                        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/editMessageText", data=data, method="POST")
-                                        urllib.request.urlopen(req, timeout=10)
-                                    except Exception as e:
-                                        print(f"Menu update error: {e}")
-                            elif action_or_markup == "run_pipeline":
-                                tg_send("▶️ Running full pipeline...")
-                                def _run():
-                                    global PIPELINE_RUNNING
-                                    PIPELINE_RUNNING = True
-                                    try:
-                                        run_pipeline()
-                                    except Exception as e:
-                                        tg_send(f"Pipeline error: {e}")
-                                    finally:
-                                        PIPELINE_RUNNING = False
-                                threading.Thread(target=_run, daemon=True).start()
-                            elif action_or_markup == "restart_listener":
-                                tg_answer_callback(cb_id, "Restarting...")
-                                tg_send("Restarting listener via systemd...")
-                                subprocess.run(["systemctl", "--user", "restart", "lambda-cut-listener.service"], capture_output=True)
-                            elif action_or_markup == "do_restart":
-                                tg_answer_callback(cb_id, "🔄 Restarting...")
-                                subprocess.run(["systemctl", "--user", "restart", "lambda-cut-listener.service"], capture_output=True)
-                                sys.exit(0)
-                            elif action_or_markup == "stop_pipeline":
-                                global PIPELINE_STOP_REQUESTED
-                                PIPELINE_STOP_REQUESTED = True
-                                tg_answer_callback(cb_id, "Pipeline stop requested")
-                                tg_send("Pipeline stop requested. Finishing current phase...")
-                            elif action_or_markup == "proceed_to_scripts":
-                                tg_answer_callback(cb_id, "✅ Proceeding to Phase 3...")
-                                tg_send("▶️ Continuing to Phase 4 (Script Generation)...")
-                                def _run_p3():
-                                    global PIPELINE_RUNNING; PIPELINE_RUNNING = True
-                                    try: 
-                                        run_pipeline(skip={1, 2})
-                                    except Exception as e: 
-                                        tg_send(f"Pipeline error: {e}")
-                                    finally: PIPELINE_RUNNING = False
-                                threading.Thread(target=_run_p3, daemon=True).start()
-                            elif action_or_markup == "cs_do_import":
-                                tg_answer_callback(cb_id, "Importing...")
-                                count_t, count_s = _cs_import_data()
-                                tg_send(f"✅ Import complete!\n📝 {count_t} transcripts\n🎬 {count_s} shorts")
-                            elif action_or_markup == "cs_do_generate":
-                                tg_answer_callback(cb_id, "Generating script...")
-                                def _run_cs():
-                                    _cs_generate_script_only()
-                                threading.Thread(target=_run_cs, daemon=True).start()
-                            elif action_or_markup == "cs_do_generate_tts":
-                                tg_answer_callback(cb_id, "Generating TTS...")
-                                def _run_tts():
-                                    _cs_generate_tts_only()
-                                threading.Thread(target=_run_tts, daemon=True).start()
-                            elif action_or_markup == "cs_do_clear":
-                                tg_answer_callback(cb_id, "Clearing...")
-                                count = _cs_clear_data()
-                                tg_send(f"🗑️ Cleared {count} files from Content Studio")
-                            elif isinstance(action_or_markup, dict):
-                                # It's a new keyboard markup - edit the message
-                                token = env("TELEGRAM_BOT_TOKEN")
-                                if token and response_text:
-                                    msg_id = cb_msg.get("message_id", "")
-                                    try:
-                                        params = {"chat_id": cb_chat, "message_id": msg_id, "text": response_text, "reply_markup": json.dumps(action_or_markup)}
-                                        data = urllib.parse.urlencode(params).encode()
-                                        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/editMessageText", data=data, method="POST")
-                                        urllib.request.urlopen(req, timeout=10)
-                                    except Exception as e:
-                                        print(f"Menu update error: {e}")
-                        continue
-                
-                # Handle regular message commands
-                msg = upd.get("message", {})
-                cid = str(msg.get("chat", {}).get("id", ""))
-                txt = msg.get("text", "")
-                if cid == str(chat) and txt:
-                    print(f"Received: {txt}")
-                    
-                    # Handle context editing flow
-                    if CONTEXT_EDIT_STATE and "step" in CONTEXT_EDIT_STATE:
-                        result = handle_context_edit_input(txt, cid)
-                        if result:
-                            continue
-                    
-                    process_cmd(txt, cid)
-                    if LISTENER_RESTART:
-                        LISTENER_RESTART = False
-                        tg_send("Restarting listener via systemd...")
-                        subprocess.run(["systemctl", "--user", "restart", "lambda-cut-listener.service"], capture_output=True)
-                        sys.exit(0)
-        except urllib.error.URLError:
-            time.sleep(5)
-        except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(5)
-
-    tg_send("Cogitator listener stopped.")
 
 # ─── Onboard ──────────────────────────────────────────────────────────────────
 def onboard():
@@ -6526,7 +5275,7 @@ def onboard():
             lambda v: v.startswith("https://www.youtube.com/playlist?list="))
 
         voices = TTS_VOICES
-        default_voice = existing.get("TTS_VOICE", "Vindemiatrix") or "Vindemiatrix"
+        default_voice = existing.get("TTS_VOICE", "Vindemiatrix")
         default_idx = voices.index(default_voice) + 1 if default_voice in voices else 24
         print(f"\n  TTS Voice (pick a number):")
         for i, v in enumerate(voices, 1):
@@ -6544,23 +5293,8 @@ def onboard():
                 break
             print(f"  {fail()} Enter a number 1-{len(voices)}")
 
-        config["TTS_STYLE"] = ask("TTS_STYLE", "TTS Style prefix", optional=True) or existing.get("TTS_STYLE","")
-
-        use_telegram = input(f"  Use Telegram notifications? [y/N]: ").strip().lower() == "y"
-        if use_telegram:
-            print(f"\n  {B}Telegram Bot Token{X}")
-            print("    1. Open Telegram, search for @BotFather")
-            print("    2. Send /newbot and follow the prompts")
-            print("    3. Copy the token (e.g. 123456:ABC-DEF...)")
-            config["TELEGRAM_BOT_TOKEN"] = ask("TELEGRAM_BOT_TOKEN", "Telegram Bot Token",
-                lambda v: bool(re.match(r"^[0-9]+:[A-Za-z0-9_-]{35}$", v)))
-
-            print(f"\n  {B}Telegram Chat ID{X}")
-            print("    1. Open Telegram, search for @userinfobot")
-            print("    2. Send /start")
-            print("    3. It will reply with your Chat ID")
-            config["TELEGRAM_CHAT_ID"] = ask("TELEGRAM_CHAT_ID", "Telegram Chat ID",
-                lambda v: bool(re.match(r"^-?[0-9]+$", v)))
+        _tts_style_input = ask("TTS_STYLE", "TTS Style prefix (enter '.' to clear)", optional=True)
+        config["TTS_STYLE"] = "" if _tts_style_input == "." else _tts_style_input
 
         # Keys
         print(f"\n{B}Gemini keys for script generation{X}")
@@ -6595,9 +5329,6 @@ def onboard():
             f.write(f'WORKSPACE={workspace}\n')
             for k in ("GEMINI_API_KEY", "PLAYLIST_URL", "TTS_VOICE"):
                 f.write(f'{k}={config[k]}\n')
-            if use_telegram:
-                for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
-                    f.write(f'{k}={config[k]}\n')
             if config["TTS_STYLE"]:
                 f.write(f'TTS_STYLE="{config["TTS_STYLE"]}"\n')
         os.chmod(env_file, 0o600)
@@ -6609,10 +5340,6 @@ def onboard():
             print(f"  {ok()} Gemini keys stored")
             set_service_password("gemini-api-key", config["GEMINI_API_KEY"])
             print(f"  {ok()} TTS API key stored")
-            if use_telegram:
-                set_service_password("telegram-bot-token", config["TELEGRAM_BOT_TOKEN"])
-                set_service_password("telegram-chat-id", config["TELEGRAM_CHAT_ID"])
-                print(f"  {ok()} Telegram keys stored")
         except Exception as e:
             print(f"  {warn()} Keychain not available: {e}")
             print(f"    Keys saved to files only")
@@ -6643,36 +5370,6 @@ def onboard():
         print(f"{fail()} Failed")
         all_ok = False
 
-    # Telegram
-    if _telegram_configured():
-        sys.stdout.write("  Telegram bot ... "); sys.stdout.flush()
-        try:
-            r = urllib.request.urlopen(
-                f"https://api.telegram.org/bot{env('TELEGRAM_BOT_TOKEN')}/getMe", timeout=10)
-            name = json.loads(r.read())["result"]["username"]
-            print(f"{ok()} @{name}")
-        except Exception:
-            print(f"{fail()} Failed")
-            all_ok = False
-
-        # Chat
-        sys.stdout.write("  Telegram chat ... "); sys.stdout.flush()
-        try:
-            data = urllib.parse.urlencode({
-                "chat_id": env("TELEGRAM_CHAT_ID"),
-                "text": "Cogitator configured!"
-            }).encode()
-            req = urllib.request.Request(
-                f"https://api.telegram.org/bot{env('TELEGRAM_BOT_TOKEN')}/sendMessage",
-                data=data, method="POST")
-            urllib.request.urlopen(req, timeout=10)
-            print(f"{ok()} Message sent")
-        except Exception:
-            print(f"{fail()} Cannot send to chat")
-            all_ok = False
-    else:
-        print(f"  {warn()} Telegram not configured (notifications disabled)")
-
     # Playlist
     sys.stdout.write("  YouTube playlist ... "); sys.stdout.flush()
     r = subprocess.run(["yt-dlp","--flat-playlist","--playlist-items","1","-j",
@@ -6698,48 +5395,6 @@ def onboard():
         print(f"{B}{'='*40}")
         print(" All checks passed! You're ready.")
         print(f"{'='*40}{X}\n")
-
-        # Optional: systemd service
-        svc_dir  = os.path.expanduser("~/.config/systemd/user")
-        svc_file = os.path.join(svc_dir, "lambda-cut-listener.service")
-        svc_name = "lambda-cut-listener.service"
-
-        if input(f"  Set up Telegram listener as background service? [y/N]: ").strip().lower() == "y":
-            os.makedirs(svc_dir, exist_ok=True)
-            python = sys.executable
-            svc = f"""[Unit]
-Description=Cogitator Telegram Listener
-After=network.target
-
-[Service]
-Type=simple
-ExecStartPre=/bin/sleep 10
-ExecStart={python} {dst} listen
-WorkingDirectory={WORKSPACE}
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-"""
-            with open(svc_file, "w") as f:
-                f.write(svc)
-            run(["systemctl", "--user", "daemon-reload"])
-            run(["systemctl", "--user", "enable", svc_name])
-            run(["systemctl", "--user", "start", svc_name])
-            print(f"  {ok()} Listener running as background service.")
-            print(f"    Status:  systemctl --user status {svc_name}")
-            print(f"    Stop:    systemctl --user stop {svc_name}")
-            print(f"    Disable: systemctl --user disable {svc_name}\n")
-        else:
-            # Clean up old sophia-listener if present
-            old_svc = os.path.join(svc_dir, "sophia-listener.service")
-            if os.path.exists(old_svc):
-                run(["systemctl", "--user", "stop", "sophia-listener.service"], check=False)
-                run(["systemctl", "--user", "disable", "sophia-listener.service"], check=False)
-                print(f"  {ok()} Disabled old sophia-listener service.\n")
-            print("  Start bot manually when needed:")
-            print(f"    python3 {dst} listen\n")
 
         # Shell alias
         if input("  Set up alias so you can run `COGITATOR` from anywhere? [y/N]: ").strip().lower() == "y":
@@ -6791,12 +5446,10 @@ WantedBy=default.target
             print(f"  {B}Ready!{X}")
             print(f"    COGITATOR run")
             print(f"    COGITATOR run -phase 2,3")
-            print(f"    COGITATOR listen\n")
         else:
             print(f"  {B}Ready!{X}")
             print(f"    python3 {dst} run")
-            print(f"    python3 {dst} run -phase 2,3")
-            print(f"    python3 {dst} listen\n")
+            print(f"    python3 {dst} run -phase 2,3\n")
 
     else:
         print(f"{B}{'='*40}")
@@ -6815,9 +5468,6 @@ def _check_configured():
         if not val:
             return False
     return True
-
-def _telegram_configured():
-    return bool(env("TELEGRAM_BOT_TOKEN")) and bool(env("TELEGRAM_CHAT_ID"))
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 def main():
@@ -6840,11 +5490,6 @@ def main():
     p_download = sub.add_parser("download", help="Download video from URL")
     p_download.add_argument("-url", type=str, required=True, help="URL to download (video or playlist)")
     
-    sub.add_parser("listen", help="Start Telegram bot listener")
-    
-    p_stop = sub.add_parser("stop", help="Stop the listener")
-    p_stop.add_argument("--pipeline", action="store_true", help="Stop the running pipeline instead")
-
     sub.add_parser("delete-partial", help="Delete incomplete files")
     sub.add_parser("cleanup", help="Delete all generated files")
     sub.add_parser("clear-logs", help="Clear pipeline logs")
@@ -6865,9 +5510,9 @@ def main():
         else:
             if args.skip_phase_1: skip.add(1)
             if args.skip_phase_2: skip.add(2)
-            if args.skip_phase_4: skip.add(3)
-            if args.skip_phase_5: skip.add(4)
-            if args.skip_phase_6: skip.add(5)
+            if args.skip_phase_4: skip.add(4)
+            if args.skip_phase_5: skip.add(5)
+            if args.skip_phase_6: skip.add(6)
 
         playlist_index = None
         if args.index:
@@ -6905,34 +5550,6 @@ def main():
         success = download_from_url(url)
         sys.exit(0 if success else 1)
     
-    elif args.command == "listen":
-        listen()
-
-    elif args.command == "stop":
-        if args.pipeline:
-            if PIPELINE_RUNNING:
-                global PIPELINE_STOP_REQUESTED
-                PIPELINE_STOP_REQUESTED = True
-                print("Stop requested for pipeline.")
-            else:
-                print("No pipeline is currently running.")
-        else:
-            if os.path.exists(PID_FILE):
-                with open(PID_FILE) as f:
-                    pid = int(f.read().strip())
-                try:
-                    os.kill(pid, 0)
-                    os.kill(pid, 15)
-                    print(f"Sent stop signal to listener (PID {pid})")
-                    os.remove(PID_FILE)
-                except ProcessLookupError:
-                    print("Listener not running.")
-                    os.remove(PID_FILE)
-                except PermissionError:
-                    print("Cannot stop listener (permission denied).")
-            else:
-                print("No listener running (PID file not found).")
-
     elif args.command == "delete-partial":
         count = delete_partial_files()
         print(f"Deleted {count} partial file(s).")

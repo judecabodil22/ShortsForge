@@ -1,11 +1,8 @@
 def __getattr__(name):
     import importlib
     lazy_map = {
-        "phase_download": "workflows.pipeline.phase_download",
-        "phase_transcribe": "workflows.pipeline.phase_transcribe",
-        "phase_context": "workflows.pipeline.phase_context",
         "phase_tts": "workflows.pipeline.phase_tts",
-        "phase_lore": "workflows.pipeline.phase_lore",
+        "phase_assemble": "workflows.pipeline.phase_assemble",
         "pipeline_runner": "workflows.pipeline.pipeline_runner",
         "run_pipeline": "workflows.pipeline.pipeline_runner",
         "find_video": "workflows.pipeline.pipeline_runner",

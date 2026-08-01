@@ -119,14 +119,14 @@ export default function Scripts() {
                   onClick={() => setSelectedScript(script.id)}
                 >
                   {brokenThumbnails.has(script.id) ? (
-                    <div className="w-16 h-24 rounded flex items-center justify-center flex-shrink-0 bg-40k-darkest border border-40k-border">
+                    <div className="w-16 h-24 rounded flex items-center justify-center flex-shrink-0 bg-40k-black border border-40k-border">
                       <ImageOff className="w-6 h-6 text-gray-600" />
                     </div>
                   ) : (
                     <img
                       src={thumbnailUrl(script)}
                       alt=""
-                      className="w-16 h-24 rounded object-cover flex-shrink-0 bg-40k-darkest"
+                      className="w-16 h-24 rounded object-cover flex-shrink-0 bg-40k-black"
                       onError={() => setBrokenThumbnails(prev => new Set(prev).add(script.id))}
                     />
                   )}
@@ -228,7 +228,7 @@ export default function Scripts() {
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {String(metadata.tags).split(',').map((t: string, i: number) => (
-                      <span key={i} className="px-2 py-0.5 text-xs bg-40k-darkest text-gray-300 rounded">{t.trim()}</span>
+                      <span key={i} className="px-2 py-0.5 text-xs bg-40k-black text-gray-300 rounded">{t.trim()}</span>
                     ))}
                   </div>
                 </div>

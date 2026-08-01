@@ -8,16 +8,14 @@ All configuration is done via the `.env` file.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `TELEGRAM_BOT_TOKEN` | Token from @BotFather | `123456789:ABCdefGHIjklMNOpqrsTUVwxyz` |
-| `TELEGRAM_CHAT_ID` | Your Telegram chat ID | `123456789` |
 | `GEMINI_API_KEY` | API key from Google AI Studio | `AIza...` |
-| `GROQ_API_KEY` | Groq API key for highlight ranking + Gemini fallback (free via console.groq.com) | `gsk_...` |
 
 ### Optional Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PLAYLIST_URL` | (none) | YouTube playlist to process |
+| `GROQ_API_KEY` | (none) | Groq API key for highlight ranking + Gemini fallback (free via console.groq.com) |
 | `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (CPU/free/offline), `edge` (free cloud), or `gemini` (API) |
 | `TTS_VOICE` | `Vindemiatrix` | TTS voice name (Gemini and Kokoro voice mappings supported) |
 | `TTS_STYLE` | (none) | Style instruction for TTS |
@@ -27,8 +25,14 @@ All configuration is done via the `.env` file.
 | `WORKSPACE` | (auto) | Working directory path |
 | `RECORDING_PATH` | `~/Videos/Recordings/` | Local recordings folder |
 | `WHISPER_MODEL` | `medium` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
+| `TTS_EMOTION` | `default` | TTS emotion (happy, sad, excited, calm, angry, fearful, whisper) |
+| `TTS_SPEED` | `1.0` | TTS speed multiplier (0.5–2.0) |
+| `TTS_PROVIDER` | `kokoro` | TTS provider (kokoro, gemini, edge) |
+| `CLIP_PACING` | `normal` | Clip pacing mode (fast, normal, slow) |
 
 ## Telegram Commands
+
+> **DEPRECATED**: Telegram bot functionality has been **removed**. The web interface provides full pipeline control. This section is kept for historical reference only.
 
 ### Pipeline Control
 
@@ -150,22 +154,8 @@ Cogitator/
 ├── transcripts/     # Generated transcripts
 ├── scripts/         # AI-generated scripts
 ├── shorts/          # Final video clips
-└── tts/            # Generated audio + subtitles
-```
-
-## Systemd Service
-
-To run listener as a systemd service:
-
-```bash
-# Enable auto-start on boot
-systemctl --user enable cogitator-listener.service
-
-# Start manually
-systemctl --user start cogitator-listener.service
-
-# Check status
-systemctl --user status cogitator-listener.service
+├── tts/            # Generated audio + subtitles
+└── assembly/       # Assembled videos with subtitles
 ```
 
 ## API Keys
@@ -178,10 +168,6 @@ systemctl --user status cogitator-listener.service
 
 For multiple keys (rate limiting), add them through the onboard process or store them directly in your system keychain using the keychain manager.
 
-### Telegram Bot
+### Discord Bot (Removed)
 
-1. Message @BotFather on Telegram
-2. Use `/newbot` command
-3. Follow prompts to create bot
-4. Copy the token to `.env`
-5. Get your chat ID: message @userinfobot
+> **Note**: Telegram/Discord bot functionality has been **removed** from Cogitator. The web interface provides full pipeline control. No bot token or chat ID is required.

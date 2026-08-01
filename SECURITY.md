@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.0.x   | :white_check_mark: |
-| < 2.0   | :x:                |
+| 2.4.x   | :white_check_mark: |
+| < 2.4   | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -28,8 +28,8 @@ Cogitator uses multiple API keys for its functionality:
 
 1. **Gemini API Key** - For AI script generation and TTS
 2. **YouTube API Key** - For fetching video metrics
-3. **Telegram Bot Token** - For Telegram bot functionality
-4. **YouTube OAuth** - For YouTube API access
+3. **YouTube OAuth** - For YouTube API access
+4. **Telegram Bot Token** - Optional, for Telegram bot functionality (legacy)
 
 #### Secure Storage
 
@@ -75,7 +75,6 @@ X-API-Key: sf_xxxxxxxxxxxxxxxxxxxxx
 The following endpoints require API key authentication:
 - `POST /api/config` - Update configuration
 - `POST /api/system/cleanup` - Cleanup files
-- `POST /api/system/restart-listener` - Restart listener
 - `POST /api/context/import` - Import context
 - `POST /api/context/clear` - Clear context
 - `POST /api/pipeline/download` - Download from URL
@@ -97,14 +96,20 @@ Required environment variables (see `.env.example`):
 
 ```
 GEMINI_API_KEY=your_gemini_key
-YOUTUBE_API_KEY=your_youtube_key
-TELEGRAM_BOT_TOKEN=your_telegram_token
-TELEGRAM_CHAT_ID=your_chat_id
 GAME_TITLE=your_game_title
 TTS_VOICE=your_preferred_voice
 ```
 
+Optional:
+```
+GROQ_API_KEY=your_groq_key
+TELEGRAM_BOT_TOKEN=your_telegram_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
+
 ### Telegram Security
+
+> **Note**: Telegram bot functionality is optional. The web interface provides full pipeline control.
 
 - Keep your `TELEGRAM_CHAT_ID` private
 - Don't share bot tokens publicly
@@ -126,7 +131,6 @@ Cogitator uses the following key dependencies:
 - FastAPI (web framework)
 - Google Gemini API (AI)
 - YouTube Data API (metrics)
-- Telegram Bot API (notifications)
 - FFmpeg (video processing)
 
 Ensure you keep these dependencies updated for security patches.

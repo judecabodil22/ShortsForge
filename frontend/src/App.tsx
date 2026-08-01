@@ -1,6 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { ThemeProvider } from '@/contexts/ThemeContext'
 import { ToastProvider } from '@/contexts/ToastContext'
 import ToastContainer from '@/components/ui/Toast'
@@ -12,6 +12,8 @@ import Metrics from '@/pages/Metrics'
 import Context from '@/pages/Context'
 import Settings from '@/pages/Settings'
 import PromptEditor from '@/pages/PromptEditor'
+import LearningDashboard from '@/pages/LearningDashboard'
+import { pageVariants, pageTransition } from '@/lib/animations'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,19 +24,15 @@ const queryClient = new QueryClient({
   },
 })
 
-const pageVariants = {
-  initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0 },
-}
-
 function AnimatedPage({ children }: { children: React.ReactNode }) {
   return (
     <motion.div
       className="h-full w-full overflow-auto p-6"
+      variants={pageVariants}
       initial="initial"
       animate="animate"
-      variants={pageVariants}
-      transition={{ duration: 0.2 }}
+      exit="exit"
+      transition={pageTransition}
     >
       {children}
     </motion.div>
@@ -42,17 +40,21 @@ function AnimatedPage({ children }: { children: React.ReactNode }) {
 }
 
 function AppRoutes() {
+  const location = useLocation()
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-      <Route path="/dashboard" element={<AnimatedPage><Dashboard /></AnimatedPage>} />
-      <Route path="/graph" element={<AnimatedPage><Graph /></AnimatedPage>} />
-      <Route path="/scripts" element={<AnimatedPage><Scripts /></AnimatedPage>} />
-      <Route path="/metrics" element={<AnimatedPage><Metrics /></AnimatedPage>} />
-      <Route path="/context" element={<AnimatedPage><Context /></AnimatedPage>} />
-      <Route path="/settings" element={<AnimatedPage><Settings /></AnimatedPage>} />
-      <Route path="/prompts" element={<AnimatedPage><PromptEditor /></AnimatedPage>} />
-    </Routes>
+    <AnimatePresence mode="wait">
+      <Routes location={location} key={location.pathname}>
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<AnimatedPage><Dashboard /></AnimatedPage>} />
+        <Route path="/graph" element={<AnimatedPage><Graph /></AnimatedPage>} />
+        <Route path="/scripts" element={<AnimatedPage><Scripts /></AnimatedPage>} />
+        <Route path="/metrics" element={<AnimatedPage><Metrics /></AnimatedPage>} />
+        <Route path="/context" element={<AnimatedPage><Context /></AnimatedPage>} />
+        <Route path="/settings" element={<AnimatedPage><Settings /></AnimatedPage>} />
+        <Route path="/prompts" element={<AnimatedPage><PromptEditor /></AnimatedPage>} />
+        <Route path="/learning" element={<AnimatedPage><LearningDashboard /></AnimatedPage>} />
+      </Routes>
+    </AnimatePresence>
   )
 }
 

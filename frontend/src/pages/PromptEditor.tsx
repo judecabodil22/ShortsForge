@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Save, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { getScriptPrompt, saveScriptPrompt } from '@/lib/api'
+import { stagger, slideLeft } from '@/lib/animations'
 
 export default function PromptEditor() {
   const queryClient = useQueryClient()
@@ -42,8 +43,8 @@ export default function PromptEditor() {
   const charCount = content.length
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
+      <motion.div variants={slideLeft} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-white">
             <span className="text-40k-gold">PROMPT</span> EDITOR
@@ -75,7 +76,7 @@ export default function PromptEditor() {
             Save
           </motion.button>
         </div>
-      </div>
+      </motion.div>
 
       {statusMsg && (
         <motion.div
@@ -119,6 +120,6 @@ export default function PromptEditor() {
           />
         )}
       </Card>
-    </div>
+    </motion.div>
   )
 }

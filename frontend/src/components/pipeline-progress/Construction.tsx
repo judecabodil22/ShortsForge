@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { PHASES, PHASE_LABELS, type PipelineStatus, getPhaseIndex } from './types'
+import { PHASES, type PipelineStatus, getPhaseIndex } from './types'
 
 interface Props {
   status: PipelineStatus

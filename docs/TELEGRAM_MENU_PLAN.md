@@ -1,8 +1,10 @@
 # URGENT: Telegram Inline Menu - Implementation Plan
 
+> **OBSOLETE**: Telegram bot functionality has been removed. This document is kept for historical reference only. The web interface now provides full pipeline control.
+
 **Created:** 2026-04-02  
 **Priority:** HIGH  
-**Status:** READY FOR IMPLEMENTATION
+**Status:** OBSOLETE (Telegram functionality removed)
 
 ---
 

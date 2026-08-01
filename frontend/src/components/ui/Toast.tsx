@@ -15,7 +15,7 @@ const styles = {
 }
 
 export default function ToastContainer() {
-  const { toasts, removeToast } = useToast()
+  const { toasts, removeToast, pauseToast, resumeToast } = useToast()
 
   return (
     <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
@@ -29,6 +29,8 @@ export default function ToastContainer() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.95 }}
               transition={{ duration: 0.2 }}
+              onMouseEnter={() => pauseToast(t.id)}
+              onMouseLeave={() => resumeToast(t.id)}
               className={`pointer-events-auto flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg min-w-[300px] max-w-[420px] ${styles[t.type]}`}
             >
               <Icon className="w-5 h-5 mt-0.5 flex-shrink-0" />

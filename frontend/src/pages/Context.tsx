@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save, Gamepad2, Database, Layers, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, createGameContext, getStatus } from '@/lib/api'
+import { stagger, slideLeft } from '@/lib/animations'
 
 const TYPE_CONFIG = {
   character: { icon: Users, color: 'text-40k-gold', bg: 'bg-40k-gold/20' },
@@ -238,8 +239,8 @@ export default function Context() {
   })
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
+      <motion.div variants={slideLeft} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-white">
             <span className="text-40k-gold">CONTEXT</span> EDITOR
@@ -293,7 +294,7 @@ export default function Context() {
             New Franchise
           </motion.button>
         </div>
-      </div>
+      </motion.div>
 
       {/* Franchise Info Banner */}
       {selectedFranchiseInfo?.is_series && selectedFranchiseInfo.children?.length > 0 && (
@@ -390,7 +391,7 @@ export default function Context() {
                         <h4 className="font-medium text-white truncate flex items-center gap-1.5">
                           {item.name}
                           {item.verified === true ? (
-                            <ShieldCheck className="w-3.5 h-3.5 text-green-400 shrink-0" title="Verified" />
+                            <ShieldCheck className="w-3.5 h-3.5 text-green-400 shrink-0" aria-label="Verified" />
                           ) : (
                             <span className="inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-yellow-400 border border-yellow-400/30 rounded shrink-0">
                               Unconfirmed
@@ -620,6 +621,6 @@ export default function Context() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   )
 }

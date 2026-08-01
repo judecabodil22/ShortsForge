@@ -1,25 +1,76 @@
-import glob, os, re, time
+import glob, json, os, re, time
+
+
+CHECKPOINT_FILE = ".pipeline_state_{video_basename}.json"
+
+
+def _checkpoint_path(video_basename):
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                        CHECKPOINT_FILE.format(video_basename=video_basename))
+
+
+def _save_checkpoint(video_basename, phase, item=0):
+    path = _checkpoint_path(video_basename)
+    state = {}
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                state = json.load(f)
+        except Exception:
+            pass
+    state['video_basename'] = video_basename
+    state['last_phase'] = max(state.get('last_phase', 0), phase)
+    state['last_item'] = max(state.get('last_item', 0), item)
+    state['completed_phases'] = list(set(state.get('completed_phases', []) + [phase]))
+    try:
+        with open(path, 'w') as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
+
+
+def _load_checkpoint(video_basename):
+    path = _checkpoint_path(video_basename)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _clear_checkpoint(video_basename):
+    path = _checkpoint_path(video_basename)
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 
 def _get_cogitator():
     from workflows.cogitator import (
         log, log_error, set_status, notify, env,
-        MEDIA_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, OUTPUT_DIR,
+        MEDIA_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, ASSEMBLY_DIR, OUTPUT_DIR,
         PIPELINE_STOP_REQUESTED, PIPELINE_RUNNING,
         _refresh_learning_state, _SCRIPT_ID_MAP,
         _cs_extract_context_from_transcript, _cs_update_context,
         load_verified_context, merge_context_dicts,
         save_verified_context, compute_and_save_implicit_relationships,
         phase_download, phase_transcribe, phase_context,
-        phase_scripts, phase_clips, phase_tts,
+        phase_scripts, phase_clips,
         run as _sf_run,
     )
+    from workflows.pipeline.phase_assemble import phase_assemble
+    from workflows.pipeline.phase_tts import phase_tts
+    from workflows.learning_engine import load_retention_history
     return {
         'log': log, 'log_error': log_error,
         'set_status': set_status, 'notify': notify, 'env': env,
         'MEDIA_DIR': MEDIA_DIR, 'TRANSCRIPTS_DIR': TRANSCRIPTS_DIR,
         'SCRIPTS_DIR': SCRIPTS_DIR, 'TTS_DIR': TTS_DIR,
-        'SHORTS_DIR': SHORTS_DIR, 'OUTPUT_DIR': OUTPUT_DIR,
+        'SHORTS_DIR': SHORTS_DIR, 'ASSEMBLY_DIR': ASSEMBLY_DIR, 'OUTPUT_DIR': OUTPUT_DIR,
         'PIPELINE_STOP_REQUESTED': PIPELINE_STOP_REQUESTED,
         'PIPELINE_RUNNING': PIPELINE_RUNNING,
         '_refresh_learning_state': _refresh_learning_state,
@@ -30,9 +81,11 @@ def _get_cogitator():
         'merge_context_dicts': merge_context_dicts,
         'save_verified_context': save_verified_context,
         'compute_and_save_implicit_relationships': compute_and_save_implicit_relationships,
+        'load_retention_history': load_retention_history,
         'phase_download': phase_download, 'phase_transcribe': phase_transcribe,
         'phase_context': phase_context, 'phase_scripts': phase_scripts,
         'phase_clips': phase_clips, 'phase_tts': phase_tts,
+        'phase_assemble': phase_assemble,
         'run': _sf_run,
     }
 
@@ -61,7 +114,7 @@ def delete_partial_files():
 def cleanup_all_files():
     c = _get_cogitator()
     count = 0
-    for d in [c['MEDIA_DIR'], c['TRANSCRIPTS_DIR'], c['TTS_DIR'], c['SHORTS_DIR']]:
+    for d in [c['MEDIA_DIR'], c['TRANSCRIPTS_DIR'], c['TTS_DIR'], c['SHORTS_DIR'], c['ASSEMBLY_DIR']]:
         for f in glob.glob(os.path.join(d, "*")):
             if os.path.isfile(f):
                 os.remove(f)
@@ -118,6 +171,7 @@ def run_pipeline(skip=None):
         os.makedirs(d, exist_ok=True)
 
     c['_refresh_learning_state']()
+    c['load_retention_history']()
 
     skip = skip or set()
 
@@ -132,9 +186,24 @@ def run_pipeline(skip=None):
     duration = video_info(video)
     c['log'](f"Target: {os.path.basename(video)} ({duration}s)")
 
+    video_basename = os.path.splitext(os.path.basename(video))[0]
+
+    # Pipeline checkpoint/resume
+    checkpoint = _load_checkpoint(video_basename)
+    if checkpoint:
+        completed = set(checkpoint.get('completed_phases', []))
+        if not skip:
+            skip = completed
+            c['log'](f"Checkpoint found: phases {sorted(completed)} completed, resuming from phase {max(completed)+1}")
+        else:
+            # Merge explicit skip with checkpoint
+            skip = skip | completed
+            c['log'](f"Checkpoint merged: skipping phases {sorted(skip)}")
+
     if 2 not in skip:
         json_file = c['phase_transcribe'](video)
         if check_stop(): return
+        _save_checkpoint(video_basename, 2)
     else:
         video_name = os.path.splitext(os.path.basename(video))[0]
         json_file = os.path.join(c['TRANSCRIPTS_DIR'], f"{video_name}.json")
@@ -145,6 +214,7 @@ def run_pipeline(skip=None):
     if 3 not in skip:
         c['phase_context']()
         if check_stop(): return
+        _save_checkpoint(video_basename, 3)
     elif 2 in skip and json_file:
         c['log']("Phase 2 and 3 skipped, extracting context for scripts...")
         try:
@@ -175,19 +245,28 @@ def run_pipeline(skip=None):
     if 4 not in skip and json_file:
         c['phase_scripts'](json_file, duration, num_hours, video=video)
         if check_stop(): return
+        _save_checkpoint(video_basename, 4)
     elif 4 not in skip:
         c['log_error']("No transcript for script generation")
 
     if 5 not in skip and json_file:
         c['phase_clips'](video, json_file, duration, num_hours, script_id_map=c['_SCRIPT_ID_MAP'])
         if check_stop(): return
+        _save_checkpoint(video_basename, 5)
     elif 5 not in skip:
         c['log_error']("No transcript for clip generation")
 
     if 6 not in skip:
         c['phase_tts'](duration, num_hours, video=video)
         if check_stop(): return
+        _save_checkpoint(video_basename, 6)
 
+    if 7 not in skip:
+        c['phase_assemble'](duration, num_hours, video=video)
+        if check_stop(): return
+        _save_checkpoint(video_basename, 7)
+
+    _clear_checkpoint(video_basename)
     c['log']("Pipeline Complete!")
     c['set_status']("Pipeline Complete")
 
@@ -196,6 +275,9 @@ def run_pipeline(skip=None):
     tw = count_files(os.path.join(c['TTS_DIR'], "*.wav"))
     ts = count_files(os.path.join(c['TTS_DIR'], "*.srt"))
     tc = count_files(os.path.join(c['TRANSCRIPTS_DIR'], "*.json"))
+    assembly_dir = os.path.join(os.path.dirname(c['SHORTS_DIR']), "assembly",
+                                os.path.splitext(os.path.basename(video))[0] if video else "")
+    ac = count_files(os.path.join(assembly_dir, "*.mp4"))
 
     c['notify'](f"""Pipeline Complete!
 
@@ -208,8 +290,9 @@ Clips: {cc}
 TTS WAVs: {tw}
 TTS SRTs: {ts}
 Transcripts: {tc}
+Assembled Shorts: {ac}
 
-Total output files: {sc + cc + tw + ts}""")
+Total output files: {sc + cc + tw + ts + ac}""")
 
     try:
         from workflows.learning_engine import sync_and_train_from_youtube

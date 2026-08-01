@@ -8,9 +8,14 @@ Replaces the 40+ global variables that were scattered across cogitator.py.
 import os
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
-
 from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS
+
 from workflows.core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin
+
+# Fallback when no variant weights from learning; covers all 9 script variants
+_DEFAULT_VARIANTS = ["mystery_recap", "breakdown", "timeline", "lesson",
+                     "narrative", "news_report", "documentary", "true_crime",
+                     "character_pov"]
 
 
 @dataclass
@@ -58,7 +63,7 @@ class PipelineContext:
         """Initialize round-robin from learning state."""
         init_round_robin(
             num_scripts=self.num_scripts,
-            variant_keys=list(self.variant_weights.keys()) if self.variant_weights else [],
+            variant_keys=list(self.variant_weights.keys()) if self.variant_weights else _DEFAULT_VARIANTS,
             perspectives=["first_person", "third_person", "omniscient"],
             variant_weights=self.variant_weights,
             tts_weights=self.tts_weights,
@@ -67,7 +72,7 @@ class PipelineContext:
     def get_next_variant_perspective(self) -> tuple:
         """Get next round-robin variant and perspective."""
         return get_next_variant_perspective(
-            list(self.variant_weights.keys()) if self.variant_weights else ["default"],
+            list(self.variant_weights.keys()) if self.variant_weights else _DEFAULT_VARIANTS,
             ["first_person", "third_person", "omniscient"],
         )
     

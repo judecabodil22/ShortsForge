@@ -40,8 +40,6 @@ def get_all_keys():
     """Get all stored API keys."""
     keys = {
         "gemini_api_key": get_service_password("gemini-api-key"),
-        "telegram_bot_token": get_service_password("telegram-bot-token"),
-        "telegram_chat_id": get_service_password("telegram-chat-id"),
     }
     return keys
 

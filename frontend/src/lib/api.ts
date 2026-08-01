@@ -98,6 +98,17 @@ export const analyzeScript = (id: string) => fetchAPI<any>(`/api/scripts/${id}/a
 export const getLearnings = () => fetchAPI<any>('/api/learnings')
 export const getLearningWeights = () => fetchAPI<any>('/api/learnings/weights')
 
+export const getLearningDashboard = () => fetchAPI<any>('/api/learning/dashboard')
+export const getActiveABTests = () => fetchAPI<any>('/api/learning/ab-tests')
+export const createABTest = (testName: string, testType: string, variantA: any, variantB: any) =>
+  fetchAPI<any>('/api/learning/ab-test', { method: 'POST', body: { test_name: testName, test_type: testType, variant_a: variantA, variant_b: variantB } })
+export const getABTest = (testId: string) => fetchAPI<any>(`/api/learning/ab-test/${testId}`)
+
+export const getGraphSearch = (game: string, query: string, type: string) =>
+  fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/graph/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(type)}`)
+export const getGraphStats = (game: string) =>
+  fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/graph/stats`)
+
 export const getGames = () => fetchAPI<any>('/api/context/games')
 export const getGameContext = (game: string) => fetchAPI<any>(`/api/context/${game}`)
 export const getGraphData = (game: string) => fetchAPI<any>(`/api/context/${game}/graph`)
@@ -112,7 +123,6 @@ export const deleteGame = (game: string) =>
 export const getConfig = () => fetchAPI<any>('/api/config')
 export const updateConfig = (data: any) => fetchAPI<any>('/api/config', { method: 'POST', body: data })
 export const cleanupFiles = () => fetchAPI<any>('/api/system/cleanup', { method: 'POST' })
-export const restartListener = () => fetchAPI<any>('/api/system/restart-listener', { method: 'POST' })
 export const downloadFromUrl = (url: string) => fetchAPI<any>('/api/pipeline/download', { method: 'POST', body: { url } })
 export const getLogs = (lines: number = 100) => fetchAPI<any>(`/api/logs?lines=${lines}`)
 export const createGameContext = (game: string) => fetchAPI<any>('/api/context/create_game', { method: 'POST', body: { game } })

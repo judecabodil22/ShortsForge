@@ -14,6 +14,7 @@ import {
   type GraphSettings,
   type VisualTheme,
 } from '@/lib/graphSettings'
+import { stagger, slideLeft } from '@/lib/animations'
 
 const NODE_COLORS = {
   character: '#c9a227',
@@ -614,11 +615,11 @@ export default function Graph() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
+      <motion.div variants={slideLeft} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-cyber-cyan">KNOWLEDGE</span> GRAPH
+            <span className="text-40k-gold">KNOWLEDGE</span> GRAPH
           </h1>
           <p className="text-gray-400 mt-1">
             Nodes are entities from the Context page; solid edges are defined relationships, dashed edges are transcript co-occurrence.
@@ -643,7 +644,7 @@ export default function Graph() {
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
-      </div>
+      </motion.div>
 
       <div className="flex gap-4 flex-wrap">
         {Object.entries(NODE_COLORS).map(([type, color]) => (
@@ -689,22 +690,22 @@ export default function Graph() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <Card className="lg:col-span-3 p-0 overflow-hidden relative">
           <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
-            <button onClick={handleZoomIn} className="cyber-button p-2 bg-cyber-dark/80 backdrop-blur">
+            <button onClick={handleZoomIn} className="cyber-button p-2 bg-40k-dark/80 backdrop-blur">
               <ZoomIn className="w-4 h-4" />
             </button>
-            <button onClick={handleZoomOut} className="cyber-button p-2 bg-cyber-dark/80 backdrop-blur">
+            <button onClick={handleZoomOut} className="cyber-button p-2 bg-40k-dark/80 backdrop-blur">
               <ZoomOut className="w-4 h-4" />
             </button>
-            <button onClick={handleFit} className="cyber-button p-2 bg-cyber-dark/80 backdrop-blur">
+            <button onClick={handleFit} className="cyber-button p-2 bg-40k-dark/80 backdrop-blur">
               <Maximize2 className="w-4 h-4" />
             </button>
-            <button onClick={() => setShowSettings(!showSettings)} className={`cyber-button p-2 bg-cyber-dark/80 backdrop-blur ${showSettings ? 'text-cyber-cyan' : ''}`}>
+            <button onClick={() => setShowSettings(!showSettings)} className={`cyber-button p-2 bg-40k-dark/80 backdrop-blur ${showSettings ? 'text-40k-gold' : ''}`}>
               <Settings className="w-4 h-4" />
             </button>
           </div>
 
           {showSettings && (
-            <div className="absolute top-4 left-4 z-10 bg-cyber-dark/95 backdrop-blur border border-cyber-border rounded-lg p-4 w-64">
+            <div className="absolute top-4 left-4 z-10 bg-40k-dark/95 backdrop-blur border border-40k-border rounded-lg p-4 w-64">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm font-medium text-white">Graph Settings</span>
                 <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white">
@@ -721,8 +722,8 @@ export default function Graph() {
                         onClick={() => handleThemeChange(option.value)}
                         className={`px-2 py-1 text-xs rounded transition-colors ${
                           graphSettings.visualTheme === option.value
-                            ? 'bg-cyber-cyan text-black'
-                            : 'bg-cyber-dark border border-cyber-border text-gray-300 hover:bg-cyber-border'
+                            ? 'bg-40k-gold text-black'
+                            : 'bg-40k-dark border border-40k-border text-gray-300 hover:bg-40k-border'
                         }`}
                       >
                         {option.icon} {option.label}
@@ -733,7 +734,7 @@ export default function Graph() {
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
                     <span>Link Distance</span>
-                    <span className="text-cyber-cyan">{graphSettings.linkDistance}</span>
+                    <span className="text-40k-gold">{graphSettings.linkDistance}</span>
                   </label>
                   <input
                     type="range"
@@ -747,7 +748,7 @@ export default function Graph() {
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
                     <span>Link Force</span>
-                    <span className="text-cyber-cyan">{graphSettings.linkStrength.toFixed(1)}</span>
+                    <span className="text-40k-gold">{graphSettings.linkStrength.toFixed(1)}</span>
                   </label>
                   <input
                     type="range"
@@ -766,7 +767,7 @@ export default function Graph() {
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
                     <span>Repel Force</span>
-                    <span className="text-cyber-cyan">{graphSettings.chargeStrength}</span>
+                    <span className="text-40k-gold">{graphSettings.chargeStrength}</span>
                   </label>
                   <input
                     type="range"
@@ -784,7 +785,7 @@ export default function Graph() {
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
                     <span>Center Force</span>
-                    <span className="text-cyber-cyan">{graphSettings.centerStrength.toFixed(2)}</span>
+                    <span className="text-40k-gold">{graphSettings.centerStrength.toFixed(2)}</span>
                   </label>
                   <input
                     type="range"
@@ -803,7 +804,7 @@ export default function Graph() {
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
                     <span>Velocity Decay</span>
-                    <span className="text-cyber-cyan">{graphSettings.velocityDecay.toFixed(1)}</span>
+                    <span className="text-40k-gold">{graphSettings.velocityDecay.toFixed(1)}</span>
                   </label>
                   <input
                     type="range"
@@ -822,7 +823,7 @@ export default function Graph() {
                 <div>
                   <label className="text-xs text-gray-400 flex justify-between">
                     <span>Collision</span>
-                    <span className="text-cyber-cyan">{graphSettings.collisionRadius}</span>
+                    <span className="text-40k-gold">{graphSettings.collisionRadius}</span>
                   </label>
                   <input
                     type="range"
@@ -888,7 +889,7 @@ export default function Graph() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
-            <motion.div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400 bg-cyber-dark/80 backdrop-blur px-3 py-1.5 rounded-full border border-cyber-border/50">
+            <motion.div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400 bg-40k-dark/80 backdrop-blur px-3 py-1.5 rounded-full border border-40k-border/50">
               <span>Nodes: {graphData.nodes.length}</span>
               <span>Edges: {graphData.contextCount} context + {graphData.implicitCount} co-occurrence</span>
               {rawGraphData?.stats?.sources && (
@@ -909,7 +910,7 @@ export default function Graph() {
               )}
             </motion.div>
             {graphData.nodes.length > 15 && graphData.contextCount < 3 && (
-              <p className="text-xs text-amber-200/90 bg-cyber-dark/90 backdrop-blur px-3 py-2 rounded-lg border border-amber-500/30">
+              <p className="text-xs text-amber-200/90 bg-40k-dark/90 backdrop-blur px-3 py-2 rounded-lg border border-amber-500/30">
                 Many entities but few relationship edges. Add relationships in Context or re-run Phase 3 on your transcript.
               </p>
             )}
@@ -918,7 +919,7 @@ export default function Graph() {
 
         <Card>
           <h3 className="text-lg font-display font-semibold text-white mb-4 flex items-center gap-2">
-            <Network className="w-5 h-5 text-cyber-magenta" />
+            <Network className="w-5 h-5 text-40k-crimson-bright" />
             Node Details
           </h3>
 
@@ -944,16 +945,16 @@ export default function Graph() {
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-white text-lg truncate">{selectedNode.label}</p>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="px-2 py-0.5 bg-cyber-dark/80 rounded text-xs capitalize" style={{ color: NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS] }}>
+                      <span className="px-2 py-0.5 bg-40k-dark/80 rounded text-xs capitalize" style={{ color: NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS] }}>
                         {selectedNode.type}
                       </span>
                       {selectedNode.category && (
-                        <span className="px-2 py-0.5 bg-cyber-dark/80 rounded text-xs text-gray-400">
+                        <span className="px-2 py-0.5 bg-40k-dark/80 rounded text-xs text-gray-400">
                           {selectedNode.category}
                         </span>
                       )}
                       {(selectedNode as NodeData).game_key && (
-                        <span className="px-2 py-0.5 bg-cyber-purple/20 text-cyber-purple rounded text-xs">
+                        <span className="px-2 py-0.5 bg-40k-crimson/20 text-40k-crimson-bright rounded text-xs">
                           {(selectedNode as NodeData).game_key?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                         </span>
                       )}
@@ -962,29 +963,29 @@ export default function Graph() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="p-3 bg-cyber-dark rounded-lg text-center">
-                    <p className="text-2xl font-bold text-cyber-cyan">{selectedNode.neighbors?.length || 0}</p>
+                  <div className="p-3 bg-40k-dark rounded-lg text-center">
+                    <p className="text-2xl font-bold text-40k-gold">{selectedNode.neighbors?.length || 0}</p>
                     <p className="text-xs text-gray-400">Connections</p>
                   </div>
-                  <div className="p-3 bg-cyber-dark rounded-lg text-center">
-                    <p className="text-2xl font-bold text-cyber-magenta">{selectedNode.links?.length || 0}</p>
+                  <div className="p-3 bg-40k-dark rounded-lg text-center">
+                    <p className="text-2xl font-bold text-40k-crimson-bright">{selectedNode.links?.length || 0}</p>
                     <p className="text-xs text-gray-400">Relationships</p>
                   </div>
                 </div>
 
                 {selectedNode.description && (
-                  <div className="p-3 bg-cyber-dark rounded-lg">
+                  <div className="p-3 bg-40k-dark rounded-lg">
                     <p className="text-xs text-gray-400 mb-1">Description</p>
                     <p className="text-sm text-gray-200">{selectedNode.description}</p>
                   </div>
                 )}
 
                 {(selectedNode as any).aliases?.length > 0 && (
-                  <div className="p-3 bg-cyber-dark rounded-lg">
+                  <div className="p-3 bg-40k-dark rounded-lg">
                     <p className="text-xs text-gray-400 mb-2">Aliases</p>
                     <div className="flex flex-wrap gap-1">
                       {(selectedNode as any).aliases.map((alias: string, idx: number) => (
-                        <span key={idx} className="px-2 py-0.5 bg-cyber-border/50 rounded text-xs text-gray-300">
+                        <span key={idx} className="px-2 py-0.5 bg-40k-border/50 rounded text-xs text-gray-300">
                           {alias}
                         </span>
                       ))}
@@ -993,7 +994,7 @@ export default function Graph() {
                 )}
 
                 {(selectedNode as any).tags?.length > 0 && (
-                  <div className="p-3 bg-cyber-dark rounded-lg">
+                  <div className="p-3 bg-40k-dark rounded-lg">
                     <p className="text-xs text-gray-400 mb-2">Tags</p>
                     <div className="flex flex-wrap gap-1">
                       {(selectedNode as any).tags.map((tag: string, idx: number) => (
@@ -1006,7 +1007,7 @@ export default function Graph() {
                 )}
 
                 {selectedNode.neighbors && selectedNode.neighbors.length > 0 && (
-                  <div className="p-3 bg-cyber-dark rounded-lg">
+                  <div className="p-3 bg-40k-dark rounded-lg">
                     <p className="text-xs text-gray-400 mb-2">Connected To</p>
                     <div className="space-y-1 max-h-32 overflow-y-auto">
                       {selectedNode.neighbors.slice(0, 10).map((neighborId: string) => {
@@ -1035,7 +1036,7 @@ export default function Graph() {
                 )}
 
                 {segmentRefs?.references && Object.keys(segmentRefs.references).length > 0 && (
-                  <div className="p-3 bg-cyber-dark rounded-lg">
+                  <div className="p-3 bg-40k-dark rounded-lg">
                     <p className="text-xs text-gray-400 mb-2">Source Transcripts</p>
                     <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
                       {Object.entries(segmentRefs.references).flatMap(([_transcript, nodes]: [string, any]) =>
@@ -1059,7 +1060,7 @@ export default function Graph() {
                     Edit Node
                   </button>
                   <button
-                    className="cyber-button w-full text-sm text-cyber-red flex items-center justify-center gap-2"
+                    className="cyber-button w-full text-sm text-40k-red-bright flex items-center justify-center gap-2"
                     onClick={() => {
                       if (confirm(`Are you sure you want to delete "${selectedNode.label}"?`)) {
                         deleteMutation.mutate({
@@ -1097,12 +1098,12 @@ export default function Graph() {
               initial={{ scale: 0.9 }}
               animate={{ scale: 1 }}
               exit={{ scale: 0.9 }}
-              className="bg-cyber-card border border-cyber-border rounded-lg p-6 w-full max-w-md"
+              className="bg-40k-card border border-40k-border rounded-lg p-6 w-full max-w-md"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-display font-semibold text-white flex items-center gap-2">
-                  <Pencil className="w-5 h-5 text-cyber-cyan" />
+                  <Pencil className="w-5 h-5 text-40k-gold" />
                   Edit Node
                 </h3>
                 <button onClick={() => setShowEditModal(false)} className="text-gray-400 hover:text-white">
@@ -1158,6 +1159,6 @@ export default function Graph() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   )
 }

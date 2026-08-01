@@ -135,6 +135,25 @@ def init_db():
         )
     """)
     
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ab_tests (
+            id TEXT PRIMARY KEY,
+            test_name TEXT NOT NULL,
+            test_type TEXT NOT NULL,  -- script_variant, voice, content_type, etc.
+            variant_a TEXT NOT NULL,  -- JSON config for variant A
+            variant_b TEXT NOT NULL,  -- JSON config for variant B
+            status TEXT DEFAULT 'running',  -- running, completed, cancelled
+            winner TEXT,  -- 'a', 'b', or 'tie'
+            confidence_score REAL,
+            samples_a INTEGER DEFAULT 0,
+            samples_b INTEGER DEFAULT 0,
+            avg_performance_a REAL DEFAULT 0,
+            avg_performance_b REAL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        )
+    """)
+    
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_scripts_video ON scripts(video_name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_youtube ON videos(youtube_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_video ON metrics(video_id)")
@@ -465,19 +484,23 @@ def store_learning(
     
     updated_at = datetime.now(timezone.utc).isoformat()
     
-    cursor.execute("SELECT id, sample_count FROM learnings WHERE feature_name = ? AND feature_value = ?", (feature_name, feature_value))
+    cursor.execute("SELECT id, sample_count, impact_score FROM learnings WHERE feature_name = ? AND feature_value = ?", (feature_name, feature_value))
     existing = cursor.fetchone()
     
     if existing:
         new_sample_count = existing['sample_count'] + sample_count
+        old_impact = existing['impact_score'] or 0.0
+        new_impact = (old_impact * existing['sample_count'] + impact_score * sample_count) / new_sample_count if new_sample_count > 0 else impact_score
         new_confidence = min(0.3 + new_sample_count * 0.1, 1.0)
         cursor.execute("""
             UPDATE learnings 
             SET sample_count = ?,
                 confidence = ?,
+                impact_score = ?,
+                metric_type = ?,
                 updated_at = ?
             WHERE feature_name = ? AND feature_value = ?
-        """, (new_sample_count, new_confidence, updated_at, feature_name, feature_value))
+        """, (new_sample_count, new_confidence, new_impact, metric_type, updated_at, feature_name, feature_value))
     else:
         learning_id = str(uuid.uuid4())
         cursor.execute("""
@@ -731,14 +754,12 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
                     performance_score = calculate_performance_score(video.get('views', 0), engagement_ratio)
 
                     if best_match.get('content_type'):
-                        store_learning(feature_name='content_type', feature_value=best_match['content_type'],
-                                       metric_type='combined', impact_score=performance_score / 100,
-                                       sample_count=1, confidence=0.3)
+                        update_learning_with_variance(feature_name='content_type', feature_value=best_match['content_type'],
+                                       metric_type='combined', performance_score=performance_score)
 
                     if features.get('word_count'):
-                        store_learning(feature_name='word_count', feature_value=str(features['word_count']),
-                                       metric_type='combined', impact_score=performance_score / 100,
-                                       sample_count=1, confidence=0.3)
+                        update_learning_with_variance(feature_name='word_count', feature_value=str(features['word_count']),
+                                       metric_type='combined', performance_score=performance_score)
 
                     clip_cursor = conn.cursor()
                     clip_cursor.execute("""
@@ -863,8 +884,8 @@ def update_tts_learning(
     cursor.execute("""
         SELECT id, sample_count, avg_views, avg_engagement, avg_performance_score
         FROM tts_learning
-        WHERE voice = ? AND style = ?
-    """, (voice, style))
+        WHERE voice = ? AND style = ? AND (content_type = ? OR (content_type IS NULL AND ? IS NULL))
+    """, (voice, style, content_type, content_type))
     existing = cursor.fetchone()
 
     if existing:
@@ -882,8 +903,8 @@ def update_tts_learning(
             UPDATE tts_learning
             SET avg_views = ?, avg_engagement = ?, avg_performance_score = ?,
                 sample_count = ?, updated_at = ?
-            WHERE voice = ? AND style = ?
-        """, (new_views, new_eng, new_score, new_count, updated_at, voice, style))
+            WHERE voice = ? AND style = ? AND (content_type = ? OR (content_type IS NULL AND ? IS NULL))
+        """, (new_views, new_eng, new_score, new_count, updated_at, voice, style, content_type, content_type))
     else:
         learning_id = str(uuid.uuid4())
         cursor.execute("""
@@ -1147,6 +1168,295 @@ def select_content_type_70_30() -> str:
         return None
     
     return result.get('selected')
+
+
+def calculate_relative_performance(video_id: str) -> Dict[str, Any]:
+    """Calculate how a video performed relative to channel baseline.
+    
+    Returns dict with:
+    - relative_views: video views / avg views (1.0 = average, 2.0 = 2x average)
+    - relative_engagement: video engagement / avg engagement
+    - relative_score: video score / avg score
+    - is_outperforming: True if relative_score > 1.2
+    - is_underperforming: True if relative_score < 0.8
+    """
+    baseline = get_channel_baseline()
+    if baseline['sample_count'] == 0:
+        return {'relative_views': 1.0, 'relative_engagement': 1.0, 'relative_score': 1.0, 
+                'is_outperforming': False, 'is_underperforming': False}
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT m.views, m.engagement_ratio, m.performance_score
+        FROM metrics m
+        WHERE m.video_id = ?
+        ORDER BY m.fetched_at DESC
+        LIMIT 1
+    """, (video_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or not row['views']:
+        return {'relative_views': 1.0, 'relative_engagement': 1.0, 'relative_score': 1.0,
+                'is_outperforming': False, 'is_underperforming': False}
+    
+    relative_views = row['views'] / max(baseline['avg_views'], 1)
+    relative_engagement = (row['engagement_ratio'] or 0) / max(baseline['avg_engagement'], 0.001)
+    relative_score = (row['performance_score'] or 50) / max(baseline['avg_score'], 1)
+    
+    return {
+        'relative_views': round(relative_views, 2),
+        'relative_engagement': round(relative_engagement, 2),
+        'relative_score': round(relative_score, 2),
+        'is_outperforming': relative_score > 1.2,
+        'is_underperforming': relative_score < 0.8,
+    }
+
+
+def get_content_type_effectiveness() -> Dict[str, Dict[str, Any]]:
+    """Get effectiveness metrics for each content type.
+    
+    Returns dict of {content_type: {avg_relative_score, sample_count, trend}}
+    """
+    baseline = get_channel_baseline()
+    if baseline['sample_count'] == 0:
+        return {}
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT s.content_type, 
+               AVG(m.performance_score) as avg_score,
+               AVG(m.views) as avg_views,
+               COUNT(*) as sample_count
+        FROM scripts s
+        JOIN videos v ON v.script_id = s.id
+        JOIN metrics m ON m.video_id = v.id
+        WHERE s.content_type IS NOT NULL AND m.views > 0
+        GROUP BY s.content_type
+        HAVING sample_count >= 1
+    """)
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    effectiveness = {}
+    for row in rows:
+        ct = row['content_type']
+        avg_score = row['avg_score'] or 50
+        avg_views = row['avg_views'] or 0
+        samples = row['sample_count']
+        
+        relative_score = avg_score / max(baseline['avg_score'], 1)
+        relative_views = avg_views / max(baseline['avg_views'], 1)
+        
+        effectiveness[ct] = {
+            'avg_relative_score': round(relative_score, 2),
+            'avg_relative_views': round(relative_views, 2),
+            'sample_count': samples,
+            'is_top_performer': relative_score > 1.2,
+        }
+    
+    return effectiveness
+
+
+def get_learning_insights() -> Dict[str, Any]:
+    """Get actionable learning insights for prompt injection.
+    
+    Returns insights that can be directly injected into prompts.
+    """
+    baseline = get_channel_baseline()
+    if baseline['sample_count'] < 2:
+        return {'has_insights': False, 'message': 'Not enough data yet (need 2+ videos)'}
+    
+    insights = []
+    
+    # Content type insights
+    ct_effectiveness = get_content_type_effectiveness()
+    if ct_effectiveness:
+        top_performers = [ct for ct, data in ct_effectiveness.items() if data['is_top_performer']]
+        if top_performers:
+            insights.append(f"Top-performing content types: {', '.join(top_performers)}")
+        
+        # Find worst performer
+        worst = min(ct_effectiveness.items(), key=lambda x: x[1]['avg_relative_score'])
+        if worst[1]['avg_relative_score'] < 0.8:
+            insights.append(f"Consider avoiding: {worst[0]} (underperforming by {1 - worst[1]['avg_relative_score']:.0%})")
+    
+    # Get successful scripts for pattern analysis
+    successful = get_successful_scripts(10)
+    if successful:
+        # Analyze word count patterns
+        wc_scores = [(s.get('word_count', 0), s.get('performance_score', 50)) for s in successful if s.get('word_count')]
+        if wc_scores:
+            avg_wc = sum(wc for wc, _ in wc_scores) / len(wc_scores)
+            best_wc = max(wc_scores, key=lambda x: x[1])[0]
+            insights.append(f"Optimal word count: ~{best_wc} words (channel avg: {int(avg_wc)})")
+        
+        # Analyze hook patterns
+        scripts_with_hooks = [s for s in successful if s.get('hook_score', 0) > 0.5]
+        if len(scripts_with_hooks) > len(successful) * 0.5:
+            insights.append("Strong hooks correlate with better performance")
+    
+    return {
+        'has_insights': len(insights) > 0,
+        'insights': insights,
+        'baseline': baseline,
+        'content_types': ct_effectiveness,
+    }
+
+
+# ============================================================================
+# A/B TEST FRAMEWORK
+# ============================================================================
+
+def create_ab_test(test_name: str, test_type: str, variant_a: Dict, variant_b: Dict) -> str:
+    """Create a new A/B test."""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    test_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    
+    cursor.execute("""
+        INSERT INTO ab_tests (id, test_name, test_type, variant_a, variant_b, status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'running', ?)
+    """, (test_id, test_name, test_type, json.dumps(variant_a), json.dumps(variant_b), created_at))
+    
+    conn.commit()
+    conn.close()
+    return test_id
+
+
+def record_ab_test_result(test_id: str, variant: str, performance_score: float) -> None:
+    """Record a result for an A/B test variant ('a' or 'b')."""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    test = cursor.execute("SELECT * FROM ab_tests WHERE id = ?", (test_id,)).fetchone()
+    if not test:
+        conn.close()
+        return
+    
+    if variant == 'a':
+        cursor.execute("""
+            UPDATE ab_tests 
+            SET samples_a = samples_a + 1,
+                avg_performance_a = (avg_performance_a * samples_a + ?) / (samples_a + 1)
+            WHERE id = ?
+        """, (performance_score, test_id))
+    elif variant == 'b':
+        cursor.execute("""
+            UPDATE ab_tests 
+            SET samples_b = samples_b + 1,
+                avg_performance_b = (avg_performance_b * samples_b + ?) / (samples_b + 1)
+            WHERE id = ?
+        """, (performance_score, test_id))
+    
+    conn.commit()
+    conn.close()
+
+
+def get_ab_test_results(test_id: str) -> Optional[Dict]:
+    """Get A/B test results with statistical significance."""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    test = cursor.execute("SELECT * FROM ab_tests WHERE id = ?", (test_id,)).fetchone()
+    if not test:
+        conn.close()
+        return None
+    
+    result = {
+        'id': test['id'],
+        'test_name': test['test_name'],
+        'test_type': test['test_type'],
+        'variant_a': json.loads(test['variant_a']),
+        'variant_b': json.loads(test['variant_b']),
+        'status': test['status'],
+        'winner': test['winner'],
+        'samples_a': test['samples_a'],
+        'samples_b': test['samples_b'],
+        'avg_performance_a': test['avg_performance_a'],
+        'avg_performance_b': test['avg_performance_b'],
+        'created_at': test['created_at'],
+        'completed_at': test['completed_at'],
+    }
+    
+    # Calculate confidence if we have enough samples
+    if test['samples_a'] >= 5 and test['samples_b'] >= 5:
+        # Simple confidence based on performance difference
+        diff = abs(test['avg_performance_a'] - test['avg_performance_b'])
+        min_samples = min(test['samples_a'], test['samples_b'])
+        confidence = min(0.95, (diff / 50) * (min_samples / 10))  # Simplified
+        result['confidence_score'] = confidence
+        
+        # Determine winner if confidence is high enough
+        if confidence > 0.8 and test['status'] == 'running':
+            winner = 'a' if test['avg_performance_a'] > test['avg_performance_b'] else 'b'
+            cursor.execute("""
+                UPDATE ab_tests SET winner = ?, confidence_score = ?, status = 'completed', completed_at = ?
+                WHERE id = ?
+            """, (winner, confidence, datetime.now(timezone.utc).isoformat(), test_id))
+            result['winner'] = winner
+            result['status'] = 'completed'
+    
+    conn.commit()
+    conn.close()
+    return result
+
+
+def get_active_ab_tests() -> List[Dict]:
+    """Get all active A/B tests."""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    tests = cursor.execute("SELECT * FROM ab_tests WHERE status = 'running' ORDER BY created_at DESC").fetchall()
+    
+    results = []
+    for test in tests:
+        results.append({
+            'id': test['id'],
+            'test_name': test['test_name'],
+            'test_type': test['test_type'],
+            'samples_a': test['samples_a'],
+            'samples_b': test['samples_b'],
+            'avg_performance_a': test['avg_performance_a'],
+            'avg_performance_b': test['avg_performance_b'],
+            'created_at': test['created_at'],
+        })
+    
+    conn.close()
+    return results
+
+
+def get_ab_test_history() -> List[Dict]:
+    """Get completed A/B test history."""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    tests = cursor.execute("SELECT * FROM ab_tests WHERE status = 'completed' ORDER BY completed_at DESC").fetchall()
+    
+    results = []
+    for test in tests:
+        results.append({
+            'id': test['id'],
+            'test_name': test['test_name'],
+            'test_type': test['test_type'],
+            'winner': test['winner'],
+            'confidence_score': test['confidence_score'],
+            'samples_a': test['samples_a'],
+            'samples_b': test['samples_b'],
+            'avg_performance_a': test['avg_performance_a'],
+            'avg_performance_b': test['avg_performance_b'],
+            'completed_at': test['completed_at'],
+        })
+    
+    conn.close()
+    return results
 
 
 init_db()

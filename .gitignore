@@ -9,8 +9,8 @@ gemini_keys.txt
 workflows/.env
 workflows/gemini_keys.txt
 client_secret.json
-.shortsforge/youtube_oauth.json
-.shortsforge/web_settings.json
+.cogitator/youtube_oauth.json
+.cogitator/web_settings.json
 
 # Python
 __pycache__/
@@ -35,6 +35,7 @@ shorts/
 tts/
 transcripts/
 media/
+assembly/
 
 # Content Studio
 content_studio/
@@ -58,7 +59,6 @@ generation_metrics.jsonl
 .git/cursor/
 
 # Application data
-.shortsforge/
 .cogitator/
 *.db
 *.db-journal
@@ -68,6 +68,9 @@ generation_metrics.jsonl
 # OS files
 .DS_Store
 Thumbs.db
+
+# Obsidian
+.obsidian/
 
 # Node.js
 node_modules/

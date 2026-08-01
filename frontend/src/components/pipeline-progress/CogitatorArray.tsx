@@ -1,25 +1,18 @@
-import { motion, useMotionValue, useTransform, animate } from 'framer-motion'
-import { useEffect } from 'react'
+import { motion } from 'framer-motion'
 import { PHASES, PHASE_LABELS, type PipelineStatus, getPhaseIndex } from './types'
 
 interface Props {
   status: PipelineStatus
 }
 
-const GEAR_COUNT = 6
-
 function GearSvg({
-  index,
   phase,
   isActive,
   isComplete,
-  progress,
 }: {
-  index: number
   phase: string
   isActive: boolean
   isComplete: boolean
-  progress: number
 }) {
   const cx = 50
   const cy = 50
@@ -130,11 +123,9 @@ export default function CogitatorArray({ status }: Props) {
         {PHASES.map((phase, i) => (
           <GearSvg
             key={phase}
-            index={i}
             phase={phase}
             isActive={i === currentIdx}
             isComplete={i < currentIdx}
-            progress={status.progress}
           />
         ))}
       </div>

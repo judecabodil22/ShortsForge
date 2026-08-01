@@ -1,10 +1,12 @@
 # Content Studio - Plan Document
 
+> **DEPRECATED**: This document describes a feature that has been consolidated into `cogitator.py` as the `_cs_*` functions. The `content_studio/` directory no longer exists. Content Studio functionality is now accessed via the web interface or CLI.
+
 ## Feature Overview
 
 **Feature Name:** Content Studio  
 **Type:** Standalone content generation tool (not part of main pipeline)  
-**Access:** Via Telegram commands  
+**Access:** Via web interface or CLI  
 **Purpose:** Generate additional content (analysis, opinions, theories, speculation) from existing transcripts and clips
 
 ---
@@ -189,8 +191,8 @@ Generate a 1500-word script that:
 
 | Aspect | Content Studio | Main Pipeline |
 |--------|---------------|---------------|
-| Location | `content_studio/` folder | `workflows/cogitator.py` |
-| Commands | `/content_studio`, `/theory`, etc. | `/run_pipeline`, `/run_phase` |
+| Location | Integrated in `cogitator.py` | `workflows/cogitator.py` |
+| Commands | Web UI / CLI | Web UI / CLI |
 | Triggers | Manual command | YouTube/Local trigger |
 | Output | New content | Video production |
 
@@ -254,24 +256,24 @@ On completion:
 
 | Component | Status |
 |-----------|--------|
-| Auto-detect subject | To be implemented |
-| Auto-detect content type | To be implemented |
-| 10-minute target | To be implemented |
-| Voice/style matching | To be implemented |
-| Separate from pipeline | Confirmed |
-| Telegram commands | To be implemented |
+| Auto-detect subject | Implemented in `cogitator.py` |
+| Auto-detect content type | Implemented in `cogitator.py` |
+| 10-minute target | Implemented in `cogitator.py` |
+| Voice/style matching | Implemented in `cogitator.py` |
+| Separate from pipeline | Consolidated into main pipeline |
+| Telegram commands | Deprecated, use web interface |
 
 ---
 
 ## Questions for Review
 
-1. Is this plan comprehensive enough?
-2. Are the content types appropriate?
-3. Should I proceed with implementation?
-4. Any modifications needed before implementation?
+1. ~~Is this plan comprehensive enough?~~
+2. ~~Are the content types appropriate?~~
+3. ~~Should I proceed with implementation?~~
+4. ~~Any modifications needed before implementation?~~
 
 ---
 
 **Document Version:** 1.0  
 **Created:** 2026-04-02  
-**Status:** Pending Review
+**Status:** DEPRECATED (consolidated into cogitator.py)

@@ -236,7 +236,8 @@ PHASE_RANGES = {
     3: (25, 40),
     4: (40, 60),
     5: (60, 80),
-    6: (80, 95),
+    6: (80, 90),
+    7: (90, 100),
 }
 PHASE_LABELS = {
     1: "Download",
@@ -245,6 +246,7 @@ PHASE_LABELS = {
     4: "Scripts",
     5: "Clips",
     6: "TTS",
+    7: "Assemble",
 }
 
 async def broadcast_status():
@@ -915,6 +917,99 @@ async def get_graph_data(game: str):
     return graph
 
 
+@app.get("/api/context/{game}/graph/search")
+async def search_graph(game: str, q: str = "", type: str = ""):
+    """Search for entities in the graph by name or type."""
+    from workflows.graph_builder import build_single_game_graph, get_graph_cache_key, get_cached_graph, set_cached_graph
+    game_title = sanitize_input(game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
+    
+    cache_key = get_graph_cache_key()
+    cached = get_cached_graph(f"single:{game_key}:{cache_key}")
+    if not cached:
+        cm = get_context_manager()
+        cm.load_all_contexts()
+        cached = build_single_game_graph(game_key, cm)
+        cached["stats"].pop("game_key", None)
+        set_cached_graph(f"single:{game_key}:{cache_key}", cached)
+    
+    query = q.strip().lower()
+    filter_type = type.strip().lower()
+    
+    results = []
+    for node in cached.get("nodes", []):
+        # Filter by type if specified
+        if filter_type and node.get("type", "").lower() != filter_type:
+            continue
+        
+        # Search by name (case-insensitive substring match)
+        if query and query not in node.get("label", "").lower():
+            continue
+        
+        results.append({
+            "id": node.get("id"),
+            "label": node.get("label"),
+            "type": node.get("type"),
+            "game": node.get("game"),
+        })
+    
+    return {"results": results, "total": len(results)}
+
+
+@app.get("/api/context/{game}/graph/stats")
+async def get_graph_statistics(game: str):
+    """Get detailed graph statistics including centrality and clustering."""
+    from workflows.graph_builder import build_single_game_graph, get_graph_cache_key, get_cached_graph, set_cached_graph
+    game_title = sanitize_input(game, max_length=100)
+    game_key = game_title.lower().replace(" ", "_").strip()
+    
+    cache_key = get_graph_cache_key()
+    cached = get_cached_graph(f"single:{game_key}:{cache_key}")
+    if not cached:
+        cm = get_context_manager()
+        cm.load_all_contexts()
+        cached = build_single_game_graph(game_key, cm)
+        cached["stats"].pop("game_key", None)
+        set_cached_graph(f"single:{game_key}:{cache_key}", cached)
+    
+    nodes = cached.get("nodes", [])
+    edges = cached.get("edges", [])
+    
+    # Count by type
+    type_counts = {}
+    for node in nodes:
+        ntype = node.get("type", "unknown")
+        type_counts[ntype] = type_counts.get(ntype, 0) + 1
+    
+    # Count by edge type
+    edge_type_counts = {}
+    for edge in edges:
+        etype = edge.get("type", "unknown")
+        edge_type_counts[etype] = edge_type_counts.get(etype, 0) + 1
+    
+    # Calculate degree centrality (top 10 most connected)
+    degree_map = {}
+    for edge in edges:
+        source = edge.get("source", "")
+        target = edge.get("target", "")
+        if source:
+            degree_map[source] = degree_map.get(source, 0) + 1
+        if target:
+            degree_map[target] = degree_map.get(target, 0) + 1
+    
+    # Sort by degree and get top 10
+    top_central = sorted(degree_map.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    return {
+        "total_nodes": len(nodes),
+        "total_edges": len(edges),
+        "node_types": type_counts,
+        "edge_types": edge_type_counts,
+        "top_central_nodes": [{"id": n, "degree": d} for n, d in top_central],
+        "isolated_nodes": [n.get("id") for n in nodes if n.get("id") not in degree_map],
+    }
+
+
 @app.get("/api/context/{game}/segments")
 async def get_segment_references(game: str):
     """Get segment references for context nodes"""
@@ -1044,6 +1139,64 @@ async def get_tts_learnings():
     learnings = get_tts_learning_data()
     return {"learnings": learnings}
 
+
+@app.get("/api/learning/dashboard")
+async def get_learning_dashboard():
+    """Get learning dashboard data with insights and A/B test status."""
+    from workflows.performance_database import (
+        get_learning_insights, get_active_ab_tests, get_ab_test_history,
+        get_content_type_effectiveness, calculate_relative_performance,
+    )
+    
+    insights = get_learning_insights()
+    active_tests = get_active_ab_tests()
+    test_history = get_ab_test_history()
+    content_effectiveness = get_content_type_effectiveness()
+    
+    return {
+        "insights": insights,
+        "active_tests": active_tests,
+        "test_history": test_history,
+        "content_effectiveness": content_effectiveness,
+    }
+
+
+@app.post("/api/learning/ab-test")
+async def create_ab_test_endpoint(test_name: str, test_type: str, variant_a: dict, variant_b: dict):
+    """Create a new A/B test."""
+    from workflows.performance_database import create_ab_test
+    test_id = create_ab_test(test_name, test_type, variant_a, variant_b)
+    return {"test_id": test_id, "status": "created"}
+
+
+@app.post("/api/learning/ab-test/{test_id}/result")
+async def record_ab_test_result_endpoint(test_id: str, variant: str, performance_score: float):
+    """Record an A/B test result."""
+    from workflows.performance_database import record_ab_test_result
+    record_ab_test_result(test_id, variant, performance_score)
+    return {"status": "recorded"}
+
+
+@app.get("/api/learning/ab-test/{test_id}")
+async def get_ab_test_result_endpoint(test_id: str):
+    """Get A/B test results."""
+    from workflows.performance_database import get_ab_test_results
+    result = get_ab_test_results(test_id)
+    if result is None:
+        return {"error": "Test not found"}, 404
+    return result
+
+
+@app.get("/api/learning/ab-tests")
+async def get_ab_tests_list():
+    """Get all active and completed A/B tests."""
+    from workflows.performance_database import get_active_ab_tests, get_ab_test_history
+    return {
+        "active": get_active_ab_tests(),
+        "history": get_ab_test_history(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # System / Desktop Port Endpoints
 # ---------------------------------------------------------------------------
@@ -1052,7 +1205,7 @@ from pydantic import BaseModel
 @app.get("/api/config")
 async def get_config():
     env_file = os.path.join(WORKSPACE, ".env")
-    config = {"GAME_TITLE": "", "TTS_VOICE": "", "CLIPS_PER_HOUR": "", "PARENT_FRANCHISE": ""}
+    config = {"GAME_TITLE": "", "TTS_VOICE": "", "CLIPS_PER_HOUR": "4", "PARENT_FRANCHISE": "", "SRT_MAX_WORDS": "5", "SRT_FONT_SIZE": "22", "SRT_FONT_COLOR": "", "SRT_MARGIN_V": "60", "SRT_FONT_NAME": "Open Sans", "SRT_FONT_OUTLINE": "2", "SRT_FONT_SHADOW": "1", "SRT_OUTLINE_COLOR": "", "SRT_SUB_GAP": "0.5", "SRT_MIN_DURATION": "1.0", "SRT_MAX_DURATION": "6.0", "SRT_BORDER_STYLE": "outline", "SRT_ALIGNMENT": "center", "CLIP_ORDER": "sequential", "VARIETY_SEED": "42", "TTS_EMOTION": "default", "TTS_SPEED": "1.0"}
     if os.path.exists(env_file):
         with open(env_file, "r") as f:
             for line in f:
@@ -1067,6 +1220,23 @@ class ConfigUpdate(BaseModel):
     TTS_VOICE: Optional[str] = None
     CLIPS_PER_HOUR: Optional[str] = None
     PARENT_FRANCHISE: Optional[str] = None
+    SRT_MAX_WORDS: Optional[str] = None
+    SRT_FONT_SIZE: Optional[str] = None
+    SRT_FONT_COLOR: Optional[str] = None
+    SRT_MARGIN_V: Optional[str] = None
+    SRT_FONT_NAME: Optional[str] = None
+    SRT_FONT_OUTLINE: Optional[str] = None
+    SRT_FONT_SHADOW: Optional[str] = None
+    SRT_OUTLINE_COLOR: Optional[str] = None
+    SRT_SUB_GAP: Optional[str] = None
+    SRT_MIN_DURATION: Optional[str] = None
+    SRT_MAX_DURATION: Optional[str] = None
+    SRT_BORDER_STYLE: Optional[str] = None
+    SRT_ALIGNMENT: Optional[str] = None
+    CLIP_ORDER: Optional[str] = None
+    VARIETY_SEED: Optional[str] = None
+    TTS_EMOTION: Optional[str] = None
+    TTS_SPEED: Optional[str] = None
 
 @app.post("/api/config")
 @limiter.limit("5/minute")
@@ -1079,7 +1249,91 @@ async def update_config(request: Request, updates: ConfigUpdate, _: bool = Depen
             lines = f.readlines()
     
     update_dict = updates.model_dump(exclude_none=True)
+    
+    # Validate config values
+    errors = []
     for k, v in update_dict.items():
+        if k == 'CLIPS_PER_HOUR':
+            try:
+                val = int(v)
+                if val < 1 or val > 20:
+                    errors.append(f"{k} must be between 1 and 20")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'SRT_MAX_WORDS':
+            try:
+                val = int(v)
+                if val < 3 or val > 20:
+                    errors.append(f"{k} must be between 3 and 20")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'SRT_FONT_SIZE':
+            try:
+                val = int(v)
+                if val < 12 or val > 48:
+                    errors.append(f"{k} must be between 12 and 48")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'SRT_MARGIN_V':
+            try:
+                val = int(v)
+                if val < 0 or val > 200:
+                    errors.append(f"{k} must be between 0 and 200")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'SRT_MIN_DURATION':
+            try:
+                val = float(v)
+                if val < 1.0 or val > 10.0:
+                    errors.append(f"{k} must be between 1.0 and 10.0")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'SRT_MAX_DURATION':
+            try:
+                val = float(v)
+                if val < 1.0 or val > 60.0:
+                    errors.append(f"{k} must be between 1.0 and 60.0")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'SRT_SUB_GAP':
+            try:
+                val = float(v)
+                if val < 0.0 or val > 5.0:
+                    errors.append(f"{k} must be between 0.0 and 5.0")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'TTS_VOICE':
+            from workflows.constants import TTS_VOICES
+            if v not in TTS_VOICES:
+                errors.append(f"{k} must be one of: {', '.join(TTS_VOICES)}")
+        elif k == 'SRT_BORDER_STYLE':
+            if v not in ('outline', 'glow', 'box'):
+                errors.append(f"{k} must be one of: outline, glow, box")
+        elif k == 'SRT_ALIGNMENT':
+            if v not in ('center', 'bottom-left', 'bottom-right', 'top-left', 'top-right'):
+                errors.append(f"{k} must be one of: center, bottom-left, bottom-right, top-left, top-right")
+        elif k == 'CLIP_ORDER':
+            if v not in ('sequential', 'shuffle'):
+                errors.append(f"{k} must be one of: sequential, shuffle")
+        elif k == 'TTS_EMOTION':
+            valid_emotions = ['default', 'happy', 'sad', 'excited', 'calm', 'angry', 'fearful', 'whisper']
+            if v not in valid_emotions:
+                errors.append(f"{k} must be one of: {', '.join(valid_emotions)}")
+        elif k == 'TTS_SPEED':
+            try:
+                val = float(v)
+                if val < 0.5 or val > 2.0:
+                    errors.append(f"{k} must be between 0.5 and 2.0")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+    
+    if errors:
+        return {"status": "error", "errors": errors}
+    
+    for k, v in update_dict.items():
+        if k in ('SRT_FONT_COLOR', 'SRT_OUTLINE_COLOR') and isinstance(v, str):
+            v = v.lstrip('#')
+            update_dict[k] = v
         found = False
         for i, line in enumerate(lines):
             if line.startswith(f"{k}="):
@@ -1179,14 +1433,6 @@ async def cleanup_files(request: Request, _: bool = Depends(verify_api_key)):
                 try: os.remove(f)
                 except OSError: pass
     return {"status": "cleaned"}
-
-@app.post("/api/system/restart-listener")
-@limiter.limit("2/minute")
-async def restart_listener(request: Request, _: bool = Depends(verify_api_key)):
-    """Restart Telegram listener - requires API key"""
-    subprocess.run([sys.executable, "workflows/cogitator.py", "stop"], cwd=WORKSPACE, capture_output=True)
-    subprocess.Popen([sys.executable, "workflows/cogitator.py", "listen"], cwd=WORKSPACE, stdin=subprocess.DEVNULL)
-    return {"status": "restarted"}
 
 class ImportRequest(BaseModel):
     game: str

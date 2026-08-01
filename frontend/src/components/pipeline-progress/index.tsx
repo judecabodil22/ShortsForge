@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Cog, Building2, Timeline, Grid3x3, Shuffle } from 'lucide-react'
-import { type PipelineStatus, type FullStatus } from './types'
+import { Cog, Building2, Clock, Grid3x3, Shuffle } from 'lucide-react'
+import { type FullStatus } from './types'
 import CogitatorArray from './CogitatorArray'
 import Construction from './Construction'
 import PhaseTimeline from './PhaseTimeline'
@@ -10,7 +10,7 @@ import DataCanvas from './DataCanvas'
 const VIZ_MODULES = [
   { key: 'cogitator-array', label: 'Cogitator Array', icon: Cog, component: CogitatorArray },
   { key: 'construction', label: 'Construction', icon: Building2, component: Construction },
-  { key: 'phase-timeline', label: 'Phase Timeline', icon: Timeline, component: PhaseTimeline },
+  { key: 'phase-timeline', label: 'Phase Timeline', icon: Clock, component: PhaseTimeline },
   { key: 'data-canvas', label: 'Data Canvas', icon: Grid3x3, component: DataCanvas },
 ] as const
 
@@ -55,7 +55,21 @@ export default function PipelineProgress({ status }: Props) {
     setCurrentViz(chosen)
   }, [])
 
-  if (!status) return null
+  if (!status) {
+    return (
+      <div className="p-4 bg-40k-dark rounded-lg">
+        <div className="animate-pulse space-y-3">
+          <div className="h-3 bg-40k-border/30 rounded w-24" />
+          <div className="flex items-center justify-center gap-2 py-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="w-10 h-10 bg-40k-border/20 rounded-full" />
+            ))}
+          </div>
+          <div className="h-1.5 bg-40k-border/20 rounded-full" />
+        </div>
+      </div>
+    )
+  }
 
   const pipeline = status.pipeline
   const isRunning = pipeline.running
@@ -97,7 +111,7 @@ export default function PipelineProgress({ status }: Props) {
 
       <button
         onClick={handleReroll}
-        className="absolute top-2 right-2 p-1 rounded text-gray-600 hover:text-40k-gold hover:bg-40k-gold/10 transition-colors"
+        className="absolute top-2 right-2 z-20 p-1 rounded text-gray-600 hover:text-40k-gold hover:bg-40k-gold/20 bg-40k-dark/80 backdrop-blur-sm transition-colors"
         title="Switch visualization"
       >
         <Shuffle className="w-3.5 h-3.5" />

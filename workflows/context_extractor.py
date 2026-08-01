@@ -208,6 +208,17 @@ Transcripts:
                     log(f"   Transcript analysis HTTP {e.code} with key ...{key[-6:]}: {e}")
                     break
             except Exception as e:
+                error_str = str(e).lower()
+                is_network_error = any(x in error_str for x in [
+                    'name resolution', 'connection refused', 'connection reset',
+                    'connection aborted', 'temporary failure', 'timeout',
+                    'network is unreachable', 'no route to host'
+                ])
+                if is_network_error and attempt < 2:
+                    wait = (2 ** attempt) * 5
+                    log(f"   Network error, retrying in {wait}s... ({attempt+1}/3)")
+                    time.sleep(wait)
+                    continue
                 log(f"   Transcript analysis error with key ...{key[-6:]}: {e}")
                 time.sleep(5)
                 break
@@ -406,23 +417,56 @@ def _cs_save_context(ctx):
     else:
         existing_rels = []
     
-    # Merge relationships with fuzzy dedup
+    # Merge relationships with fuzzy dedup and cross-entity resolution
     merged_rels = list(existing_rels)
+    all_characters = [c.lower() for c in ctx.get("characters", [])]
+    
+    def normalize_entity(name):
+        """Normalize entity name for comparison."""
+        name_lower = name.lower().strip()
+        # Check if this is a partial name that matches a full character name
+        for char in all_characters:
+            if name_lower in char or char in name_lower:
+                return char
+        return name_lower
+    
     for rel in ctx.get("relationships", []):
         if isinstance(rel, dict):
-            rel_text = f"{rel.get('from', '')}-{rel.get('to', '')}-{rel.get('relationship', '')}"
+            from_entity = normalize_entity(rel.get('from', ''))
+            to_entity = normalize_entity(rel.get('to', ''))
+            rel_type = rel.get('relationship', '').lower().strip()
+            rel_text = f"{from_entity}-{to_entity}-{rel_type}"
         else:
-            rel_text = str(rel)
+            rel_text = str(rel).lower().strip()
+        
         is_dup = False
         for existing_rel in merged_rels:
             if isinstance(existing_rel, dict):
-                existing_text = f"{existing_rel.get('from', '')}-{existing_rel.get('to', '')}-{existing_rel.get('relationship', '')}"
+                existing_from = normalize_entity(existing_rel.get('from', ''))
+                existing_to = normalize_entity(existing_rel.get('to', ''))
+                existing_type = existing_rel.get('relationship', '').lower().strip()
+                existing_text = f"{existing_from}-{existing_to}-{existing_type}"
             else:
-                existing_text = str(existing_rel)
-            ratio = _fuzz.token_sort_ratio(rel_text.lower(), existing_text.lower()) if _fuzz else 0
-            if rel_text.lower() == existing_text.lower() or ratio >= 75:
+                existing_text = str(existing_rel).lower().strip()
+            
+            # Exact match after normalization
+            if rel_text == existing_text:
                 is_dup = True
                 break
+            
+            # Fuzzy match
+            ratio = _fuzz.token_sort_ratio(rel_text, existing_text) if _fuzz else 0
+            if ratio >= 80:
+                is_dup = True
+                break
+            
+            # Check reverse relationship (A->B same as B->A for some types)
+            if isinstance(rel, dict) and isinstance(existing_rel, dict):
+                reverse_text = f"{to_entity}-{from_entity}-{rel_type}"
+                if reverse_text == existing_text:
+                    is_dup = True
+                    break
+        
         if not is_dup:
             merged_rels.append(rel)
     
@@ -861,6 +905,10 @@ def _detect_corrections(old_ctx, new_ctx):
     Detect corrections by comparing old context vs newly extracted context.
     Uses fuzzy matching to avoid false positives from alias variations.
     Returns a dict of corrections found.
+    
+    NOTE: This only flags items that are in old_ctx but NOT in new_ctx.
+    Items that are in new_ctx but NOT in old_ctx are additions, not corrections.
+    The caller should decide whether to treat additions as corrections.
     """
     corrections = {
         "removed_characters": [],
@@ -886,29 +934,35 @@ def _detect_corrections(old_ctx, new_ctx):
                 added.append(item)
         return removed, added
 
-    removed, added = fuzzy_set_diff(
-        old_ctx.get("characters", []),
-        new_ctx.get("characters", [])
-    )
-    corrections["removed_characters"] = removed
-    corrections["added_characters"] = added
+    # Only compare if both contexts have data
+    # If new_ctx is empty (extraction failed), don't flag anything as removed
+    if new_ctx.get("characters"):
+        removed, added = fuzzy_set_diff(
+            old_ctx.get("characters", []),
+            new_ctx.get("characters", [])
+        )
+        corrections["removed_characters"] = removed
+        corrections["added_characters"] = added
 
-    removed, added = fuzzy_set_diff(
-        old_ctx.get("locations", []),
-        new_ctx.get("locations", [])
-    )
-    corrections["removed_locations"] = removed
-    corrections["added_locations"] = added
+    if new_ctx.get("locations"):
+        removed, added = fuzzy_set_diff(
+            old_ctx.get("locations", []),
+            new_ctx.get("locations", [])
+        )
+        corrections["removed_locations"] = removed
+        corrections["added_locations"] = added
 
-    old_terms = set(old_ctx.get("key_terms", []))
-    new_terms = set(new_ctx.get("key_terms", []))
-    corrections["removed_terms"] = list(old_terms - new_terms)
-    corrections["added_terms"] = list(new_terms - old_terms)
+    if new_ctx.get("key_terms"):
+        old_terms = set(old_ctx.get("key_terms", []))
+        new_terms = set(new_ctx.get("key_terms", []))
+        corrections["removed_terms"] = list(old_terms - new_terms)
+        corrections["added_terms"] = list(new_terms - old_terms)
 
-    old_rels_list = old_ctx.get("relationships", [])
-    new_rels_list = new_ctx.get("relationships", [])
-    corrections["removed_relationships"] = [r for r in old_rels_list if r not in new_rels_list]
-    corrections["added_relationships"] = [r for r in new_rels_list if r not in old_rels_list]
+    if new_ctx.get("relationships"):
+        old_rels_list = old_ctx.get("relationships", [])
+        new_rels_list = new_ctx.get("relationships", [])
+        corrections["removed_relationships"] = [r for r in old_rels_list if r not in new_rels_list]
+        corrections["added_relationships"] = [r for r in new_rels_list if r not in old_rels_list]
 
     return corrections
 
@@ -957,12 +1011,19 @@ def _store_corrections_as_constraints(corrections):
                 except:
                     pass
             
-            existing.extend([{"constraint": c, "timestamp": datetime.now().isoformat()} for c in constraints])
+            # Deduplicate: only add constraints that don't already exist
+            existing_constraints = {item.get("constraint") for item in existing if "constraint" in item}
+            new_constraints = []
+            for c in constraints:
+                if c not in existing_constraints:
+                    new_constraints.append({"constraint": c, "timestamp": datetime.now().isoformat()})
+                    existing_constraints.add(c)
             
-            with open(constraints_file, 'w') as f:
-                json.dump(existing, f, indent=2)
-            
-            log(f"[LEARNING] Constraints saved to {constraints_file}")
+            if new_constraints:
+                existing.extend(new_constraints)
+                with open(constraints_file, 'w') as f:
+                    json.dump(existing, f, indent=2)
+                log(f"[LEARNING] {len(new_constraints)} new constraints saved (skipped {len(constraints) - len(constraints) + len(new_constraints)} duplicates)")
             
     except Exception as e:
         log(f"[ERROR] Failed to store corrections as constraints: {e}")
@@ -1014,6 +1075,14 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     r = json.loads(resp.read())
                     text = r["candidates"][0]["content"]["parts"][0]["text"]
+                    text = text.strip()
+                    if text.startswith("```json"):
+                        text = text[7:]
+                    elif text.startswith("```"):
+                        text = text[3:]
+                    if text.endswith("```"):
+                        text = text[:-3]
+                    text = text.strip()
                     return json.loads(text)
             except urllib.error.HTTPError as e:
                 if e.code in (429, 500, 503):

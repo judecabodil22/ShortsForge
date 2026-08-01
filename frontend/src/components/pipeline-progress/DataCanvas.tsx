@@ -1,119 +1,201 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { type PipelineStatus, getPhaseIndex } from './types'
+import { type PipelineStatus, type Phase, getPhaseIndex, PHASE_LABELS } from './types'
 
 interface Props {
   status: PipelineStatus
 }
 
-const GRID_COLS = 16
-const GRID_ROWS = 10
+const COLS = 16
+const ROWS = 10
+const TOTAL = COLS * ROWS
 
-const PALETTES = [
-  ['#c9a227', '#e8c547', '#8b7312', '#7a1029', '#b71c3a', '#d45555'],
-  ['#cd7f32', '#daa06d', '#8b5a2b', '#9b1b30', '#dc2626', '#ef4444'],
-  ['#84cc16', '#a3e635', '#526a0a', '#6b1a8b', '#9333ea', '#a855f7'],
-  ['#eab308', '#facc15', '#9a7a00', '#5c7a1a', '#84cc16', '#a3e635'],
-]
+const PHASE_COLORS: Record<string, string> = {
+  download: '#84cc16',
+  transcribe: '#eab308',
+  context: '#c9a227',
+  scripts: '#cd7f32',
+  clips: '#dc2626',
+  tts: '#a855f7',
+}
 
-function seededRandom(seed: number): () => number {
-  let s = seed
-  return () => {
-    s = (s * 1664525 + 1013904223) & 0xffffffff
-    return (s >>> 0) / 0xffffffff
+function getPhaseColor(idx: number): string {
+  const keys = Object.keys(PHASE_COLORS)
+  return PHASE_COLORS[keys[idx]] ?? '#c9a227'
+}
+
+const CELL = 12
+const GAP = 2
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
   }
+  return a
 }
 
 export default function DataCanvas({ status }: Props) {
   const currentIdx = getPhaseIndex(status.current_phase)
+  const progress = status.progress / 100
 
-  const { cells, palette } = useMemo(() => {
-    const seed = Date.now()
-    const rng = seededRandom(seed)
-    const pal = PALETTES[Math.floor(rng() * PALETTES.length)]
-    const totalCells = GRID_COLS * GRID_ROWS
-    const cellsPerPhase = Math.ceil(totalCells / 6)
-
-    const cellData: Array<{ phaseIdx: number; order: number }> = []
-    for (let i = 0; i < totalCells; i++) {
-      const phaseIdx = Math.min(Math.floor(i / cellsPerPhase), 5)
-      cellData.push({ phaseIdx, order: i })
+  const cells = useMemo(() => {
+    const partition: number[] = []
+    const perPhase = Math.floor(TOTAL / 6)
+    for (let p = 0; p < 6; p++) {
+      for (let i = 0; i < perPhase; i++) {
+        partition.push(p)
+      }
     }
-
-    for (let i = cellData.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1))
-      ;[cellData[i], cellData[j]] = [cellData[j], cellData[i]]
-    }
-
-    return { cells: cellData, palette: pal }
+    while (partition.length < TOTAL) partition.push(5)
+    return partition
   }, [])
 
-  const filledCount = cells.filter((c) => c.phaseIdx < currentIdx).length
-  const fillingCellCount = currentIdx >= 0 && currentIdx < 6
-    ? cells.filter((c) => c.phaseIdx === currentIdx).length
-    : 0
-  const fillProgress = fillingCellCount > 0
-    ? (status.progress % 100) / 100
-    : 0
-  const visibleCount = filledCount + Math.floor(fillingCellCount * fillProgress)
+  const stableCells = useRef(shuffle(cells)).current
+
+  const filled = currentIdx >= 0
+    ? stableCells.map((phaseIdx) => phaseIdx < currentIdx || (phaseIdx === currentIdx))
+    : stableCells.map(() => false)
 
   return (
-    <div className="p-4 bg-40k-dark rounded-lg">
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-xs text-gray-500 uppercase tracking-wider font-medium">Data Canvas</span>
-        <span className="text-xs text-40k-gold-dim">{status.progress}%</span>
+    <div className="p-4 bg-40k-dark rounded-lg border border-40k-gold/10">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 uppercase tracking-wider font-medium">
+            Data Canvas
+          </span>
+          <span className="text-[10px] text-40k-gold-dim font-mono">
+            {COLS}&times;{ROWS}
+          </span>
+        </div>
+        <motion.div
+          key={status.current_phase ?? 'idle'}
+          initial={{ scale: 1.2, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="text-xs font-mono tabular-nums"
+          style={{
+            color: currentIdx >= 6
+              ? '#22c55e'
+              : currentIdx < 0
+                ? '#6b7280'
+                : getPhaseColor(currentIdx),
+          }}
+        >
+          {currentIdx >= 0 && currentIdx < 6
+            ? `${PHASE_LABELS[Object.keys(PHASE_COLORS)[currentIdx] as Phase]} ${Math.round(progress * 100)}%`
+            : currentIdx >= 6
+              ? 'Complete'
+              : 'Idle'}
+        </motion.div>
       </div>
 
       <div
-        className="grid gap-0.5 mx-auto mb-3"
+        className="grid mx-auto mb-3"
         style={{
-          gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`,
-          maxWidth: GRID_COLS * 16,
+          gridTemplateColumns: `repeat(${COLS}, ${CELL}px)`,
+          gap: GAP,
+          width: COLS * CELL + (COLS - 1) * GAP,
         }}
       >
-        {cells.map((cell, i) => {
-          const isFilled = i < visibleCount
-          const phaseColor = palette[Math.min(cell.phaseIdx, palette.length - 1)]
+        {stableCells.map((phaseIdx, i) => {
+          const isFilled = filled[i]
+          const baseColor = getPhaseColor(phaseIdx)
+          const isCurrent = phaseIdx === currentIdx
 
           return (
             <motion.div
               key={i}
-              initial={{ opacity: 0, scale: 0 }}
+              style={{
+                width: CELL,
+                height: CELL,
+                backgroundColor: isFilled ? baseColor : 'rgb(20, 8, 8)',
+                borderRadius: Math.max(1, CELL / 6),
+              }}
               animate={
                 isFilled
-                  ? { opacity: 1, scale: 1 }
-                  : { opacity: 0.05, scale: 0.8 }
+                  ? {
+                      opacity: isCurrent ? [0.6, 1, 0.6] : 1,
+                      scale: isCurrent ? [1, 1.08, 1] : 1,
+                      boxShadow: isCurrent
+                        ? [`0 0 0px ${baseColor}00`, `0 0 6px ${baseColor}80`, `0 0 0px ${baseColor}00`]
+                        : `0 0 2px ${baseColor}40`,
+                    }
+                  : { opacity: 0.04, scale: 0.85, boxShadow: 'none' }
               }
-              transition={{ duration: 0.3, delay: isFilled ? (i - filledCount) * 0.003 : 0 }}
-              className="aspect-square rounded-sm"
-              style={{
-                backgroundColor: isFilled ? phaseColor : 'rgb(20, 8, 8)',
-                boxShadow: isFilled ? `0 0 4px ${phaseColor}40` : 'none',
-              }}
+              transition={
+                isCurrent
+                  ? {
+                      duration: 0.8 + (i % 5) * 0.3,
+                      repeat: Infinity,
+                      ease: 'easeInOut',
+                      delay: (i % 7) * 0.1,
+                    }
+                  : { duration: 0.4, delay: isFilled ? (i % TOTAL) * 0.001 : 0 }
+              }
             />
           )
         })}
       </div>
 
-      <div className="flex items-center justify-center gap-3 text-[10px]">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="flex items-center gap-1">
+      <div className="relative h-1.5 bg-black/40 rounded-full overflow-hidden mb-3">
+        <motion.div
+          className="absolute inset-y-0 left-0 rounded-full"
+          style={{
+            background: `linear-gradient(90deg, ${getPhaseColor(0)}, ${getPhaseColor(Math.max(0, Math.min(5, currentIdx)))})`,
+          }}
+          animate={{ width: `${Math.min(100, Math.max(0, currentIdx) / 5 * 100)}%` }}
+          transition={{ duration: 0.5, ease: 'easeOut' }}
+        />
+        <motion.div
+          className="absolute inset-y-0 left-0 rounded-full"
+          style={{
+            background: currentIdx >= 0
+              ? `linear-gradient(90deg, transparent, ${getPhaseColor(currentIdx)})`
+              : 'none',
+            width: `${progress * 100}%`,
+            opacity: 0.6,
+          }}
+          animate={{
+            left: `${Math.min(100, Math.max(0, currentIdx) / 5 * 100)}%`,
+          }}
+          transition={{ duration: 0.3 }}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-1 text-[9px]">
+        {Object.entries(PHASE_COLORS).map(([key, color], i) => {
+          const phaseLabel = PHASE_LABELS[key as Phase] ?? key
+          const isActive = i === currentIdx
+          const isPast = i < currentIdx
+          return (
             <div
-              className="w-2 h-2 rounded-sm"
-              style={{ backgroundColor: palette[Math.min(i, palette.length - 1)] }}
-            />
-            <span className={i <= currentIdx ? 'text-40k-gold' : 'text-gray-600'}>
-              Phase {i + 1}
-            </span>
-          </div>
-        ))}
+              key={key}
+              className="flex items-center gap-1"
+              style={{ opacity: isActive || isPast ? 1 : 0.35 }}
+            >
+              <motion.div
+                className="w-1.5 h-1.5 rounded-[1px]"
+                style={{ backgroundColor: color }}
+                animate={isActive ? { scale: [1, 1.5, 1] } : {}}
+                transition={isActive ? { duration: 1.2, repeat: Infinity } : {}}
+              />
+              <span
+                className="truncate max-w-[5ch]"
+                style={{ color: isActive ? color : undefined }}
+              >
+                {phaseLabel}
+              </span>
+            </div>
+          )
+        })}
       </div>
 
       <motion.p
         key={status.message}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="text-xs text-gray-500 text-center font-mono mt-2 truncate"
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="text-[10px] text-gray-500 text-center font-mono mt-2 truncate"
       >
         {status.message || 'Idle'}
       </motion.p>

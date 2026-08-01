@@ -1,4 +1,29 @@
 import base64, json, os, time, urllib.error, urllib.request
+from workflows.hardware_detect import get_whisper_device
+
+# Voice customization constants
+EMOTION_STYLES = {
+    'default': '',
+    'happy': '[happy]',
+    'sad': '[sad]',
+    'excited': '[excited]',
+    'calm': '[calm]',
+    'angry': '[angry]',
+    'fearful': '[fearful]',
+    'whisper': '[whisper]',
+}
+
+def _get_voice_emotion():
+    """Get the voice emotion from environment."""
+    return os.environ.get('TTS_EMOTION', 'default').strip().lower()
+
+def _get_voice_speed():
+    """Get the voice speed from environment."""
+    try:
+        speed = float(os.environ.get('TTS_SPEED', '1.0'))
+        return max(0.5, min(2.0, speed))  # Clamp between 0.5x and 2.0x
+    except (ValueError, TypeError):
+        return 1.0
 
 
 def _get_cogitator():
@@ -121,7 +146,16 @@ def _tts_api_kokoro(text, out_wav, voice, style):
     except ImportError:
         c['log_error']("   Kokoro TTS module not found")
         return False
-    return generate_tts_file(text, out_wav, voice, style)
+    
+    # Apply emotion and speed settings
+    emotion = _get_voice_emotion()
+    speed = _get_voice_speed()
+    
+    # Build style with emotion
+    emotion_tag = EMOTION_STYLES.get(emotion, '')
+    full_style = f"{emotion_tag} {style}" if style else emotion_tag
+    
+    return generate_tts_file(text, out_wav, voice, full_style, speed=speed)
 
 
 def _strip_title(script_text):
@@ -188,11 +222,13 @@ def phase_tts(duration, num_hours, video=None):
         srt = os.path.join(c['TTS_DIR'], f"{video_basename}-TTS{padded}.srt")
         script_file = os.path.join(c['SCRIPTS_DIR'], f"{video_basename}-Script{padded}.txt")
 
-        if not os.path.exists(wav):
-            if not os.path.exists(script_file):
-                c['log'](f"   Warning: Script {i} not found, skipping TTS")
-                continue
-            c['log'](f"   Generating TTS for script {i}...")
+        if os.path.exists(wav) and os.path.getsize(wav) > 0:
+            c['log'](f"   TTS {i} WAV exists, skipping")
+            tts_generated += 1
+        elif not os.path.exists(script_file):
+            c['log'](f"   Warning: Script {i} not found, skipping TTS")
+            continue
+        else:
             try:
                 with open(script_file) as f:
                     txt = f.read()
@@ -264,43 +300,30 @@ def phase_tts(duration, num_hours, video=None):
             except Exception as e:
                 c['log_error'](f"   Error generating TTS for script {i}: {e}")
                 continue
-        else:
-            c['log'](f"   TTS {i} WAV exists, skipping")
 
         if not os.path.exists(srt):
             if not os.path.exists(wav):
                 c['log'](f"   Warning: Cannot generate SRT, WAV not found for script {i}")
             else:
-                c['log'](f"   Generating SRT for tts_{padded}.wav...")
+                c['log'](f"   Generating SRT + word timestamps for tts_{padded}.wav...")
                 srt_out = os.path.splitext(wav)[0] + ".srt"
-                srt_max_words = int(c['env']("SRT_MAX_WORDS", "10"))
+                words_json_out = os.path.splitext(wav)[0] + "_words.json"
                 try:
                     from faster_whisper import WhisperModel
-                    model = WhisperModel(c['env']("WHISPER_MODEL", "medium"), device="cpu", compute_type="int8")
-                    segments, _ = model.transcribe(wav, language="en", vad_filter=True)
-                    with open(srt_out, "w") as f:
-                        idx = 1
-                        for seg in segments:
-                            start, end, text = seg.start, seg.end, seg.text.strip()
-                            if text:
-                                words = text.split()
-                                if len(words) <= srt_max_words:
-                                    f.write(f"{idx}\n")
-                                    f.write(f"{int(start//3600):02d}:{int((start%3600)//60):02d}:{int(start%60):02d},000 --> {int(end//3600):02d}:{int((end%3600)//60):02d}:{int(end%60):02d},000\n")
-                                    f.write(f"{text}\n\n")
-                                    idx += 1
-                                else:
-                                    chunk_duration = (end - start) / ((len(words) + srt_max_words - 1) // srt_max_words)
-                                    for chunk_idx in range(0, len(words), srt_max_words):
-                                        chunk_words = words[chunk_idx:chunk_idx + srt_max_words]
-                                        chunk_text = ' '.join(chunk_words)
-                                        chunk_start = start + (chunk_idx // srt_max_words) * chunk_duration
-                                        chunk_end = chunk_start + chunk_duration
-                                        f.write(f"{idx}\n")
-                                        f.write(f"{int(chunk_start//3600):02d}:{int((chunk_start%3600)//60):02d}:{int(chunk_start%60):02d},000 --> {int(chunk_end//3600):02d}:{int((chunk_end%3600)//60):02d}:{int(chunk_end%60):02d},000\n")
-                                        f.write(f"{chunk_text}\n\n")
-                                        idx += 1
-                    c['log'](f"   tts_{padded}.srt created (faster-whisper)")
+                    from workflows.pipeline.srt_utils import extract_words_from_segments, words_to_srt, save_words_json
+                    whisper_device = get_whisper_device()
+                    model = WhisperModel(c['env']("WHISPER_MODEL", "medium"), device=whisper_device, compute_type="int8")
+                    segments, _ = model.transcribe(wav, language="en", vad_filter=True, word_timestamps=True)
+
+                    all_words = extract_words_from_segments(segments)
+                    save_words_json(all_words, words_json_out, transcription_text=tts_text)
+
+                    srt_content = words_to_srt(all_words, max_words=int(c['env']("SRT_MAX_WORDS", "10")))
+                    if srt_content:
+                        with open(srt_out, "w") as f:
+                            f.write(srt_content)
+
+                    c['log'](f"   tts_{padded}.srt + _words.json created (faster-whisper word-level)")
                 except Exception as e:
                     c['log_error'](f"   SRT failed for tts_{padded}: {e}")
         else:

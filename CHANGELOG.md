@@ -4,6 +4,44 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.5.0 (2026-08-02)
+
+### Hardware-Accelerated Encoding
+- **Hardware detection module** (`workflows/hardware_detect.py`): New module detects CPU cores, RAM, NVIDIA NVENC, VA-API, Intel QSV for automatic FFmpeg encoding optimization
+- **VA-API encoding** (`phase_assemble.py`): `h264_vaapi` with `format=nv12,hwupload` embedded in complex filtergraph (fixed filtergraph conflict)
+- **NVENC encoding**: `h264_nvenc` with adaptive preset based on VRAM
+- **Intel QSV encoding**: `h264_qsv` with look-ahead
+- **CPU fallback**: `libx264` with adaptive preset based on core count
+- **Whisper GPU acceleration**: `get_whisper_device()` detects CUDA for faster-whisper
+
+### Voice Customization
+- **TTS emotion styles** (`phase_tts.py`): 8 emotions (happy, sad, excited, calm, angry, fearful, whisper) via `TTS_EMOTION` env var
+- **TTS speed control**: Configurable 0.5x–2.0x via `TTS_SPEED` env var
+- Applied to both Gemini and Kokoro TTS providers
+
+### Learning Dashboard
+- **LearningDashboard page** (`frontend/src/pages/LearningDashboard.tsx`): Insights, content type effectiveness, A/B test tracking
+- **A/B test framework** (`performance_database.py`): `ab_tests` table with create/record/query/history functions
+- **Graph search/stats endpoints**: `/api/context/{game}/graph/search` and `/api/context/{game}/graph/stats`
+- **Backend learning endpoints**: `/api/learning/dashboard`, `/api/learning/ab-test`, `/api/learning/ab-tests`
+
+### Pipeline Resilience
+- **Output existence check** (`phase_tts.py`, `phase_tts_kokoro.py`): Existing TTS WAV files counted toward `tts_generated` — no false "No TTS generated" failures
+- **Assembly output skip** (`phase_assemble.py`): Existing output MPs4s are detected and skipped with proper counter increment
+- **Gemini JSON sanitization** (`cogitator.py`, `context_extractor.py`): Strips markdown code fences and whitespace from API responses before parsing
+
+### Web UI
+- **Command Palette** (Cmd+K): Global search/navigation across all pages
+- **WebSocket live updates**: Real-time pipeline status, logs, metrics
+- **Config validation**: Backend validates all config fields (range, type, enum); frontend displays errors
+- **Voice tab in Settings**: Emotion dropdown and speed slider
+
+### Documentation
+- **IMPROVEMENT_PLAN.md** (949 lines): Comprehensive improvement plan with 19 sections across 3 phases (Foundation, Enhancement, Innovation)
+- All 10 documentation files updated for Telegram removal and new features
+
+---
+
 ## 2.4.0 (2026-07-20)
 
 ### TTS Overhaul
@@ -15,7 +53,7 @@ All notable changes to this project are documented here.
 - **PySceneDetect integration** (`workflows/audio_analysis.py`): Content-aware scene boundary detection + `rank_scenes_by_action()` motion scoring via ffmpeg + uniform segment fallback
 
 ### Highlight Ranking
-- **LLM Highlight Ranker** (`workflows/highlight_ranker.py`): Sends transcript segments to Groq (Llama 3.3 70B) or Gemini for virality scoring (0-100), returns sorted top segments
+- **LLM Highlight Ranker** (integrated in `workflows/cogitator.py`): Sends transcript segments to Groq (Llama 3.3 70B) or Gemini for virality scoring (0-100), returns sorted top segments
 
 ### Analytics Feedback Loop
 - **YouTube Analytics sync** (`workflows/learning_engine.py`): `sync_and_train_from_youtube()` fetches YouTube metrics + retrains XGBoost model
@@ -23,8 +61,8 @@ All notable changes to this project are documented here.
 - **Post-pipeline auto-sync**: `pipeline_runner.py` auto-calls `sync_and_train_from_youtube()` after each pipeline run
 
 ### Game Lore Fetch
-- **Game Lore Phase** (`workflows/pipeline/phase_lore.py`): Parallel Gemini+Groq dispatch asking for plot_summary, characters, locations, factions, key_events, lore_terms
-- **Phase 3a integration**: `phase_context.py` calls `phase_lore()` before transcript extraction
+- **Game Lore Phase** (integrated in `workflows/cogitator.py`): Parallel Gemini+Groq dispatch asking for plot_summary, characters, locations, factions, key_events, lore_terms
+- **Phase 3a integration**: `cogitator.py` calls lore extraction before transcript processing
 - **`[GAME LORE]` prompt block**: Lore rendered as PLOT SUMMARY, FACTIONS, KEY EVENTS, LORE TERMS in script generation prompts (`prompts/base.j2` + f-string fallback)
 
 ### Frontend Pipeline Progress
@@ -34,8 +72,55 @@ All notable changes to this project are documented here.
 - **Dashboard integration**: `Dashboard.tsx` now uses `<PipelineProgress>` component replacing inline progress bar
 
 ### Import Chain Fixes
-- **Lazy imports**: `pipeline/__init__.py` uses `__getattr__`; `phase_context.py`, `pipeline_runner.py`, `phase_tts.py` use function-level lazy imports to avoid import-chain failures
+- **Lazy imports**: `pipeline/__init__.py` uses `__getattr__`; `pipeline_runner.py`, `phase_tts.py` use function-level lazy imports to avoid import-chain failures
 - **`score_context_relevance()` / `summarize_context()`**: Preserve `lore` field through all context processing
+
+### Word-Level Subtitle Timing
+- **Faster-Whisper word timestamps** (`phase_tts.py`, `phase_tts_kokoro.py`): `word_timestamps=True` enables per-word timing
+- **`_words.json` companion files**: Stores `{word, start, end}` for each word
+- **Fuzzy word alignment** (`phase_assemble.py`): Uses `difflib.SequenceMatcher` for TTS-script mismatches
+- **Subtitle readability validation** (`srt_utils.py`): `validate_srt_readability()` with 42-char line splitting
+
+### Telegram Removal
+- Removed Telegram bot dependencies and commands
+- Removed `/api/system/restart-listener` endpoint
+- Replaced `tg_send`/`tg_send_menu`/`tg_answer_callback` with logging stubs
+- Removed `listen`/`stop` CLI commands
+
+### Quality Fixes
+- Added missing `true_story` variant to `SCRIPT_VARIANTS` and `HOOK_ARCHETYPES`
+- Fixed `drama_score` → `score` key mismatch in clip selection
+- Round-robin index overflow now wraps via modulo
+- Implemented `clip_pacing` via `CLIP_PACING` env var
+- BGM ducking now unducks after TTS ends
+- Removed duplicate `_detect_laughter` function
+- Updated Content Studio prompts to include all 15 variants
+- Fixed `store_learning()` to use running average for `impact_score`
+- TTS learning now keyed on `(voice, style, content_type)`
+
+### Learning System Improvements
+- Relative performance tracking: compare videos against channel baseline
+- Content type effectiveness analysis
+- Learning insights injected into script prompts
+- Constraint deduplication in `learned_constraints.json`
+- False-positive correction detection fixed
+- Constraint pruning for entries older than 30 days
+
+### Web UI Enhancements
+- **Command Palette** (Cmd+K): Global search/navigation across all pages
+- **Real-time WebSocket**: Live pipeline status, logs, metrics
+- **Connection indicator**: Live/Offline status badge
+
+### API Resilience
+- **Retry logic**: Exponential backoff for Groq and Gemini API calls
+- Handles network errors, rate limits, server errors
+
+### Context/Memory Fixes
+- Constraint duplication fixed — deduplicates before extending
+- False-positive corrections fixed — only flags removals if new context has data
+- Relationship dedup improved — cross-entity resolution and reverse relationship detection
+
+---
 
 ## 2.3.0 (2026-06-22)
 
@@ -43,33 +128,29 @@ All notable changes to this project are documented here.
 - **CRITICAL**: Fixed unauthenticated path traversal in `serve_frontend` — resolved paths are now validated against `FRONTEND_DIST`
 - **CRITICAL**: Fixed path traversal via game name in context endpoints (sanitize_input now strips `..`, `/`, `\`)
 - **CRITICAL**: Fixed `clear_mempalace_for_game` — `shutil.rmtree` with unsanitized game name could delete arbitrary directories
-- **API key URL leak**: All Gemini API key URLs migrated from `?key=` query param to `X-Goog-Api-Key` header across all 6 call sites (llm_provider.py, cogitator.py)
+- **API key URL leak**: All Gemini API key URLs migrated from `?key=` query param to `X-Goog-Api-Key` header across all call sites
 - **API key rotation**: Keychain-backed rotation with `GEMINI_KEY_INDEX` tracking
 - **In-memory rate limiting**: Replaced file-based rate limiting (race condition / /tmp fragility)
-- **Bare except fixes**: 7+ `except:` replaced with specific exception types across audio_analysis.py, metrics_fetcher.py, desktop.py, performance_database.py, ws_manager.py
+- **Bare except fixes**: `except:` replaced with specific exception types across all modules
 
 ### Thread Safety
 - Added `_rr_lock` to all round_robin.py functions protecting mutable shared globals
 - Added `_pipeline_globals_lock` in cogitator.py (was defined but never used)
 - Added `_pipeline_lock` around pipeline_process reads/writes in backend/main.py
-- Added `_ctx_edit_lock` + `_env_lock` in bot.py for CONTEXT_EDIT_STATE and update_env_var
 - Fixed `PENDING_CONTEXT` split-brain (bot.py redefined the imported dict)
 - Double-checked locking singleton for virality predictor
 - File locking for all context_manager.py load/save/merge operations
 
 ### Bug Fixes
-- **desktop.py**: `cream` variable never set — TTS voice always showed "Not set" (`voice = line.split(...)` was `cream = ...`)
 - **AnimatedCounter.tsx**: Stale closure in `useTransform` — `format` prop always used initial render's value
 - **Scripts.tsx**: Runtime TypeError when `video_name` or `content_type` is null (`?.toLowerCase().includes()`)
 - **round_robin.py**: All global state read/writes now protected by lock
 - **backends/main.py**: Relationship import parsing (extracted from/to/label), malformed entity filter, non-recursive glob → recursive
 - **context_manager_v2.py**: `is_first_run` file descriptor leak, `get_history` now returns most-recent-first, atomic writes via tempfile+os.replace
 - **phase_tts.py**: Fixed double SQLite connection (reused `conn` + try/finally)
-- **phase_download.py**: Added PLAYLIST_URL injection guard (-- prefix), PLAYLIST_INDEX integer validation
-- **extract_context.py**: Added directory existence check, json.JSONDecodeError handling, moved private import out of loop
-- **pyproject.toml**: Fixed invalid `build-backend` (`setuptools.backends._legacy._Backend` doesn't exist)
+- **pyproject.toml**: Fixed invalid `build-backend`
 - **pipeline_runner.py**: Added `_pipeline_globals_lock` for pipeline globals
-- **performance_database.py**: Fixed indentation error in auto_match_and_fetch, SQL connection leak (try/finally), `_calculate_performance_score` typo
+- **performance_database.py**: Fixed indentation error in auto_match_and_fetch, SQL connection leak (try/finally)
 
 ### Context Extraction
 - Entity provenance tracking (transcript_mentions, first_seen_transcript, admission_threshold)
@@ -106,7 +187,6 @@ All notable changes to this project are documented here.
 - Updated README.md with current feature set
 - Updated .env.example with GROQ_API_KEY, PORTRAIT_CLIPS, BURN_CAPTIONS
 - Updated install.sh Python version check (3.10→3.11)
-- Deprecated content_studio.py (all functionality in cogitator.py `_cs_*` functions)
 
 ---
 
@@ -128,7 +208,7 @@ All notable changes to this project are documented here.
 ### Added
 - **Centralized Constants**: `workflows/constants.py` — single source for TTS voices (30), style options (10), `calculate_performance_score()`, `parse_duration()`, `calculate_readability()`, `calculate_hook_strength()`, `get_next_groq_key()`
 - **Unified YouTube Sync**: `sync_youtube_metrics()` in `performance_database.py` replaces 3 duplicated implementations across `cogitator.py` and `backend/main.py`
-- **Module Extraction**: Created `workflows/core/round_robin.py`, `workflows/core/config.py`, `workflows/core/pipeline_context.py`, `workflows/content_studio.py`, and module stubs (`pipeline/`, `generators/`, `telegram/`)
+- **Module Extraction**: Created `workflows/core/round_robin.py`, `workflows/core/pipeline_context.py`
 - **WebSocket Log Streaming**: Background log tailer reads `/tmp/pipeline.log` and broadcasts over WebSocket to all connected clients
 - **Graph Caching**: Function-level TTL caches for `get_weighted_tts_voices()` (5-min) and graph endpoints (60-sec with file-mtime invalidation)
 - **Context v2 Facade**: Added v1-compatible API to `context_manager_v2.py` — `load_verified_context()`, `save_verified_context()`, `clear_verified_context()`, `compare_context_with_history()`, `format_context_for_confirmation()`, `is_first_run()`, `compute_and_save_implicit_relationships()`, `save_implicit_relationships()`
@@ -153,7 +233,6 @@ All notable changes to this project are documented here.
 - `workflows/constants.py`: 210 lines — new centralized constants module
 - `workflows/core/round_robin.py`: 130 lines — extracted round-robin engine with `get_state()` helper
 - `workflows/core/pipeline_context.py`: Shared pipeline state object with try/except imports
-- `workflows/content_studio.py`: Content Studio facade with stubs for future extraction
 - `frontend/src/App.tsx`: Removed `AnimatePresence mode="wait"`, simplified per-route entrance animations
 - `frontend/src/pages/Graph.tsx`: Rebuild `nodesMap` from scratch on filter (L231-233)
 
@@ -243,7 +322,7 @@ All notable changes to this project are documented here.
 ## 2.0.1 — 2026-05-17
 ### Security
 - **API Key Authentication**: Added API key verification to sensitive endpoints
-  - Protected endpoints: `/api/config`, `/api/system/cleanup`, `/api/system/restart-listener`, `/api/context/import`, `/api/context/clear`, `/api/pipeline/download`
+  - Protected endpoints: `/api/config`, `/api/system/cleanup`, `/api/context/import`, `/api/context/clear`, `/api/pipeline/download`
   - Auto-generated API key stored in `~/.cogitator/api_key`
   - Use `X-API-Key` header for authenticated requests
 - **Rate Limiting**: Added rate limiting to prevent API abuse
@@ -270,13 +349,12 @@ All notable changes to this project are documented here.
   - REST API endpoints for pipeline control
   - Metrics, scripts, learnings, context endpoints
   - Configuration management endpoints
-  - System control endpoints (cleanup, restart-listener)
+  - System control endpoints (cleanup)
 - **React Web Interface** (`frontend/`): New web UI
   - Cyberpunk-themed dashboard
   - Real-time pipeline status via WebSocket
   - Metrics visualization with charts
   - Context graph visualization
-  - Content Studio web interface
 - **WebSocket Support**: Real-time updates for all connected clients
 - **Performance Database**: Enhanced SQLite-based metrics storage
   - Video performance tracking
@@ -347,8 +425,7 @@ All notable changes to this project are documented here.
 ### Technical
 - Version: 2.0.0
 - All v1.6.0 features preserved
-- CLI commands: run, listen, stop, cleanup, onboard all functional
-- Telegram bot fully operational
+- CLI commands: run, cleanup, onboard all functional
 
 ---
 
@@ -602,6 +679,8 @@ Cogitator v1.0.0 is the initial release of an automated YouTube Shorts pipeline 
 
 ### Telegram Bot Commands
 
+> **Note**: Telegram bot functionality is optional. The web interface provides full pipeline control.
+
 #### Pipeline Control
 - `/start` - Start pipeline
 - `/run` - Run full pipeline
@@ -729,8 +808,6 @@ Cogitator/
 │   ├── cogitator.py  # Main application
 │   ├── keychain_manager.py
 │   └── update_manager.py
-├── content_studio/      # Content Studio
-│   └── context.json    # Stored context
 ├── docs/               # Documentation
 ├── .env.example       # Configuration template
 ├── install.sh         # Installation script
@@ -742,12 +819,11 @@ Cogitator/
 
 ### Dependencies
 
-- Python 3.10+
+- Python 3.11+
 - FFmpeg
 - Faster-Whisper
 - Google Gemini API
 - yt-dlp
-- Telegram Bot API
 - python-dotenv
 - keyring
 
@@ -757,7 +833,6 @@ Cogitator/
 
 - Requires YouTube Data API access for playlist features
 - Gemini API key required for script generation and TTS
-- Telegram bot optional but recommended for full functionality
 - Linux-only (tested on Arch Linux)
 - Requires significant disk space for video storage
 

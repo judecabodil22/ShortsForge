@@ -923,7 +923,7 @@ def format_context_for_confirmation(
     verified: Dict[str, Any],
     comparison: Dict[str, Any]
 ) -> str:
-    """Format context for Telegram/CLI confirmation message."""
+    """Format context for Web UI confirmation message."""
     lines = []
     
     chars = extracted.get("characters", [])

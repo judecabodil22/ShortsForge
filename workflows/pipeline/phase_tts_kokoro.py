@@ -7,6 +7,7 @@ Zero-cost TTS using the Kokoro library (MIT license, runs on CPU).
 
 import json, os, subprocess, tempfile, time, uuid
 from typing import Optional
+from workflows.hardware_detect import get_whisper_device
 
 KOKORO_AVAILABLE = False
 try:
@@ -64,9 +65,12 @@ def _get_pipeline(voice: str = KOKORO_DEFAULT_VOICE):
     return _pipeline
 
 
-def generate_tts(text: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str = None) -> Optional[bytes]:
+def generate_tts(text: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str = None, speed: float = 1.0) -> Optional[bytes]:
     kokoro_voice = _normalize_voice_name(voice_name)
     pipeline = _get_pipeline(kokoro_voice)
+
+    # Clamp speed between 0.5 and 2.0
+    speed = max(0.5, min(2.0, speed))
 
     if style:
         styled = f"[{style}] {text}"
@@ -74,7 +78,7 @@ def generate_tts(text: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str =
         styled = text
 
     try:
-        generator = pipeline(styled, voice=kokoro_voice, speed=1.0)
+        generator = pipeline(styled, voice=kokoro_voice, speed=speed)
         audio_chunks = []
         for i, (gs, ps, audio) in enumerate(generator):
             if audio is not None and len(audio) > 0:
@@ -89,9 +93,9 @@ def generate_tts(text: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str =
         return None
 
 
-def generate_tts_file(text: str, output_wav: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str = None) -> bool:
+def generate_tts_file(text: str, output_wav: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str = None, speed: float = 1.0) -> bool:
     try:
-        raw_pcm = generate_tts(text, voice_name, style)
+        raw_pcm = generate_tts(text, voice_name, style, speed)
         if raw_pcm is None:
             return False
 
@@ -152,15 +156,25 @@ def phase_tts_kokoro(duration, num_hours, video=None):
         srt = os.path.join(TTS_DIR, f"{video_basename}-TTS{padded}.srt")
         script_file = os.path.join(SCRIPTS_DIR, f"{video_basename}-Script{padded}.txt")
 
-        if not os.path.exists(wav):
-            if not os.path.exists(script_file):
-                log(f"   Warning: Script {i} not found, skipping TTS")
-                continue
+        if os.path.exists(wav) and os.path.getsize(wav) > 0:
+            log(f"   TTS {i} WAV exists, skipping")
+            tts_generated += 1
+        elif not os.path.exists(script_file):
+            log(f"   Warning: Script {i} not found, skipping TTS")
+            continue
+        else:
             log(f"   Generating TTS for script {i}...")
             try:
                 with open(script_file) as f:
                     txt = f.read()
-                if not txt.strip():
+                stripped = []
+                for line in txt.strip().split('\n'):
+                    l = line.strip()
+                    if not l or any(l.startswith(k) for k in ('TITLE:', 'DESCRIPTION:', 'TAGS:')):
+                        continue
+                    stripped.append(line)
+                txt = '\n'.join(stripped).strip()
+                if not txt:
                     log_error(f"   Warning: Script {i} is empty, skipping")
                     continue
 
@@ -205,43 +219,30 @@ def phase_tts_kokoro(duration, num_hours, video=None):
             except Exception as e:
                 log_error(f"   Error generating TTS for script {i}: {e}")
                 continue
-        else:
-            log(f"   TTS {i} WAV exists, skipping")
 
         if not os.path.exists(srt):
             if not os.path.exists(wav):
                 log(f"   Warning: Cannot generate SRT, WAV not found for script {i}")
             else:
-                log(f"   Generating SRT for tts_{padded}.wav...")
+                log(f"   Generating SRT + word timestamps for tts_{padded}.wav...")
                 srt_out = os.path.splitext(wav)[0] + ".srt"
-                srt_max_words = int(env("SRT_MAX_WORDS", "10"))
+                words_json_out = os.path.splitext(wav)[0] + "_words.json"
                 try:
                     from faster_whisper import WhisperModel
-                    model = WhisperModel(env("WHISPER_MODEL", "medium"), device="cpu", compute_type="int8")
-                    segments, _ = model.transcribe(wav, language="en", vad_filter=True)
-                    with open(srt_out, "w") as f:
-                        idx = 1
-                        for seg in segments:
-                            start, end, text = seg.start, seg.end, seg.text.strip()
-                            if text:
-                                words = text.split()
-                                if len(words) <= srt_max_words:
-                                    f.write(f"{idx}\n")
-                                    f.write(f"{int(start//3600):02d}:{int((start%3600)//60):02d}:{int(start%60):02d},000 --> {int(end//3600):02d}:{int((end%3600)//60):02d}:{int(end%60):02d},000\n")
-                                    f.write(f"{text}\n\n")
-                                    idx += 1
-                                else:
-                                    chunk_duration = (end - start) / ((len(words) + srt_max_words - 1) // srt_max_words)
-                                    for chunk_idx in range(0, len(words), srt_max_words):
-                                        chunk_words = words[chunk_idx:chunk_idx + srt_max_words]
-                                        chunk_text = ' '.join(chunk_words)
-                                        chunk_start = start + (chunk_idx // srt_max_words) * chunk_duration
-                                        chunk_end = chunk_start + chunk_duration
-                                        f.write(f"{idx}\n")
-                                        f.write(f"{int(chunk_start//3600):02d}:{int((chunk_start%3600)//60):02d}:{int(chunk_start%60):02d},000 --> {int(chunk_end//3600):02d}:{int((chunk_end%3600)//60):02d}:{int(chunk_end%60):02d},000\n")
-                                        f.write(f"{chunk_text}\n\n")
-                                        idx += 1
-                    log(f"   tts_{padded}.srt created (faster-whisper)")
+                    from workflows.pipeline.srt_utils import extract_words_from_segments, words_to_srt, save_words_json
+                    whisper_device = get_whisper_device()
+                    model = WhisperModel(env("WHISPER_MODEL", "medium"), device=whisper_device, compute_type="int8")
+                    segments, _ = model.transcribe(wav, language="en", vad_filter=True, word_timestamps=True)
+
+                    all_words = extract_words_from_segments(segments)
+                    save_words_json(all_words, words_json_out, transcription_text=txt)
+
+                    srt_content = words_to_srt(all_words, max_words=int(env("SRT_MAX_WORDS", "10")))
+                    if srt_content:
+                        with open(srt_out, "w") as f:
+                            f.write(srt_content)
+
+                    log(f"   tts_{padded}.srt + _words.json created (faster-whisper word-level)")
                 except Exception as e:
                     log_error(f"   SRT failed for tts_{padded}: {e}")
         else:

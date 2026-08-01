@@ -1,5 +1,7 @@
 # Context Extraction System - Goals & Issues
 
+> **Note**: Some line numbers in this document may be stale due to code refactoring. The issues described remain valid.
+
 ## Goal
 
 Automatically extract context from game video transcripts and save to markdown files for Obsidian with Graph View.
@@ -99,10 +101,10 @@ graph TD
 ## Files Involved
 
 - `/home/alph4r1us/Cogitator/workflows/cogitator.py` - Main application
-  - `_cs_extract_context_from_transcript()` (line ~2836) - AI extraction
-  - `_cs_save_context()` (line ~2224) - Save to markdown
-  - `_rebuild_file_preserving_content()` (line ~2444) - Rebuild with Mermaid
-  - `_rebuild_relationships_preserving_content()` (line ~2598) - Rebuild relationships
+  - `_cs_extract_context_from_transcript()` - AI extraction
+  - `_cs_save_context()` - Save to markdown
+  - `_rebuild_file_preserving_content()` - Rebuild with Mermaid
+  - `_rebuild_relationships_preserving_content()` - Rebuild relationships
 
 - `/home/alph4r1us/Cogitator/workflows/context_manager.py` - Context verification
 
@@ -116,8 +118,8 @@ graph TD
 
 ## Test Plan
 
-1. Clear all context (markdown files, memory, MemPalace)
-2. Run `/run_phase 2`
+1. Clear all context (markdown files, memory)
+2. Run Phase 2 (Transcribe)
 3. Check markdown files for:
    - Unique Mermaid node IDs (C0, C1, C2...)
    - No self-referential relationships

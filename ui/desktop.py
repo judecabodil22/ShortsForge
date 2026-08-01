@@ -89,10 +89,6 @@ class CogitatorDesktop(QMainWindow):
         btn_stop.clicked.connect(self.stop_pipeline)
         pipeline_layout.addWidget(btn_stop)
         
-        btn_restart = QPushButton("Restart Listener")
-        btn_restart.clicked.connect(self.start_listener)
-        pipeline_layout.addWidget(btn_restart)
-        
         pipeline_group.setLayout(pipeline_layout)
         layout.addWidget(pipeline_group)
         
@@ -167,14 +163,6 @@ class CogitatorDesktop(QMainWindow):
         btn_set_clips = QPushButton("Set Clips/Hour")
         btn_set_clips.clicked.connect(self.set_clips)
         tools_layout.addWidget(btn_set_clips)
-        
-        btn_listen = QPushButton("Start Listener")
-        btn_listen.clicked.connect(self.start_listener)
-        tools_layout.addWidget(btn_listen)
-        
-        btn_stop_listen = QPushButton("Stop Listener")
-        btn_stop_listen.clicked.connect(self.stop_listener)
-        tools_layout.addWidget(btn_stop_listen)
         
         btn_cleanup = QPushButton("Cleanup Files")
         btn_cleanup.clicked.connect(self.cleanup_files)
@@ -648,16 +636,6 @@ class CogitatorDesktop(QMainWindow):
         with open(env_file, "w") as f:
             for k, v in config.items():
                 f.write(f"{k}={v}\n")
-
-    def start_listener(self):
-        self.log("Starting Telegram listener...")
-        subprocess.Popen([sys.executable, "workflows/cogitator.py", "listen"], cwd=WORKSPACE)
-        self.log("Listener started in background")
-
-    def stop_listener(self):
-        self.log("Stopping Telegram listener...")
-        subprocess.run([sys.executable, "workflows/cogitator.py", "stop"], cwd=WORKSPACE)
-        self.log("Listener stopped")
 
     def cleanup_files(self):
         reply = QMessageBox.question(self, "Cleanup", "Delete all generated files?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)

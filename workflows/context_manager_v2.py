@@ -692,7 +692,7 @@ def compare_context_with_history(game_title: str, new_context: Dict[str, Any]) -
 
 
 def format_context_for_confirmation(game_title: str, context: Dict[str, Any]) -> str:
-    """Format context for Telegram confirmation (v1-compatible)."""
+    """Format context for confirmation (v1-compatible)."""
     lines = [f"Context for {game_title}:"]
     for key, items in context.items():
         if isinstance(items, list):

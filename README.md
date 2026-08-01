@@ -19,17 +19,16 @@
 5. [System Requirements](#system-requirements)
 6. [Installation](#installation)
 7. [Configuration](#configuration)
-8. [Usage](#usage)
-9. [Telegram Commands](#telegram-commands)
-10. [Web Interface](#web-interface)
-11. [Learning Engine](#learning-engine)
-12. [Metrics & Analytics](#metrics--analytics)
-13. [Project Structure](#project-structure)
-14. [Tech Stack](#tech-stack)
-15. [Security](#security)
-16. [Troubleshooting](#troubleshooting)
-17. [Development](#development)
-18. [License](#license)
+ 8. [Usage](#usage)
+ 9. [Web Interface](#web-interface)
+ 10. [Learning Engine](#learning-engine)
+ 11. [Metrics & Analytics](#metrics--analytics)
+ 12. [Project Structure](#project-structure)
+ 13. [Tech Stack](#tech-stack)
+ 14. [Security](#security)
+ 15. [Troubleshooting](#troubleshooting)
+ 16. [Development](#development)
+ 17. [License](#license)
 
 ---
 
@@ -39,7 +38,6 @@ Cogitator is a comprehensive, AI-powered pipeline that transforms long-form YouT
 
 The project has evolved from a simple CLI script into a full-stack application with:
 - **CLI Pipeline** - Command-line interface for batch processing
-- **Telegram Bot** - Interactive bot control and monitoring
 - **Web Interface** - React-based dashboard with real-time updates
 - **Learning Engine** - ML-based content optimization
 - **Performance Database** - SQLite-backed metrics tracking
@@ -60,7 +58,10 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 
 ### Key Capabilities
 
-- **6-Phase Pipeline**: Download → Transcribe → Context → Script → Clip → TTS
+- **7-Phase Pipeline**: Download → Transcribe → Context → Scripts → Clips → TTS → Assemble
+- **Hardware-Accelerated Encoding**: Automatic GPU detection (NVENC/VA-API/QSV) with CPU fallback
+- **Voice Customization**: TTS emotion styles and speed control
+- **Learning Dashboard**: Insights, content effectiveness, A/B test tracking
 - **Resumable**: Each phase saves progress - restart anywhere
 - **Skippable Phases**: Run any combination of phases independently
 - **WebSocket Log Streaming**: Live pipeline logs in browser
@@ -71,17 +72,18 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 
 ## Features
 
-### Pipeline (6 Phases)
+### Pipeline (7 Phases)
 
 | Phase | Name | Description | Output |
 |-------|------|-------------|--------|
 | **1** | Download | Downloads videos from YouTube playlist | `streams/` |
-| **2** | Transcribe | Converts audio to text with timestamps | `transcripts/` |
+| **2** | Transcribe | Faster-Whisper word-level transcription with timestamps | `transcripts/` |
 | **3a** | Lore | Fetches game lore (plot, characters, factions, events) via parallel LLM | `Context/` |
 | **3b** | Context | Extracts characters, locations, relationships from transcript | `Context/` |
 | **4** | Scripts | Generates AI-powered narration scripts (includes `[GAME LORE]` block) | `scripts/` |
-| **5** | Clip | PySceneDetect scene detection, portrait 9:16 crop, caption burn-in, HEVC VAAPI auto-detection, highlight ranking | `shorts/` |
-| **6** | TTS | Config-driven voice narration (Kokoro/Edge/Gemini) with subtitles | `tts/` |
+| **5** | Clip | PySceneDetect scene detection, portrait 9:16 crop, caption burn-in, highlight ranking | `shorts/` |
+| **6** | TTS | Config-driven voice narration (Kokoro/Edge/Gemini) with subtitles + word-level timing | `tts/` |
+| **7** | Assemble | Hardware-accelerated video assembly with subtitle overlay, BGM ducking, smooth audio transitions | `assembly/` |
 
 ### Web Interface
 
@@ -146,8 +148,8 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    │
-│  │   Telegram   │    │   Web UI     │    │     CLI      │    │
-│  │     Bot       │    │   (React)    │    │   Pipeline   │    │
+│  │   Web UI     │    │   CLI        │    │   Pipeline   │    │
+│  │  (React)     │    │   Runner     │    │   Runner     │    │
 │  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘    │
 │         │                   │                   │             │
 │         └───────────────────┴───────────────────┘             │
@@ -178,7 +180,7 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 
 | Component | Purpose |
 |-----------|---------|
-| `cogitator.py` | Main pipeline orchestration, CLI, Telegram bot |
+| `cogitator.py` | Main pipeline orchestration, CLI |
 | `context_manager.py` | Context storage and retrieval for scripts |
 | `context_manager_v2.py` | Enhanced context with graph visualization |
 | `metrics_fetcher.py` | YouTube API integration for video metrics |
@@ -186,19 +188,16 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 | `performance_database.py` | SQLite storage for scripts, videos, metrics, learnings |
 | `script_validation.py` | Script quality scoring and content type detection |
 | `audio_analysis.py` | Audio feature extraction + PySceneDetect scene detection + motion scoring |
-| `highlight_ranker.py` | LLM-based virality scoring for transcript segments |
-| `llm_provider.py` | LLM abstraction layer (Gemini + Groq fallback) |
 | `keychain_manager.py` | Secure API key storage in system keychain |
 | `constants.py` | Centralized configuration (voices, styles, scoring, rotation) |
 | `pipeline/__init__.py` | Lazy-loaded pipeline phase stubs (import-chain safe) |
 | `pipeline/pipeline_runner.py` | Pipeline orchestrator with auto YouTube sync after run |
 | `pipeline/phase_tts.py` | Config-driven TTS dispatch (Kokoro / Edge / Gemini) |
 | `pipeline/phase_tts_kokoro.py` | Kokoro TTS provider (CPU-based, free, offline) |
-| `pipeline/phase_lore.py` | Game lore fetch via parallel Gemini+Groq |
-| `pipeline/phase_context.py` | Phase 3 — calls lore fetch before transcript extraction |
+| `pipeline/phase_assemble.py` | Video assembly with subtitles and BGM |
+| `pipeline/srt_utils.py` | Shared subtitle timing utilities |
 | `backend/main.py` | FastAPI web server with REST API |
 | `core/round_robin.py` | Shuffled round-robin engine for voice/style/Groq rotation |
-| `core/config.py` | `.env` file management utilities |
 | `core/pipeline_context.py` | Shared pipeline state for cross-phase coordination |
 
 ---
@@ -225,10 +224,9 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 
 | Service | Required | Purpose |
 |---------|----------|---------|
-| **Google Gemini** | Yes | Script generation + TTS fallback |
+| **Google Gemini** | Yes | Script generation |
 | **Groq** | Recommended | Highlight ranking + Gemini fallback (free tier via Llama 3.3 70B) |
 | **YouTube Data API** | Yes | Video metrics |
-| **Telegram Bot** | Optional | Bot control |
 
 > **TTS Note**: Gemini API is no longer required for TTS. Set `TTS_PROVIDER=kokoro` (CPU, free, offline) or `TTS_PROVIDER=edge` (free cloud via edge-tts) to avoid TTS API costs.
 
@@ -274,12 +272,7 @@ nano .env
 
 ### 5. Start Using Cogitator
 
-**Option A: Telegram Bot**
-```bash
-python workflows/cogitator.py listen
-```
-
-**Option B: Web Interface**
+**Option A: Web Interface**
 ```bash
 # Start backend
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
@@ -288,7 +281,7 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 # Access at http://localhost:8000
 ```
 
-**Option C: Direct CLI**
+**Option B: Direct CLI**
 ```bash
 python workflows/cogitator.py run
 python workflows/cogitator.py status
@@ -320,10 +313,6 @@ GROQ_API_KEY=gsk_...
 # Kokoro recommended — zero API cost, 54 voices, offline after first download
 TTS_PROVIDER=kokoro
 
-# Telegram Bot
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
-TELEGRAM_CHAT_ID=123456789
-
 # Content Settings
 GAME_TITLE=Rise of the Tomb Raider
 TTS_VOICE=Vindemiatrix
@@ -348,12 +337,6 @@ WHISPER_MODEL=medium
 3. Create credentials (API Key)
 4. For full metrics, set up OAuth 2.0
 
-**Telegram Bot:**
-1. Open @BotFather on Telegram
-2. Create new bot with `/newbot`
-3. Copy token to `.env`
-4. Get chat ID from @userinfobot
-
 ---
 
 ## Usage
@@ -361,7 +344,7 @@ WHISPER_MODEL=medium
 ### Running the Pipeline
 
 ```bash
-# Full pipeline (all 5 phases)
+# Full pipeline (all 6 phases)
 python workflows/cogitator.py run
 
 # Specific phases
@@ -376,48 +359,11 @@ python workflows/cogitator.py run_local media
 
 ```bash
 python workflows/cogitator.py run         # Run pipeline
-python workflows/cogitator.py listen       # Start Telegram listener
-python workflows/cogitator.py stop        # Stop running pipeline
 python workflows/cogitator.py status      # Show status
-python workflows/cogitator.py cleanup      # Clean generated files
+python workflows/cogitator.py cleanup     # Clean generated files
 python workflows/cogitator.py debug       # Show recent logs
 python workflows/cogitator.py onboard     # Interactive setup
 ```
-
----
-
-## Telegram Commands
-
-### Pipeline Control
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Initialize bot |
-| `/run` | Run full pipeline |
-| `/run_phase N` | Run specific phase |
-| `/skip_phase N` | Skip a phase |
-| `/stop_pipeline` | Stop running pipeline |
-| `/status` | Show current status |
-
-### Configuration
-
-| Command | Description |
-|---------|-------------|
-| `/set_voice Puck` | Change TTS voice |
-| `/voices` | List available voices |
-| `/set_clips 10` | Set clips per hour (1-20) |
-| `/set_game Game Title` | Set game title |
-| `/config` | Show current settings |
-
-### Utilities
-
-| Command | Description |
-|---------|-------------|
-| `/menu` | Show interactive menu |
-| `/debug` | Show recent logs |
-| `/version` | Show version |
-| `/cleanup` | Delete generated files |
-| `/help` | Show help |
 
 ---
 
@@ -439,12 +385,30 @@ Open `http://localhost:8000` in your browser.
 
 ### Features
 
+### Starting the Web Server
+
+```bash
+# Backend only
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+# Or use the script
+./start_web.sh
+```
+
+### Accessing the UI
+
+Open `http://localhost:8000` in your browser.
+
+### Features
+
 - **Dashboard**: Metrics summary
-- **Pipeline Control**: Start, stop, configure pipeline (the dedicated pipeline page in `Layout.tsx` was removed — implementation was incomplete)
+- **Pipeline Control**: Start, stop, configure pipeline
 - **Metrics**: Video performance charts
 - **Scripts**: View generated scripts
 - **Context**: Interactive knowledge graph visualization
 - **Settings**: Configuration management
+- **Command Palette**: Global search/navigation (Cmd+K)
+- **Real-time Updates**: WebSocket live status and logs
 
 ### Knowledge Graph
 
@@ -485,16 +449,29 @@ The Context page features an interactive force-directed graph:
 | `/api/pipeline/run` | POST | Start pipeline |
 | `/api/pipeline/stop` | POST | Stop pipeline |
 | `/api/pipeline/settings` | GET/POST | Pipeline settings |
+| `/api/pipeline/logs` | GET | Pipeline logs (query param: `lines=100`) |
 | `/api/metrics/summary` | GET | Performance summary |
 | `/api/metrics/videos` | GET | All videos with metrics |
 | `/api/metrics/sync` | POST | Sync YouTube metrics |
 | `/api/metrics/content-performance` | GET | Content type performance |
 | `/api/scripts` | GET | All scripts |
+| `/api/scripts/{id}` | GET | Get script by ID |
+| `/api/scripts/{id}/metadata` | PUT | Update script metadata |
+| `/api/scripts/{id}/analyze` | POST | Analyze script |
 | `/api/learnings` | GET | ML learnings |
+| `/api/learnings/weights` | GET | Content type weights |
 | `/api/context/{game}` | GET | Game context |
 | `/api/context/{game}/graph` | GET | Game knowledge graph |
+| `/api/context/{game}/segments` | GET | Game segments |
 | `/api/context/all/graph` | GET | All games combined graph |
-| `/api/logs` | GET | Pipeline logs (query param: `lines=100`) |
+| `/api/context/games` | GET | List all games |
+| `/api/context/create_game` | POST | Create new game context |
+| `/api/context/merge` | POST | Merge contexts |
+| `/api/context/import` | POST | Import context |
+| `/api/tts/voices` | GET | List TTS voices |
+| `/api/tts/learnings` | GET | TTS learnings |
+| `/api/prompts/script` | GET/PUT | Script prompt template |
+| `/api/auth/key` | GET | API key status |
 | `/api/config` | GET/POST | Configuration |
 | `/ws` | WS | WebSocket for real-time updates (status + log streaming) |
 
@@ -589,24 +566,25 @@ Cogitator/
 │   ├── context_manager_v2.py # Context storage v2 (graph)
 │   ├── metrics_fetcher.py   # YouTube API integration
 │   ├── learning_engine.py   # ML optimization
-│   ├── llm_provider.py      # LLM abstraction (Gemini + Groq)
 │   ├── performance_database.py # SQLite storage
 │   ├── script_validation.py # Script quality scoring
 │   ├── audio_analysis.py    # Audio feature extraction
+│   ├── context_extractor.py # Context extraction
 │   ├── keychain_manager.py  # Secure key storage
 │   ├── update_manager.py    # Update checking
 │   ├── core/                # Extracted core modules
 │   │   ├── round_robin.py  # Round-robin engine
-│   │   ├── config.py       # Env file management
 │   │   └── pipeline_context.py # Pipeline state
-│   ├── pipeline/            # Pipeline phase stubs
-│   ├── generators/          # Generator stubs
-│   └── telegram/            # Telegram bot stubs
+│   ├── pipeline/            # Pipeline phases
+│   │   ├── pipeline_runner.py # Pipeline orchestrator
+│   │   ├── phase_tts.py    # TTS dispatch
+│   │   ├── phase_tts_kokoro.py # Kokoro TTS provider
+│   │   ├── phase_assemble.py # Video assembly
+│   │   └── srt_utils.py    # Subtitle utilities
 ├── prompts/                   # AI prompt templates
 │   ├── base.j2               # Base prompt
-│   ├── character_pov.j2      # Character POV style
-│   ├── narrative.j2          # Narrative style
-│   └── *.j2                  # Other styles (11 total)
+│   ├── content_studio.j2     # Content Studio prompt
+│   └── *.j2                  # Other styles
 ├── docs/                      # Documentation
 ├── scripts/                   # Generated scripts
 ├── shorts/                   # Generated clips
@@ -614,6 +592,7 @@ Cogitator/
 ├── transcripts/              # Generated transcripts
 ├── streams/                  # Downloaded videos
 ├── Context/                  # Game context files
+├── assembly/                 # Assembled videos
 ├── .cogitator/            # App data (OAuth, DB, API key)
 ├── .env.example             # Configuration template
 ├── requirements.txt         # Python dependencies
@@ -633,6 +612,7 @@ Cogitator/
 | `scripts/` | AI-generated scripts with TITLE |
 | `shorts/` | Extracted video clips |
 | `tts/` | TTS audio + SRT subtitles |
+| `assembly/` | Assembled videos with subtitles and BGM |
 
 ---
 
@@ -662,7 +642,6 @@ Cogitator/
 | **Edge TTS** | Microsoft cloud voice synthesis (free) | edge-tts |
 | **YouTube Data API** | Video metrics | API + OAuth |
 | **YouTube Data API** | Video downloading | yt-dlp |
-| **Telegram Bot** | Interactive control | Bot API |
 
 ### Speech & Audio
 
@@ -710,7 +689,6 @@ Cogitator supports secure API key storage via `keychain_manager.py`:
 These endpoints require API key authentication (sent via `X-Goog-Api-Key` header, not URL params):
 - `POST /api/config`
 - `POST /api/system/cleanup`
-- `POST /api/system/restart-listener`
 - `POST /api/context/import`
 - `POST /api/context/clear`
 - `POST /api/pipeline/download`
@@ -744,10 +722,6 @@ Path traversal protections are enforced on all file-related endpoints. Thread-sa
 - If `TTS_PROVIDER=kokoro`, first run downloads the model (~500MB) — may take a minute
 - If `TTS_PROVIDER=gemini`, ensure `TTS_VOICE` is valid and API key has quota
 - If `TTS_PROVIDER=edge`, ensure `edge-tts` is installed (`pip install edge-tts`)
-
-**Q: Telegram bot not responding**
-- Verify `TELEGRAM_BOT_TOKEN` in `.env`
-- Check bot was started with `/start`
 
 **Q: Metrics sync not working**
 - Verify YouTube OAuth is configured (`client_secret.json` in workspace)
@@ -809,7 +783,7 @@ pytest
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
 
-Current version: **2.2.0**
+Current version: **2.5.0**
 
 ---
 

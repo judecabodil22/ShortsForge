@@ -1,9 +1,11 @@
 # MemPalace Integration Implementation Plan
 
+> **Note**: This document describes the MemPalace integration plan. Some references may be stale due to code refactoring. The core concept remains valid.
+
 **Cogitator** — AI-Powered YouTube Shorts Pipeline  
 **Integration:** MemPalace (Local AI Memory System)  
 **Date:** 2026-04-09  
-**Status:** Plan (Not Yet Implemented)
+**Status:** Partially Implemented (context memory system in place)
 
 ---
 
@@ -21,7 +23,7 @@ Integrate **MemPalace** (local AI memory system with 96.6% LongMemEval recall) i
 ### Non-Goals
 - No hardcoded cross-game blocking (system dynamically uses whatever game is set)
 - MCP server not included in initial implementation
-- Does NOT replace existing `content_studio/context/*.md` system — complements it
+- ~~Does NOT replace existing `content_studio/context/*.md` system — complements it~~ (Content Studio has been consolidated into cogitator.py)
 
 ---
 
@@ -110,7 +112,7 @@ Video → Transcript → Context Extraction
 | File | Changes |
 |------|---------|
 | `workflows/cogitator.py` | Add MemPalace calls at 3 integration points |
-| `content_studio/context/*.md` | No changes — continues working as before |
+| ~~`content_studio/context/*.md`~~ | ~~No changes — continues working as before~~ (Content Studio consolidated) |
 
 ---
 
@@ -346,6 +348,8 @@ else:
 
 ### File: `game_data/mempalace/config.py`
 
+> **Note**: This file may not exist in the current codebase. The configuration is now handled via environment variables.
+
 ```python
 MEMPALACE_CONFIG = {
     'palace_path': '/home/alph4r1us/Cogitator/memory',
@@ -376,8 +380,8 @@ MEMPALACE_CONFIG = {
 
 | Aspect | Markdown System | MemPalace |
 |--------|-----------------|-----------|
-| **Storage** | `content_studio/context/*.md` | `memory/` (ChromaDB + SQLite) |
-| **Manual Edit** | ✅ Yes — edit directly | ⚠️ Not directly — via API |
+| **Storage** | `Context/` directory | `memory/` (ChromaDB + SQLite) |
+| **Manual Edit** | Yes — edit directly | Not directly — via API |
 | **Auto-Update** | From transcript extraction | From transcript mining |
 | **Query Method** | File-based loading | Semantic search |
 | **Persistence** | Files persist, but not semantic | Semantic, searchable |
@@ -514,4 +518,4 @@ mempalace split <dir>                      # Split into sessions
 
 **Document Version:** 1.0  
 **Created:** 2026-04-09  
-**Status:** Ready for Review
+**Status:** Partially Implemented (context memory system in place)

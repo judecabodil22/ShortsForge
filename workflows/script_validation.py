@@ -417,6 +417,13 @@ def select_best_script(candidates, context):
         (best_script_text, best_metadata, scores) tuple
     """
     scored = []
+    
+    try:
+        from workflows.learning_engine import retention_adjustment, load_retention_history
+        load_retention_history()
+        has_retention = True
+    except Exception:
+        has_retention = False
 
     for script_text, metadata in candidates:
         fact_check = validate_script_factuality(script_text, context)
@@ -428,17 +435,30 @@ def select_best_script(candidates, context):
         target_words = 225
         length_score = 1.0 - min(1.0, abs(word_count - target_words) / target_words)
 
-        # Penalize style violations
         style_penalty = len(fact_check.get("style_violations", [])) * 0.05
         style_score = max(0.0, 1.0 - style_penalty)
 
+        retention_bonus = 0.0
+        if has_retention:
+            try:
+                features = {
+                    "word_count": word_count,
+                    "has_hook": hook_score > 0.5,
+                    "has_dialogue": "dialogue" in script_text.lower(),
+                    "duration": 45,
+                }
+                retention_bonus = retention_adjustment(features) / 15.0
+            except Exception:
+                pass
+
         combined = (
-            fact_check["score"] * 0.30 +
-            engagement["overall"] * 0.15 +
-            hook_score * 0.20 +
+            fact_check["score"] * 0.28 +
+            engagement["overall"] * 0.14 +
+            hook_score * 0.18 +
             arc_conf * 0.10 +
             length_score * 0.10 +
-            style_score * 0.15
+            style_score * 0.14 +
+            retention_bonus * 0.06
         )
 
         scored.append({
@@ -451,6 +471,7 @@ def select_best_script(candidates, context):
             "story_arc_confidence": round(arc_conf, 3),
             "length_score": round(length_score, 3),
             "style_score": round(style_score, 3),
+            "retention_bonus": round(retention_bonus, 3),
             "combined": round(combined, 3),
         })
 
@@ -930,7 +951,7 @@ def get_learned_constraints(game_title="", content_type="pipeline"):
     Generate learned constraints to inject into prompts.
 
     Uses both FAILURE data (negative constraints - what to avoid)
-    and SUCCESS data (positive emphasis - what to replicate).
+    and SUCCESS data from YouTube performance (positive emphasis - what to replicate).
     """
     analysis = analyze_recent_failures(window_hours=168)
 
@@ -955,35 +976,96 @@ def get_learned_constraints(game_title="", content_type="pipeline"):
                 )
 
     recommended_temp = None
-    effective = get_effective_prompts()
-    if effective.get("successful_samples", 0) >= 3:
-        temps = effective.get("effective_temperatures", {})
-        if temps:
-            best_temp = max(temps.keys(), key=lambda k: temps[k])
-            recommended_temp = float(best_temp.replace("temp_", ""))
-            if recommended_temp:
+    try:
+        from workflows.performance_database import get_successful_scripts, get_learnings, get_db
+        successful = get_successful_scripts(limit=20)
+        
+        if game_title:
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT s.*, m.views, m.engagement_ratio, m.performance_score
+                FROM scripts s
+                JOIN videos v ON v.script_id = s.id
+                JOIN metrics m ON m.video_id = v.id
+                WHERE m.performance_score > 0 AND s.game_title = ?
+                ORDER BY m.performance_score DESC
+                LIMIT 10
+            """, (game_title,))
+            game_successful = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            if game_successful:
+                successful = game_successful
+        
+        if successful:
+            avg_perf = sum(s.get("performance_score", 50) for s in successful) / len(successful)
+            avg_views = sum(s.get("views", 0) for s in successful) / len(successful)
+            avg_engagement = sum(s.get("engagement_ratio", 0) for s in successful) / len(successful)
+            
+            if avg_perf > 60:
                 positive_emphasis.append(
-                    f"Use temperature around {recommended_temp} (proven effective in {temps[best_temp]} high-quality scripts)"
+                    f"High-performing scripts average {avg_perf:.0f} performance score with {avg_views:.0f} views"
                 )
-
-        avg_wc = effective.get("avg_word_count", 0)
-        wc_samples = effective.get("word_count_samples", 0)
-        if avg_wc and wc_samples >= 3:
-            positive_emphasis.append(
-                f"Target word count: {int(avg_wc)} words (average of {wc_samples} successful scripts)"
-            )
-
-        avg_hook = effective.get("avg_hook_strength", 0)
-        if avg_hook >= 0.5:
-            positive_emphasis.append(
-                f"Use strong hooks - successful scripts averaged {avg_hook:.1%} hook strength"
-            )
+            
+            if avg_engagement > 0.02:
+                positive_emphasis.append(
+                    f"Target engagement ratio: {avg_engagement:.1%} (proven effective)"
+                )
+            
+            content_types = {}
+            for s in successful:
+                ct = s.get("content_type", "unknown")
+                if ct not in content_types:
+                    content_types[ct] = []
+                content_types[ct].append(s.get("performance_score", 50))
+            
+            if content_types:
+                best_ct = max(content_types.keys(), key=lambda k: sum(content_types[k]) / len(content_types[k]))
+                best_avg = sum(content_types[best_ct]) / len(content_types[best_ct])
+                positive_emphasis.append(
+                    f"Best-performing content type: {best_ct} (avg score: {best_avg:.0f})"
+                )
+            
+            wc_scores = [(s.get("word_count", 0), s.get("performance_score", 50)) for s in successful if s.get("word_count")]
+            if wc_scores:
+                wc_scores.sort(key=lambda x: x[0])
+                optimal_range = (wc_scores[len(wc_scores)//4][0], wc_scores[3*len(wc_scores)//4][0])
+                positive_emphasis.append(
+                    f"Optimal word count range: {optimal_range[0]}-{optimal_range[1]} words"
+                )
+        
+        learnings = get_learnings()
+        for l in learnings:
+            if l.get("feature_name") == "content_type" and l.get("impact_score", 0) > 60:
+                positive_emphasis.append(
+                    f"Proven content type: {l['feature_value']} (impact: {l['impact_score']:.0f})"
+                )
+                break
+        
+        effective = get_effective_prompts()
+        if effective.get("successful_samples", 0) >= 3:
+            temps = effective.get("effective_temperatures", {})
+            if temps:
+                best_temp = max(temps.keys(), key=lambda k: temps[k])
+                recommended_temp = float(best_temp.replace("temp_", ""))
+                if recommended_temp:
+                    positive_emphasis.append(
+                        f"Use temperature around {recommended_temp} (proven effective in {temps[best_temp]} high-quality scripts)"
+                    )
+            
+            avg_hook = effective.get("avg_hook_strength", 0)
+            if avg_hook >= 0.5:
+                positive_emphasis.append(
+                    f"Use strong hooks - successful scripts averaged {avg_hook:.1%} hook strength"
+                )
+    except Exception:
+        pass
 
     return {
         "negative_constraints": negative_constraints,
         "positive_emphasis": positive_emphasis,
         "recommended_temp": recommended_temp,
-        "source": "Based on analysis of last 7 days of generation data",
+        "source": "Based on YouTube performance and generation data",
     }
 
 

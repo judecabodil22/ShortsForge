@@ -16,7 +16,7 @@ Thank you for your interest in contributing!
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - ffmpeg
 - yt-dlp
 - faster-whisper
@@ -39,9 +39,6 @@ source venv/bin/activate
 # Run the pipeline
 python workflows/cogitator.py run
 
-# Start Telegram listener
-python workflows/cogitator.py listen
-
 # Run onboarding
 python workflows/cogitator.py onboard
 ```
@@ -59,9 +56,11 @@ python workflows/cogitator.py onboard
 Cogitator/
 ├── workflows/
 │   ├── cogitator.py      # Main entry point
-│   └── update_manager.py  # Auto-update system
-├── content_studio/         # Content Studio feature
-├── docs/                  # Documentation
+│   ├── pipeline/         # Pipeline phases
+│   └── core/             # Core modules
+├── backend/              # FastAPI web backend
+├── frontend/             # React web interface
+├── docs/                 # Documentation
 └── ...
 ```
 
