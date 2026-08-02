@@ -585,63 +585,168 @@ def load_retention_history(max_samples: int = 100):
 
 
 def retention_adjustment(features: Dict) -> float:
-    """Calculate score adjustment based on historical retention patterns (0-15 bonus)."""
+    """Calculate score adjustment based historical retention patterns (0-15 bonus).
+    
+    Uses historical data to adjust scores based on what actually performed well.
+    """
     if not _retention_history:
         return 0.0
-    word_count = features.get("word_count", 225)
-    has_hook = features.get("has_hook", features.get("has_dialogue", False))
+    
+    # Extract key features for matching
+    has_dialogue = features.get("has_dialogue", False)
+    has_excitement = features.get("has_excitement", False)
+    has_laughter = features.get("has_laughter", False)
     duration = features.get("duration", 45)
-
-    similar = [
-        r for r in _retention_history
-        if abs(r["word_count"] - word_count) < 50
-        and r["has_hook"] == has_hook
-    ]
+    volume_spike = features.get("volume_spike", False)
+    
+    # Find similar clips in history
+    similar = []
+    for r in _retention_history:
+        # Match on key features
+        if r.get("has_dialogue") == has_dialogue:
+            if r.get("has_excitement") == has_excitement:
+                if r.get("has_laughter") == has_laughter:
+                    # Duration within 15 seconds
+                    if abs(r.get("duration", 45) - duration) < 15:
+                        similar.append(r)
+    
     if not similar:
         return 0.0
-    avg_perf = sum(r["performance"] for r in similar) / len(similar)
-    return min(15.0, (avg_perf - 50) * 0.3)
+    
+    # Calculate average performance of similar clips
+    avg_perf = sum(r.get("performance", 50) for r in similar) / len(similar)
+    
+    # Return adjustment: positive if above average, negative if below
+    return min(15.0, max(-10.0, (avg_perf - 50) * 0.3))
 
 
 def calculate_virality_score(
     clip_features: Dict,
     learned_params: Dict = None
 ) -> float:
-    """Calculate virality score for a clip based on features and learnings."""
-    base_score = 50.0
+    """Calculate virality score for a clip based on what makes Shorts successful.
     
+    Scoring categories (0-100 total):
+    - Hook (0-25): Does it grab attention immediately?
+    - Engagement (0-25): Does it keep attention?
+    - Story (0-25): Does it have narrative structure?
+    - Shareability (0-25): Would someone share it?
+    """
+    
+    # ─── HOOK SCORE (0-25) ────────────────────────────────────────────────
+    # A good hook grabs attention in the first 1-3 seconds
+    hook_score = 0.0
+    
+    # Volume spike = sudden loud moment = attention grabber
     if clip_features.get('volume_spike', False):
-        base_score += 15
+        hook_score += 10
     
+    # Dialogue immediately = content starts right away
     if clip_features.get('has_dialogue', False):
-        base_score += 10
+        hook_score += 8
     
+    # High scene score = interesting visuals
+    scene_score = clip_features.get('scene_score', 0)
+    if scene_score > 70:
+        hook_score += 7
+    elif scene_score > 50:
+        hook_score += 4
+    
+    hook_score = min(25, hook_score)
+    
+    # ─── ENGAGEMENT SCORE (0-25) ──────────────────────────────────────────
+    # Does it keep attention throughout?
+    engagement_score = 0.0
+    
+    # Audio transitions = cuts, music changes, sound effects = dynamic
+    audio_transitions = clip_features.get('audio_transitions', 0)
+    if audio_transitions >= 5:
+        engagement_score += 10
+    elif audio_transitions >= 3:
+        engagement_score += 7
+    elif audio_transitions >= 1:
+        engagement_score += 3
+    
+    # Volume variation = dynamic audio (not flat/boring)
+    volume_peak = clip_features.get('volume_peak', -30)
+    volume_rms = clip_features.get('volume_rms', -30)
+    volume_range = volume_peak - volume_rms
+    if volume_range > 20:  # Big dynamic range
+        engagement_score += 8
+    elif volume_range > 10:
+        engagement_score += 4
+    
+    # Too much silence = boring
+    if clip_features.get('has_silence', False):
+        engagement_score -= 5
+    
+    # Good density = lots happening per second
+    density = clip_features.get('density', 0)
+    if density > 2.0:
+        engagement_score += 7
+    elif density > 1.5:
+        engagement_score += 4
+    elif density > 1.0:
+        engagement_score += 2
+    
+    engagement_score = max(0, min(25, engagement_score))
+    
+    # ─── STORY SCORE (0-25) ───────────────────────────────────────────────
+    # Does it have narrative structure?
+    story_score = 0.0
+    
+    # Dialogue = story being told
+    if clip_features.get('has_dialogue', False):
+        story_score += 10
+    
+    # Excitement = tension/stakes
     if clip_features.get('has_excitement', False):
-        base_score += 12
+        story_score += 10
     
+    # Optimal duration for story arc
     duration = clip_features.get('duration', 45)
     if 30 <= duration <= 60:
-        base_score += 8
-    elif 20 <= duration < 30 or 60 < duration <= 90:
-        base_score += 4
+        story_score += 5  # Perfect for mini-story
+    elif 20 <= duration < 30:
+        story_score += 3  # Quick hit
+    elif 60 < duration <= 90:
+        story_score += 2  # Extended but ok
+    else:
+        story_score -= 2  # Too short or too long
     
-    if clip_features.get('scene_transition_count', 0) >= 3:
-        base_score += 5
+    story_score = max(0, min(25, story_score))
     
+    # ─── SHAREABILITY SCORE (0-25) ────────────────────────────────────────
+    # Would someone share this?
+    share_score = 0.0
+    
+    # Laughter = humorous = shareable
     if clip_features.get('has_laughter', False):
-        base_score += 10
+        share_score += 12
     
-    if clip_features.get('has_silence', False):
-        base_score += 3
+    # Excitement = exciting = shareable
+    if clip_features.get('has_excitement', False):
+        share_score += 8
     
+    # Volume spike = surprising moment = shareable
+    if clip_features.get('volume_spike', False):
+        share_score += 5
+    
+    share_score = min(25, share_score)
+    
+    # ─── TOTAL SCORE ──────────────────────────────────────────────────────
+    total_score = hook_score + engagement_score + story_score + share_score
+    
+    # Apply learned parameters if available
     if learned_params:
         optimal_range = learned_params.get('optimal_duration_range', (30, 60))
         if optimal_range[0] <= duration <= optimal_range[1]:
-            base_score += 10
-
-    base_score += retention_adjustment(clip_features)
+            total_score *= 1.1  # 10% bonus for optimal duration
     
-    return min(base_score, 100.0)
+    # Apply retention adjustment
+    total_score += retention_adjustment(clip_features)
+    
+    return min(100.0, max(0.0, total_score))
 
 
 def should_regenerate(script_features: Dict, learnings: List[Dict], baseline: Dict) -> Tuple[bool, str]:

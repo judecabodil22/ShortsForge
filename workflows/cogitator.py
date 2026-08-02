@@ -4907,16 +4907,26 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                     # Store clip in performance database for learning
                     if PERFORMANCE_DB_AVAILABLE and LEARNING_ENGINE_AVAILABLE:
                         try:
+                            # Use audio analysis features if available, fallback to text-based
                             clip_features = {
                                 'duration': dur,
-                                'has_dialogue': '?' in sc.get('text', ''),
-                                'has_exclamation': '!' in sc.get('text', ''),
-                                'has_numbers': bool(sc.get('text', '').replace('.','').isdigit()),
+                                # Audio analysis features (from enhance_scene_selection)
+                                'has_dialogue': sc.get('has_dialogue', False),
+                                'has_excitement': sc.get('has_excitement', False),
+                                'has_laughter': sc.get('has_laughter', False),
+                                'volume_spike': sc.get('volume_spike', False),
+                                'has_silence': sc.get('has_silence', False),
+                                'audio_transitions': sc.get('audio_transitions', 0),
+                                'volume_peak': sc.get('volume_peak', 0.0),
+                                'volume_rms': sc.get('volume_rms', 0.0),
+                                # Scene features
                                 'density': sc.get('density', 0),
-                                'drama_score': sc.get('drama_score', 0),
-                                'word_count': sc.get('words', 0),
-                                'voice': 'selected_in_tts_phase',
-                                'style': 'selected_in_tts_phase',
+                                'scene_score': sc.get('score', 0),
+                                'audio_virality_score': sc.get('audio_virality_score', 0),
+                                # Text features (for context)
+                                'text_preview': sc.get('text', '')[:100],
+                                'has_question': '?' in sc.get('text', ''),
+                                'has_exclamation': '!' in sc.get('text', ''),
                             }
                             virality = calculate_virality_score(clip_features, learned_params=_LEARNING_OPTIMIZED_PARAMS)
                             if script_id_map:

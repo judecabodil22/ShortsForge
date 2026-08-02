@@ -293,20 +293,66 @@ def get_best_clips(clip_paths: list, limit: int = 1) -> list:
     conn = get_db()
     cursor = conn.cursor()
     
-    # Extract clip filenames from paths
-    clip_scores = {}
+    # Group clips by game name and extract clip numbers
+    game_clips = {}  # {game_name: [(clip_path, clip_number), ...]}
     for path in clip_paths:
         filename = os.path.basename(path)
-        # Try to match by filename pattern (e.g., "video-Short001_0.mp4")
-        cursor.execute("""
-            SELECT virality_score FROM clips 
-            WHERE source_file LIKE ? OR id LIKE ?
-            ORDER BY virality_score DESC
-            LIMIT 1
-        """, (f"%{filename}%", f"%{filename}%"))
         
-        row = cursor.fetchone()
-        clip_scores[path] = row[0] if row else 0.0
+        # Extract game name and clip number from filename pattern: {game_name}-Short{number}_{clip_number}.mp4
+        match = re.match(r'^(.+)-Short(\d+)_(\d+)\.mp4$', filename)
+        if match:
+            game_name = match.group(1)
+            short_num = match.group(2)
+            clip_num = int(match.group(3))
+            
+            if game_name not in game_clips:
+                game_clips[game_name] = []
+            game_clips[game_name].append((path, clip_num))
+        else:
+            # Fallback: treat as single clip with number 0
+            if 'unknown' not in game_clips:
+                game_clips['unknown'] = []
+            game_clips['unknown'].append((path, 0))
+    
+    # For each game, get all clips from database and match by position
+    clip_scores = {}
+    
+    for game_name, clips in game_clips.items():
+        if game_name == 'unknown':
+            # Fallback for unknown clips
+            for path, _ in clips:
+                clip_scores[path] = 0.0
+            continue
+        
+        # Get all clips for this game, sorted by virality score
+        cursor.execute("""
+            SELECT virality_score, duration 
+            FROM clips 
+            WHERE source_file LIKE ?
+            ORDER BY virality_score DESC, duration ASC
+        """, (f"%{game_name}%",))
+        
+        db_clips = cursor.fetchall()
+        
+        if not db_clips:
+            # No clips in database, assign 0
+            for path, _ in clips:
+                clip_scores[path] = 0.0
+            continue
+        
+        # Sort the clip paths by clip number (ascending)
+        clips_sorted_by_num = sorted(clips, key=lambda x: x[1])
+        
+        # Match database clips to file clips by position
+        # Database clips are sorted by score (highest first)
+        # File clips are sorted by clip number (1, 2, 3, ...)
+        for i, (path, clip_num) in enumerate(clips_sorted_by_num):
+            if i < len(db_clips):
+                # This clip gets the score of the i-th best database clip
+                clip_scores[path] = db_clips[i][0]
+            else:
+                # More file clips than database clips
+                clip_scores[path] = 0.0
     
     conn.close()
     
