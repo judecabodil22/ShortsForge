@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 
 ---
 
+## 2.5.1 (2026-08-02)
+
+### Bug Fixes
+
+- **phase_assemble.py:417** — Fixed shifted_srt=None: SRT path was overwritten to None causing ffmpeg concat to fail
+- **phase_assemble.py:432** — Fixed apostrophes in file paths causing ffmpeg concat to fail (escaped with single quotes)
+- **phase_assemble.py:390** — Fixed fontsdir check using `os.path.exists` instead of `os.path.isdir` (returned True for files)
+- **phase_assemble.py:426** — Fixed force_style single quotes not escaped for ffmpeg
+- **backend/main.py:92** — Fixed `sanitize_input` stripping ALL `/` characters, breaking URLs entirely
+- **phase_tts.py:315, phase_tts_kokoro.py:234** — Fixed `compute_type="int8"` incompatible with CUDA (changed to "float16")
+- **phase_tts.py:130-139** — Fixed Edge TTS outputting MP3 by default (now converts to WAV via ffmpeg)
+- **phase_tts.py:228, phase_tts_kokoro.py:151** — Fixed `set_progress(5, ...)` should be `set_progress(6, ...)` for TTS phase
+- **phase_tts.py:285, phase_tts_kokoro.py:195** — Fixed `import performance_database as pdb` → `import workflows.performance_database as pdb`
+- **phase_tts_kokoro.py:54-65** — Fixed Kokoro pipeline singleton changed to dict keyed by language code
+- **context_extractor.py:103** — Fixed missing `[:50000]` truncation in transcript reading
+- **frontend/LearningDashboard.tsx:106** — Fixed recharts `PieChart` used as icon instead of lucide-react icon
+- **backend/main.py:1166-1177** — Fixed A/B test endpoints using query params instead of request body, added auth
+- **frontend/Settings.tsx:95-97** — Fixed backend validation errors returned as HTTP 200 with `{"status":"error"}` in body
+- **hardware_detect.py** — Fixed Intel QSV typo: `'- look_ahead'` → `'-look_ahead'`
+- **context_extractor.py:19** — Removed dead import `merge_context_dicts`
+
+### Documentation
+
+- Removed IMPROVEMENT_PLAN.md
+- Updated SECURITY.md: removed Telegram references, updated supported versions
+- Updated docs/CONFIGURATION.md: replaced Telegram commands with CLI commands
+
+---
+
 ## 2.5.0 (2026-08-02)
 
 ### Bug Fixes

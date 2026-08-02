@@ -783,7 +783,7 @@ pytest
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
 
-Current version: **2.5.0**
+Current version: **2.5.1**
 
 ---
 
