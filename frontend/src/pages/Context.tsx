@@ -259,11 +259,13 @@ export default function Context() {
             className="cyber-input w-56"
           >
             <option value="">Select Franchise</option>
-            {((games?.games || []) as GameEntry[]).map((game) => (
-              <option key={game.name} value={game.name}>
-                {game.is_series ? '📁 ' : ''}{game.display_name}
-              </option>
-            ))}
+            {((games?.games || []) as GameEntry[])
+              .filter((game) => game.is_series)
+              .map((game) => (
+                <option key={game.name} value={game.name}>
+                  {game.display_name}
+                </option>
+              ))}
           </select>
           
           {selectedFranchise && (

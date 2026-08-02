@@ -11,6 +11,10 @@ import PipelineProgress from '@/components/pipeline-progress'
 import { stagger, slideLeft, springGentle } from '@/lib/animations'
 import { useWebSocket } from '@/lib/websocket'
 
+function formatContentType(name: string): string {
+  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
 export default function Dashboard() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -330,7 +334,7 @@ export default function Dashboard() {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: idx * 0.08, ...springGentle }}
                   >
-                    <div className="w-24 text-sm text-gray-400 capitalize">{type}</div>
+                    <div className="w-24 text-sm text-gray-400">{formatContentType(type as string)}</div>
                     <div className="flex-1 h-3 bg-40k-dark rounded-full overflow-hidden">
                       <motion.div
                         initial={{ width: 0 }}
@@ -357,7 +361,7 @@ export default function Dashboard() {
                 transition={{ delay: 0.3 }}
               >
                 <p className="text-sm text-gray-400">
-                  Next selected type: <span className="text-40k-gold font-medium capitalize">{weights.selected}</span>
+                  Next selected type: <span className="text-40k-gold font-medium">{formatContentType(weights.selected)}</span>
                 </p>
               </motion.div>
             )}

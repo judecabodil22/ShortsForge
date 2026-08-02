@@ -634,11 +634,13 @@ export default function Graph() {
           >
             <option value="">Select Franchise</option>
             <option value="__all__">🌐 All Games</option>
-            {((games?.games || []) as any[]).map((game: any) => (
-              <option key={game.name} value={game.name}>
-                {game.is_series ? '📁 ' : ''}{game.display_name}
-              </option>
-            ))}
+            {((games?.games || []) as any[])
+              .filter((game: any) => game.is_series)
+              .map((game: any) => (
+                <option key={game.name} value={game.name}>
+                  {game.display_name}
+                </option>
+              ))}
           </select>
           <button onClick={() => refetch()} className="cyber-button">
             <RefreshCw className="w-4 h-4" />

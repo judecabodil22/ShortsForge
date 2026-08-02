@@ -54,6 +54,66 @@ MEMPALACE_GAME_KEYWORDS = {
 
 MEMPALACE_CHROMA_DB = os.path.expanduser("~/.mempalace/palace/chroma.sqlite3")
 
+# Deleted entities tracking
+DELETED_ENTITIES_FILE = os.path.join(os.path.expanduser("~/Cogitator"), "Context", "deleted_entities.json")
+
+
+def _load_deleted_entities() -> Dict[str, List[str]]:
+    """Load the list of deleted entities per game."""
+    if not os.path.exists(DELETED_ENTITIES_FILE):
+        return {}
+    try:
+        with open(DELETED_ENTITIES_FILE, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _is_entity_deleted(game_key: str, item_id: str = None, item_name: str = None) -> bool:
+    """Check if an entity has been manually deleted."""
+    deleted = _load_deleted_entities()
+    if game_key not in deleted:
+        return False
+    for entry in deleted[game_key]:
+        parts = entry.split("|", 1)
+        if len(parts) == 2:
+            eid, ename = parts
+            if item_id and eid == item_id:
+                return True
+            if item_name and ename.lower() == item_name.lower():
+                return True
+    return False
+
+
+def _filter_deleted_from_context(game_key: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove deleted entities from context dict."""
+    deleted = _load_deleted_entities()
+    if game_key not in deleted:
+        return context
+    
+    deleted_entries = deleted[game_key]
+    deleted_ids = set()
+    deleted_names = set()
+    for entry in deleted_entries:
+        parts = entry.split("|", 1)
+        if len(parts) == 2:
+            deleted_ids.add(parts[0])
+            deleted_names.add(parts[1].lower())
+    
+    def should_keep(item_list: List[Dict], name_key: str = "name", id_key: str = "id") -> List[Dict]:
+        return [
+            item for item in item_list
+            if item.get(id_key) not in deleted_ids
+            and item.get(name_key, "").lower() not in deleted_names
+        ]
+    
+    return {
+        "characters": should_keep(context.get("characters", [])),
+        "locations": should_keep(context.get("locations", [])),
+        "key_terms": should_keep(context.get("key_terms", [])),
+        "relationships": should_keep(context.get("relationships", [])),
+    }
+
 
 # MemPalace integration
 def _get_mempalace_manager():
@@ -394,8 +454,15 @@ def merge_context_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[s
 
 
 def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool = False):
-    """Save verified context for a game and sync to MemPalace."""
+    """Save verified context for a game and sync to MemPalace.
+    
+    Filters out manually deleted entities so they don't reappear after pipeline runs.
+    """
     game_key = game_title.lower().replace(" ", "_").strip()
+    
+    # Filter out deleted entities from the context being saved
+    context = _filter_deleted_from_context(game_key, context)
+    
     with _context_file_lock:
         all_context = {}
         

@@ -16,6 +16,10 @@ import {
 
 const EMOTION_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE']
 
+function formatContentType(name: string): string {
+  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
 export default function LearningDashboard() {
   const { data: dashboard } = useQuery({
     queryKey: ['learning-dashboard'],
@@ -118,7 +122,7 @@ export default function LearningDashboard() {
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="value"
-                    label={({ name, percent }: any) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                    label={({ name, percent }: any) => `${formatContentType(name)}: ${(percent * 100).toFixed(0)}%`}
                   >
                     {Object.entries(dashboard.content_effectiveness).map(([_, __], i) => (
                       <Cell key={`cell-${i}`} fill={EMOTION_COLORS[i % EMOTION_COLORS.length]} />
@@ -175,7 +179,7 @@ export default function LearningDashboard() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-gray-400">No active A/B tests. Create one from the Scripts page!</p>
+              <p className="text-sm text-gray-400">No active A/B tests. The system automatically creates tests as you run the pipeline and collect performance data.</p>
             )}
           </div>
         </Card>

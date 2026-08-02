@@ -17,6 +17,57 @@ CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
 VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")
 HISTORY_DIR = os.path.join(CONTEXT_DIR, "history")
 SCHEMA_FILE = os.path.join(CONTEXT_DIR, "schema.json")
+DELETED_ENTITIES_FILE = os.path.join(CONTEXT_DIR, "deleted_entities.json")
+
+
+def _load_deleted_entities() -> Dict[str, List[str]]:
+    """Load the list of deleted entities per game."""
+    if not os.path.exists(DELETED_ENTITIES_FILE):
+        return {}
+    try:
+        with open(DELETED_ENTITIES_FILE, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_deleted_entities(data: Dict[str, List[str]]) -> None:
+    """Save the list of deleted entities per game."""
+    os.makedirs(CONTEXT_DIR, exist_ok=True)
+    with open(DELETED_ENTITIES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _add_deleted_entity(game_key: str, item_id: str, item_name: str) -> None:
+    """Record a deleted entity so it won't be re-added by pipeline."""
+    deleted = _load_deleted_entities()
+    if game_key not in deleted:
+        deleted[game_key] = []
+    entry = f"{item_id}|{item_name}"
+    if entry not in deleted[game_key]:
+        deleted[game_key].append(entry)
+    _save_deleted_entities(deleted)
+
+
+def _is_entity_deleted(game_key: str, item_id: str = None, item_name: str = None) -> bool:
+    """Check if an entity has been manually deleted."""
+    deleted = _load_deleted_entities()
+    if game_key not in deleted:
+        return False
+    for entry in deleted[game_key]:
+        parts = entry.split("|", 1)
+        if len(parts) == 2:
+            eid, ename = parts
+            if item_id and eid == item_id:
+                return True
+            if item_name and ename.lower() == item_name.lower():
+                return True
+    return False
+
+
+def _filter_deleted_items(game_key: str, items: List[ContextItem]) -> List[ContextItem]:
+    """Remove items that have been manually deleted."""
+    return [item for item in items if not _is_entity_deleted(game_key, item_id=item.id, item_name=item.name)]
 
 
 class ContextItem:
@@ -384,6 +435,9 @@ class ContextManagerV2:
             if i.id != item_id
         ]
         
+        # Record deletion so pipeline won't re-add this entity
+        _add_deleted_entity(game_key, item.id, item.name)
+        
         history = ContextHistory(game_key)
         history.add_entry(item_id, "delete", before=before)
         
@@ -550,7 +604,8 @@ def list_games() -> List[str]:
     return get_context_manager().get_games()
 
 def get_items(game_key: str, item_type: str = None) -> List[ContextItem]:
-    return get_context_manager().get_context_items(game_key, item_type)
+    items = get_context_manager().get_context_items(game_key, item_type)
+    return _filter_deleted_items(game_key, items)
 
 def create_item(game_key: str, item_type: str, name: str, **kwargs) -> ContextItem:
     return get_context_manager().create_item(game_key, item_type, name, **kwargs)
@@ -599,9 +654,34 @@ def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool 
     """Save verified context for a game (v1-compatible).
     
     Stores raw dict format for backward compatibility with v1 consumers.
+    Filters out manually deleted entities so they don't reappear after pipeline runs.
     """
     cm = get_context_manager()
     game_key = game_title.lower().replace(" ", "_").strip()
+    
+    # Filter out deleted entities from the context being saved
+    deleted = _load_deleted_entities()
+    if game_key in deleted:
+        deleted_entries = deleted[game_key]
+        deleted_ids = set()
+        deleted_names = set()
+        for entry in deleted_entries:
+            parts = entry.split("|", 1)
+            if len(parts) == 2:
+                deleted_ids.add(parts[0])
+                deleted_names.add(parts[1].lower())
+        
+        def should_keep(item_list: List[Dict], name_key: str = "name", id_key: str = "id") -> List[Dict]:
+            return [
+                item for item in item_list
+                if item.get(id_key) not in deleted_ids
+                and item.get(name_key, "").lower() not in deleted_names
+            ]
+        
+        context["characters"] = should_keep(context.get("characters", []))
+        context["locations"] = should_keep(context.get("locations", []))
+        context["key_terms"] = should_keep(context.get("key_terms", []))
+        context["relationships"] = should_keep(context.get("relationships", []))
     
     if merge:
         cm.load_all_contexts()
