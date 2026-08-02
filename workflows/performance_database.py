@@ -276,6 +276,45 @@ def store_clip(
     return clip_id
 
 
+def get_best_clips(clip_paths: list, limit: int = 1) -> list:
+    """
+    Get the best clips from a list of file paths based on virality score.
+    
+    Args:
+        clip_paths: List of clip file paths (e.g., ['/path/to/shorts/video-Short001_0.mp4'])
+        limit: Number of top clips to return (default: 1)
+    
+    Returns:
+        List of clip paths sorted by virality score (highest first)
+    """
+    if not clip_paths:
+        return []
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Extract clip filenames from paths
+    clip_scores = {}
+    for path in clip_paths:
+        filename = os.path.basename(path)
+        # Try to match by filename pattern (e.g., "video-Short001_0.mp4")
+        cursor.execute("""
+            SELECT virality_score FROM clips 
+            WHERE source_file LIKE ? OR id LIKE ?
+            ORDER BY virality_score DESC
+            LIMIT 1
+        """, (f"%{filename}%", f"%{filename}%"))
+        
+        row = cursor.fetchone()
+        clip_scores[path] = row[0] if row else 0.0
+    
+    conn.close()
+    
+    # Sort by score (highest first) and return top N
+    sorted_clips = sorted(clip_paths, key=lambda x: clip_scores.get(x, 0), reverse=True)
+    return sorted_clips[:limit]
+
+
 def link_video(
     script_id: str,
     clip_id: str,
