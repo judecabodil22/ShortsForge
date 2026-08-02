@@ -88,8 +88,10 @@ def sanitize_input(text: str, max_length: int = 10000) -> str:
         return ""
     # Remove null bytes
     text = text.replace("\x00", "")
-    # Block path traversal
-    text = text.replace("..", "").replace("/", "").replace("\\", "")
+    # Block path traversal: remove ".." sequences and leading slashes
+    text = text.replace("..", "")
+    # Only strip leading slashes (path traversal), preserve internal slashes for URLs
+    text = text.lstrip("/").lstrip("\\")
     # Trim to max length
     if len(text) > max_length:
         text = text[:max_length]
@@ -1162,16 +1164,24 @@ async def get_learning_dashboard():
 
 
 @app.post("/api/learning/ab-test")
-async def create_ab_test_endpoint(test_name: str, test_type: str, variant_a: dict, variant_b: dict):
+async def create_ab_test_endpoint(request: Request, api_key: str = Depends(verify_api_key)):
     """Create a new A/B test."""
+    body = await request.json()
+    test_name = body.get("test_name", "")
+    test_type = body.get("test_type", "")
+    variant_a = body.get("variant_a", {})
+    variant_b = body.get("variant_b", {})
     from workflows.performance_database import create_ab_test
     test_id = create_ab_test(test_name, test_type, variant_a, variant_b)
     return {"test_id": test_id, "status": "created"}
 
 
 @app.post("/api/learning/ab-test/{test_id}/result")
-async def record_ab_test_result_endpoint(test_id: str, variant: str, performance_score: float):
+async def record_ab_test_result_endpoint(request: Request, test_id: str, api_key: str = Depends(verify_api_key)):
     """Record an A/B test result."""
+    body = await request.json()
+    variant = body.get("variant", "")
+    performance_score = body.get("performance_score", 0)
     from workflows.performance_database import record_ab_test_result
     record_ab_test_result(test_id, variant, performance_score)
     return {"status": "recorded"}

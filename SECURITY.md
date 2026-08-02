@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.4.x   | :white_check_mark: |
-| < 2.4   | :x:                |
+| 2.5.x   | :white_check_mark: |
+| < 2.5   | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -27,9 +27,9 @@ Please include the following information:
 Cogitator uses multiple API keys for its functionality:
 
 1. **Gemini API Key** - For AI script generation and TTS
-2. **YouTube API Key** - For fetching video metrics
-3. **YouTube OAuth** - For YouTube API access
-4. **Telegram Bot Token** - Optional, for Telegram bot functionality (legacy)
+2. **Groq API Key** - For highlight ranking and Gemini fallback (free tier)
+3. **YouTube API Key** - For fetching video metrics
+4. **YouTube OAuth** - For YouTube API access
 
 #### Secure Storage
 
@@ -78,6 +78,8 @@ The following endpoints require API key authentication:
 - `POST /api/context/import` - Import context
 - `POST /api/context/clear` - Clear context
 - `POST /api/pipeline/download` - Download from URL
+- `POST /api/learning/ab-test` - Create A/B test
+- `POST /api/learning/ab-test/{test_id}/result` - Record A/B test result
 
 ### Production Deployment
 
@@ -103,17 +105,10 @@ TTS_VOICE=your_preferred_voice
 Optional:
 ```
 GROQ_API_KEY=your_groq_key
-TELEGRAM_BOT_TOKEN=your_telegram_token
-TELEGRAM_CHAT_ID=your_chat_id
+TTS_PROVIDER=kokoro
+TTS_EMOTION=default
+TTS_SPEED=1.0
 ```
-
-### Telegram Security
-
-> **Note**: Telegram bot functionality is optional. The web interface provides full pipeline control.
-
-- Keep your `TELEGRAM_CHAT_ID` private
-- Don't share bot tokens publicly
-- Use bot with appropriate privacy settings
 
 ## Vulnerability Disclosure Timeline
 

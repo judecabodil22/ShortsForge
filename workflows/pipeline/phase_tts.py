@@ -131,9 +131,19 @@ def _tts_api_edge(text, out_wav, voice, style):
         import asyncio
         async def _do_tts():
             communicate = edge_tts.Communicate(tts_text, edge_voice)
-            await communicate.save(out_wav)
-        asyncio.run(_do_tts())
-        return os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
+            # Edge TTS outputs MP3 by default, save to temp mp3 then convert
+            tmp_mp3 = out_wav + ".tmp.mp3"
+            await communicate.save(tmp_mp3)
+            return tmp_mp3
+        tmp_mp3 = asyncio.run(_do_tts())
+        if not os.path.exists(tmp_mp3) or os.path.getsize(tmp_mp3) == 0:
+            return False
+        # Convert MP3 to WAV using ffmpeg
+        from workflows.cogitator import run as _run
+        r = _run(["ffmpeg", "-y", "-i", tmp_mp3, "-ar", "44100", "-ac", "2", out_wav], check=False)
+        if os.path.exists(tmp_mp3):
+            os.remove(tmp_mp3)
+        return r.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
     except Exception as e:
         c['log_error'](f"   Edge TTS failed: {e}")
         return False
@@ -215,7 +225,7 @@ def phase_tts(duration, num_hours, video=None):
     tts_generated = 0
     for i in range(1, num_hours + 1):
         pct = int(((i - 1) / num_hours) * 100)
-        c['set_progress'](5, pct, f"Generating TTS ({i}/{num_hours})")
+        c['set_progress'](6, pct, f"Generating TTS ({i}/{num_hours})")
 
         padded = f"{i:03d}"
         wav = os.path.join(c['TTS_DIR'], f"{video_basename}-TTS{padded}.wav")
@@ -272,7 +282,7 @@ def phase_tts(duration, num_hours, video=None):
                 if c['PERFORMANCE_DB_AVAILABLE']:
                     try:
                         clip_pattern = f"{video_basename}-Short{padded}.mp4"
-                        import performance_database as pdb
+                        import workflows.performance_database as pdb
                         conn = pdb.get_db()
                         try:
                             cur = conn.cursor()
@@ -312,7 +322,9 @@ def phase_tts(duration, num_hours, video=None):
                     from faster_whisper import WhisperModel
                     from workflows.pipeline.srt_utils import extract_words_from_segments, words_to_srt, save_words_json
                     whisper_device = get_whisper_device()
-                    model = WhisperModel(c['env']("WHISPER_MODEL", "medium"), device=whisper_device, compute_type="int8")
+                    # int8 works on CPU; CUDA requires float16 or auto
+                    whisper_compute = "float16" if whisper_device == "cuda" else "int8"
+                    model = WhisperModel(c['env']("WHISPER_MODEL", "medium"), device=whisper_device, compute_type=whisper_compute)
                     segments, _ = model.transcribe(wav, language="en", vad_filter=True, word_timestamps=True)
 
                     all_words = extract_words_from_segments(segments)

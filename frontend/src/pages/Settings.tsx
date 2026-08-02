@@ -92,7 +92,11 @@ export default function Settings() {
 
   const saveMutation = useMutation({
     mutationFn: (data: typeof formData) => updateConfig(data),
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      if (data?.status === 'error') {
+        toast('error', `Validation errors: ${data.errors?.join(', ')}`)
+        return
+      }
       queryClient.invalidateQueries({ queryKey: ['config'] })
       toast('success', 'Configuration saved successfully!')
     },

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Brain, TrendingUp, BarChart3, TestTube, CheckCircle, Clock } from 'lucide-react'
+import { Brain, TrendingUp, BarChart3, TestTube, CheckCircle, Clock, PieChart as PieChartIcon } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { getLearningDashboard, getActiveABTests } from '@/lib/api'
@@ -103,7 +103,7 @@ export default function LearningDashboard() {
         className="mb-6"
       >
         <Card accent="crimson" notch>
-          <SectionHeader title="Content Type Effectiveness" icon={<PieChart className="w-4 h-4" />} terminal />
+          <SectionHeader title="Content Type Effectiveness" icon={<PieChartIcon className="w-4 h-4" />} terminal />
           <div className="h-64 mt-4">
             {dashboard?.content_effectiveness && Object.keys(dashboard.content_effectiveness).length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">

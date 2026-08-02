@@ -51,18 +51,17 @@ def _normalize_voice_name(name: str) -> str:
     return KOKORO_DEFAULT_VOICE
 
 
-_pipeline: Optional['KPipeline'] = None
+_pipelines: dict = {}
 
 def _get_pipeline(voice: str = KOKORO_DEFAULT_VOICE):
-    global _pipeline
-    if _pipeline is None:
-        if not KOKORO_AVAILABLE:
-            raise ImportError("kokoro package not installed. Run: pip install kokoro soundfile")
-        lang = voice[0] if len(voice) > 0 else "a"
-        if lang not in ("a", "b"):
-            lang = "a"
-        _pipeline = KPipeline(lang_code=lang)
-    return _pipeline
+    if not KOKORO_AVAILABLE:
+        raise ImportError("kokoro package not installed. Run: pip install kokoro soundfile")
+    lang = voice[0] if len(voice) > 0 else "a"
+    if lang not in ("a", "b"):
+        lang = "a"
+    if lang not in _pipelines:
+        _pipelines[lang] = KPipeline(lang_code=lang)
+    return _pipelines[lang]
 
 
 def generate_tts(text: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str = None, speed: float = 1.0) -> Optional[bytes]:
@@ -149,7 +148,7 @@ def phase_tts_kokoro(duration, num_hours, video=None):
     tts_generated = 0
     for i in range(1, num_hours + 1):
         pct = int(((i - 1) / num_hours) * 100)
-        set_progress(5, pct, f"Generating TTS ({i}/{num_hours})")
+        set_progress(6, pct, f"Generating TTS ({i}/{num_hours})")
 
         padded = f"{i:03d}"
         wav = os.path.join(TTS_DIR, f"{video_basename}-TTS{padded}.wav")
@@ -192,7 +191,7 @@ def phase_tts_kokoro(duration, num_hours, video=None):
                 if PERFORMANCE_DB_AVAILABLE:
                     try:
                         clip_pattern = f"{video_basename}-Short{padded}.mp4"
-                        import performance_database as pdb
+                        import workflows.performance_database as pdb
                         conn = pdb.get_db()
                         try:
                             cur = conn.cursor()
@@ -231,7 +230,8 @@ def phase_tts_kokoro(duration, num_hours, video=None):
                     from faster_whisper import WhisperModel
                     from workflows.pipeline.srt_utils import extract_words_from_segments, words_to_srt, save_words_json
                     whisper_device = get_whisper_device()
-                    model = WhisperModel(env("WHISPER_MODEL", "medium"), device=whisper_device, compute_type="int8")
+                    whisper_compute = "float16" if whisper_device == "cuda" else "int8"
+                    model = WhisperModel(env("WHISPER_MODEL", "medium"), device=whisper_device, compute_type=whisper_compute)
                     segments, _ = model.transcribe(wav, language="en", vad_filter=True, word_timestamps=True)
 
                     all_words = extract_words_from_segments(segments)

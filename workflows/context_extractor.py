@@ -16,7 +16,6 @@ from workflows.cogitator import (
     _rate_limit,
 )
 
-from context_manager import merge_context_dicts
 from context_manager_v2 import (
     load_verified_context,
     save_verified_context,
@@ -100,7 +99,7 @@ def _cs_read_all_transcripts():
             log(f"Error reading {path}: {e}")
     
     # Limit to first 50000 chars to stay safe within context
-    return all_text if all_text else None
+    return all_text[:50000] if all_text else None
 
 
 def _cs_analyze_transcript(transcript_text):

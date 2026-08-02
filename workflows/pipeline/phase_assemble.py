@@ -414,6 +414,7 @@ def phase_assemble(duration, num_hours, video=None):
                     shifted_srt = None
             if not shifted_srt and os.path.exists(tts_srt):
                 try:
+                    shifted_srt = _safe_shifted_path(padded)
                     _shift_srt(tts_srt, shifted_srt, hook_offset=hook_dur)
                 except Exception as e:
                     c['log'](f"   Whisper SRT shift failed: {e}")
@@ -444,14 +445,15 @@ def phase_assemble(duration, num_hours, video=None):
         concat_lines = []
         for _ in range(repeats):
             for clip in hour_clips:
-                concat_lines.append(f"file '{clip}'\n")
+                escaped = clip.replace("'", "'\\''")
+                concat_lines.append(f"file '{escaped}'\n")
 
         concat_txt = os.path.join(assembly_dir, f"concat_{padded}.txt")
         with open(concat_txt, 'w') as f:
             f.writelines(concat_lines)
 
         fontsdir = "/run/host/fonts/TTF"
-        if not os.path.exists(fontsdir):
+        if not os.path.isdir(fontsdir):
             fontsdir = "/usr/share/fonts"
 
         sub_style = _build_sub_style(tmpl)
@@ -464,9 +466,10 @@ def phase_assemble(duration, num_hours, video=None):
         if has_tts and shifted_srt:
             # Smooth duck: volume envelope with 2s linear ramp from 1 → duck_vol
             # BGM: optional third input mixed at 0.05
+            escaped_style = sub_style.replace("'", "\\'")
             f_parts = [
                 f"[0:v]trim=duration={target},setpts=PTS-STARTPTS[vid_raw]",
-                f"[vid_raw]subtitles={shifted_srt}:fontsdir={fontsdir}:force_style='{sub_style}'[vid_sub]",
+                f"[vid_raw]subtitles={shifted_srt}:fontsdir={fontsdir}:force_style='{escaped_style}'[vid_sub]",
                 f"[0:a]volume='if(lt(t,{hook_dur}),1,if(lt(t,{hook_dur+2}),1-(1-{duck_vol})*(t-{hook_dur})/2,if(lt(t,{hook_dur+tts_dur}),{duck_vol},if(lt(t,{hook_dur+tts_dur+2}),{duck_vol}+(1-{duck_vol})*(t-{hook_dur+tts_dur})/2,1))))':eval=frame[game_a]",
                 f"[1:a]aformat=sample_fmts=s16:channel_layouts=stereo,adelay={hook_dur_ms}|{hook_dur_ms}[tts_a]",
             ]
@@ -499,30 +502,29 @@ def phase_assemble(duration, num_hours, video=None):
 
             filter_complex = ";".join(f_parts)
 
-            if hw_upload:
-                cmd = [
-                    "ffmpeg", "-y",
-                    *inputs,
-                    "-filter_complex", filter_complex,
-                    "-map", "[vid]", "-map", "[out_a]",
-                    "-c:v", video_codec, "-preset", preset, "-cq", "23",
-                    *extra_args,
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-t", str(target),
-                    output,
-                ]
+            # Determine video quality flag based on codec
+            # libx264 uses -crf, NVENC uses -cq (already in extra_args), VA-API uses -qp (in extra_args)
+            if video_codec == 'libx264':
+                vq_args = ["-crf", "23"]
+            elif video_codec == 'h264_nvenc':
+                vq_args = []  # -cq 23 is already in extra_args
+            elif video_codec == 'h264_vaapi':
+                vq_args = ["-qp", "23"]
             else:
-                cmd = [
-                    "ffmpeg", "-y",
-                    *inputs,
-                    "-filter_complex", filter_complex,
-                    "-map", "[vid]", "-map", "[out_a]",
-                    "-c:v", video_codec, "-preset", preset, "-crf", "23",
-                    *extra_args,
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-t", str(target),
-                    output,
-                ]
+                vq_args = ["-crf", "23"]
+
+            cmd = [
+                "ffmpeg", "-y",
+                *inputs,
+                "-filter_complex", filter_complex,
+                "-map", "[vid]", "-map", "[out_a]",
+                "-c:v", video_codec, "-preset", preset,
+                *vq_args,
+                *extra_args,
+                "-c:a", "aac", "-b:a", "128k",
+                "-t", str(target),
+                output,
+            ]
         else:
             f_parts = [
                 f"[0:v]trim=duration={target},setpts=PTS-STARTPTS[vid_raw]",
@@ -553,30 +555,28 @@ def phase_assemble(duration, num_hours, video=None):
 
             filter_complex = ";".join(f_parts)
 
-            if hw_upload:
-                cmd = [
-                    "ffmpeg", "-y",
-                    *inputs,
-                    "-filter_complex", filter_complex,
-                    "-map", "[vid]", "-map", "[out_a]",
-                    "-c:v", video_codec, "-preset", preset, "-cq", "23",
-                    *extra_args,
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-t", str(target),
-                    output,
-                ]
+            # Determine video quality flag based on codec
+            if video_codec == 'libx264':
+                vq_args = ["-crf", "23"]
+            elif video_codec == 'h264_nvenc':
+                vq_args = []  # -cq 23 is already in extra_args
+            elif video_codec == 'h264_vaapi':
+                vq_args = ["-qp", "23"]
             else:
-                cmd = [
-                    "ffmpeg", "-y",
-                    *inputs,
-                    "-filter_complex", filter_complex,
-                    "-map", "[vid]", "-map", "[out_a]",
-                    "-c:v", video_codec, "-preset", preset, "-crf", "23",
-                    *extra_args,
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-t", str(target),
-                    output,
-                ]
+                vq_args = ["-crf", "23"]
+
+            cmd = [
+                "ffmpeg", "-y",
+                *inputs,
+                "-filter_complex", filter_complex,
+                "-map", "[vid]", "-map", "[out_a]",
+                "-c:v", video_codec, "-preset", preset,
+                *vq_args,
+                *extra_args,
+                "-c:a", "aac", "-b:a", "128k",
+                "-t", str(target),
+                output,
+            ]
 
         c['log'](f"   Running ffmpeg for {padded}...")
         r = c['run'](cmd, check=False)

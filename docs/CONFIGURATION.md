@@ -27,47 +27,21 @@ All configuration is done via the `.env` file.
 | `WHISPER_MODEL` | `medium` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) |
 | `TTS_EMOTION` | `default` | TTS emotion (happy, sad, excited, calm, angry, fearful, whisper) |
 | `TTS_SPEED` | `1.0` | TTS speed multiplier (0.5–2.0) |
-| `TTS_PROVIDER` | `kokoro` | TTS provider (kokoro, gemini, edge) |
 | `CLIP_PACING` | `normal` | Clip pacing mode (fast, normal, slow) |
 
-## Telegram Commands
+## Pipeline Commands (CLI)
 
-> **DEPRECATED**: Telegram bot functionality has been **removed**. The web interface provides full pipeline control. This section is kept for historical reference only.
-
-### Pipeline Control
+Use the CLI for pipeline control:
 
 | Command | Description |
 |---------|-------------|
-| `/run_pipeline` | Run full pipeline |
-| `/run_local` | Process local recordings |
-| `/run_phase N` | Run specific phase |
-| `/skip_phase N` | Skip specific phase |
-| `/stop_pipeline` | Stop running pipeline |
-
-### Configuration
-
-| Command | Description |
-|---------|-------------|
-| `/set_voice` | Change TTS voice |
-| `/set_style` | Set TTS style |
-| `/voices` | List available TTS voices |
-| `/set_game` | Set game title for script context |
-| `/set_recording_path` | Set recordings folder |
-| `/config` | Show current settings |
-
-### Status & Debug
-
-| Command | Description |
-|---------|-------------|
-| `/status` | Show listener and pipeline status |
-| `/debug` | Show recent log entries |
-
-### Updates
-
-| Command | Description |
-|---------|-------------|
-| `/update` | Check for updates |
-| `/restart_listener` | Restart the listener |
+| `python workflows/cogitator.py run` | Run full pipeline |
+| `python workflows/cogitator.py run_local media` | Process local recordings |
+| `python workflows/cogitator.py run --phase 3` | Run specific phase |
+| `python workflows/cogitator.py run --skip 3` | Skip specific phase |
+| `python workflows/cogitator.py status` | Show pipeline status |
+| `python workflows/cogitator.py cleanup` | Clean generated files |
+| `python workflows/cogitator.py debug` | Show recent logs |
 
 ## TTS Voices
 
@@ -168,6 +142,6 @@ Cogitator/
 
 For multiple keys (rate limiting), add them through the onboard process or store them directly in your system keychain using the keychain manager.
 
-### Discord Bot (Removed)
+### Web Interface
 
-> **Note**: Telegram/Discord bot functionality has been **removed** from Cogitator. The web interface provides full pipeline control. No bot token or chat ID is required.
+The web interface provides full pipeline control. No bot token or chat ID is required.
