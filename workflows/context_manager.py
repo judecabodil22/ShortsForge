@@ -40,6 +40,8 @@ SERIES_MAPPING = {
     "tomb_raider": "tomb_raider_series",
     "tomb_raider_(2013)": "tomb_raider_series",
     "tomb_raider_definitive_edition": "tomb_raider_series",
+    "star_wars:_jedi_survivor": "star_wars_series",
+    "star_wars_jedi_fallen_order": "star_wars_series",
 }
 
 # Keywords to match MemPalace transcript chunks to a franchise graph key
@@ -47,6 +49,10 @@ MEMPALACE_GAME_KEYWORDS = {
     "tomb_raider_series": [
         "tomb raider", "lara croft", "trinity", "shadow of the tomb", "rise of the tomb",
         "peruvian jungle", "cozumel", "jonah",
+    ],
+    "star_wars_series": [
+        "star wars", "jedi", "cal kestis", "bd-1", "empire", "rebel", "force",
+        "lightsaber", "coruscant", "tanalorr", "jedha",
     ],
     "cyberpunk_2077": ["cyberpunk", "night city", "johnny silverhand", "arasaka"],
     "tell_me_why": ["tell me why", "goblin", "allison", "tyler"],
