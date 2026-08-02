@@ -738,35 +738,36 @@ async def get_games():
     result = []
     seen_franchises = set()
 
+    # First, add all franchises from series_to_games
+    for series_key, child_games in series_to_games.items():
+        if series_key not in seen_franchises:
+            # Only add if there are actual child games
+            if child_games:
+                result.append({
+                    "name": series_key,
+                    "is_series": True,
+                    "display_name": " ".join(series_key.split("_")).title(),
+                    "children": [g.replace("_", " ").title() for g in child_games]
+                })
+                seen_franchises.add(series_key)
+
+    # Then add individual games that are not part of any franchise
     for game in games:
         game_lower = game.lower().replace(" ", "_")
-        if game_lower in series_to_games:
-            # This is a franchise or belongs to one
-            series_name = series_to_games[game_lower] if game_lower in series_to_games else game
-            if isinstance(series_name, list):
-                # It's a franchise key
-                series_key = game_lower
-                child_games = series_name
-                if series_key not in seen_franchises:
-                    result.append({
-                        "name": series_key,
-                        "is_series": True,
-                        "display_name": " ".join(series_key.split("_")).title(),
-                        "children": [g.replace("_", " ").title() for g in child_games]
-                    })
-                    seen_franchises.add(series_key)
-        else:
-            # Check if this game belongs to a known series
-            series_name = SERIES_MAPPING.get(game_lower)
-            if series_name and series_name in seen_franchises:
-                continue  # Skip, already added as franchise
-            # Regular game (no franchise)
-            result.append({
-                "name": game,
-                "is_series": False,
-                "display_name": game.replace("_", " ").title(),
-                "children": []
-            })
+        # Skip if this is a franchise key
+        if game_lower in seen_franchises:
+            continue
+        # Check if this game belongs to a known series
+        series_name = SERIES_MAPPING.get(game_lower)
+        if series_name and series_name in seen_franchises:
+            continue  # Skip, already added as part of franchise
+        # Regular game (no franchise)
+        result.append({
+            "name": game,
+            "is_series": False,
+            "display_name": game.replace("_", " ").title(),
+            "children": []
+        })
 
     return {"games": result}
 
