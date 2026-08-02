@@ -2649,7 +2649,7 @@ def _detect_corrections(old_ctx, new_ctx):
     return corrections
 
 
-def _store_corrections_as_constraints(corrections):
+def _store_corrections_as_constraints(corrections, game_title=None):
     """
     Store detected corrections as universal constraints in MemPalace.
     These constraints will be used in future context extractions.
@@ -2657,6 +2657,10 @@ def _store_corrections_as_constraints(corrections):
     if not MEMPALACE_AVAILABLE:
         log("[DEBUG] MemPalace not available, skipping constraint storage")
         return
+    
+    # Default to GAME_TITLE if not provided
+    if not game_title:
+        game_title = env("GAME_TITLE", "")
     
     try:
         mp_manager = get_mempalace_manager()
@@ -2683,6 +2687,14 @@ def _store_corrections_as_constraints(corrections):
             # Store in MemPalace as a "constraints" document
             constraints_text = "\n".join(constraints)
             
+            # Write to MemPalace for permanent storage
+            try:
+                wing = mp_manager._game_wing(game_title)
+                mp_manager._add(wing, "corrections", constraints_text, "learned_constraints")
+                log("[LEARNING] Constraints stored in MemPalace")
+            except Exception as mp_err:
+                log(f"[WARNING] Failed to store constraints in MemPalace: {mp_err}")
+            
             # Also save to a local constraints file as backup
             constraints_file = os.path.join(CONTEXT_DIR, "learned_constraints.json")
             existing = []
@@ -2706,9 +2718,6 @@ def _store_corrections_as_constraints(corrections):
                 with open(constraints_file, 'w') as f:
                     json.dump(existing, f, indent=2)
                 log(f"[LEARNING] {len(new_constraints)} new constraints saved")
-            
-    except Exception as e:
-        log(f"[ERROR] Failed to store corrections as constraints: {e}")
             
     except Exception as e:
         log(f"[ERROR] Failed to store corrections as constraints: {e}")
@@ -3726,8 +3735,28 @@ def _get_variant_performance_text(variant_key):
 
 
 def _get_mempalace_prompt_hints(game_title):
-    """Get MemPalace best prompts and game memory for injection."""
-    if not MEMPALACE_AVAILABLE or not game_title:
+    """Get MemPalace context for injection into prompts.
+    
+    Uses the enhanced mempalace_integration module for:
+    - Cross-game entity merging
+    - Timeline-aware scripting
+    - Learned corrections
+    - Context-aware memory retrieval
+    - Relationship inference
+    """
+    if not game_title:
+        return ""
+
+    try:
+        from workflows.mempalace_integration import get_all_mempalace_context
+        context = get_all_mempalace_context(game_title)
+        if context:
+            return f"\n[MEMORY CONTEXT]\n{context}\n"
+    except ImportError:
+        pass
+
+    # Fallback to basic MemPalace if integration module not available
+    if not MEMPALACE_AVAILABLE:
         return ""
 
     hints = []
@@ -3739,16 +3768,17 @@ def _get_mempalace_prompt_hints(game_title):
                 hints.append("\nMEMORY CONTEXT (from learned experience):")
                 for item in best[:2]:
                     src = item.get('source', '')
-                    factuality = item.get('factuality', 0)
-                    engagement = item.get('engagement', 0)
                     if src:
                         hints.append(f"- Past successful prompt patterns detected for '{src}'")
 
             memory = mp_manager.get_game_memory(game_title)
-            if memory.get('success') and memory.get('search_result'):
-                result = memory['search_result'][:300]
-                if result and len(result) > 20:
-                    hints.append(f"- Game memory: {result[:200]}...")
+            # Fix: get_game_memory returns {"success": True, "memories": [...]}
+            if memory.get('success') and memory.get('memories'):
+                memories = memory['memories'][:3]
+                for m in memories:
+                    text = m.get('text', '')[:200]
+                    if text and len(text) > 20:
+                        hints.append(f"- Game memory: {text}...")
 
     except Exception:
         pass

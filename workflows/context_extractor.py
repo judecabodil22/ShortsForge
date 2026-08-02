@@ -966,7 +966,7 @@ def _detect_corrections(old_ctx, new_ctx):
     return corrections
 
 
-def _store_corrections_as_constraints(corrections):
+def _store_corrections_as_constraints(corrections, game_title=None):
     """
     Store detected corrections as universal constraints in MemPalace.
     These constraints will be used in future context extractions.
@@ -974,6 +974,10 @@ def _store_corrections_as_constraints(corrections):
     if not MEMPALACE_AVAILABLE:
         log("[DEBUG] MemPalace not available, skipping constraint storage")
         return
+    
+    # Default to GAME_TITLE if not provided
+    if not game_title:
+        game_title = env("GAME_TITLE", "")
     
     try:
         mp_manager = get_mempalace_manager()
@@ -1000,6 +1004,14 @@ def _store_corrections_as_constraints(corrections):
             # Store in MemPalace as a "constraints" document
             constraints_text = "\n".join(constraints)
             
+            # Write to MemPalace for permanent storage
+            try:
+                wing = mp_manager._game_wing(game_title)
+                mp_manager._add(wing, "corrections", constraints_text, "learned_constraints")
+                log("[LEARNING] Constraints stored in MemPalace")
+            except Exception as mp_err:
+                log(f"[WARNING] Failed to store constraints in MemPalace: {mp_err}")
+            
             # Also save to a local constraints file as backup
             constraints_file = os.path.join(CONTEXT_DIR, "learned_constraints.json")
             existing = []
@@ -1022,7 +1034,7 @@ def _store_corrections_as_constraints(corrections):
                 existing.extend(new_constraints)
                 with open(constraints_file, 'w') as f:
                     json.dump(existing, f, indent=2)
-                log(f"[LEARNING] {len(new_constraints)} new constraints saved (skipped {len(constraints) - len(constraints) + len(new_constraints)} duplicates)")
+                log(f"[LEARNING] {len(new_constraints)} new constraints saved")
             
     except Exception as e:
         log(f"[ERROR] Failed to store corrections as constraints: {e}")

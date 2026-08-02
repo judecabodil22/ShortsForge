@@ -675,6 +675,38 @@ def clear_mempalace_for_game(game_title: str) -> Dict[str, Any]:
     return result
 
 
+def sync_correction_to_mempalace(game_title: str, original: str, corrected: str, reason: str = "") -> bool:
+    """
+    Sync a user correction to MemPalace for permanent learning.
+    
+    This ensures corrections persist across database resets and pipeline runs.
+    """
+    try:
+        from workflows.mempalace_integration import sync_correction_to_mempalace as sync_func
+        return sync_func(game_title, original, corrected, reason)
+    except ImportError:
+        # Fallback to direct MemPalace write
+        mp_manager = _get_mempalace_manager()
+        if not mp_manager:
+            return False
+        
+        try:
+            wing = mp_manager._game_wing(game_title)
+            correction_text = f"""
+CORRECTION LEARNED:
+Original: {original}
+Corrected: {corrected}
+Reason: {reason or "User corrected"}
+Timestamp: {datetime.now().isoformat()}
+AVOID: Do not use '{original}' again.
+USE INSTEAD: '{corrected}'
+"""
+            count = mp_manager._add(wing, "corrections", correction_text, f"correction_{datetime.now().isoformat()}")
+            return count > 0
+        except Exception:
+            return False
+
+
 def clear_all_context_for_game(game_title: str) -> Dict[str, Any]:
     """Clear both verified context and MemPalace memory for a game."""
     result = {"verified_cleared": False, "mempalace_cleared": False, "errors": []}
