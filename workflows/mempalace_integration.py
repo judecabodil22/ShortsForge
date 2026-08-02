@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 
-from workflows.context_manager import SERIES_MAPPING
+from workflows.context_manager import get_full_series_mapping
 
 # Lazy imports for optional dependencies
 _mempalace_manager = None
@@ -46,13 +46,15 @@ def _get_manager():
 def _get_franchise_key(game_title: str) -> Optional[str]:
     """Get the franchise key for a game."""
     game_key = game_title.lower().replace(" ", "_").strip()
-    return SERIES_MAPPING.get(game_key)
+    full_mapping = get_full_series_mapping()
+    return full_mapping.get(game_key)
 
 
 def _get_franchise_games(franchise_key: str) -> List[str]:
     """Get all games in a franchise."""
+    full_mapping = get_full_series_mapping()
     games = []
-    for game, franchise in SERIES_MAPPING.items():
+    for game, franchise in full_mapping.items():
         if franchise == franchise_key:
             games.append(game)
     return games

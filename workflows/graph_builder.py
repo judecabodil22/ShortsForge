@@ -18,7 +18,7 @@ from workflows.context_manager import (
     load_implicit_relationships,
     save_implicit_relationships,
     get_context_sources_summary,
-    SERIES_MAPPING,
+    get_full_series_mapping,
 )
 
 WORKSPACE = os.path.expanduser("~/Cogitator")
@@ -44,11 +44,12 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
     cm = get_context_manager()
 
     # Determine game keys to load entities from — if franchise, include child games
+    full_mapping = get_full_series_mapping()
     game_keys_for_entities = [game_key]
-    if game_key in SERIES_MAPPING.values():
+    if game_key in full_mapping.values():
         children = [
             child_key
-            for child_key, series_val in SERIES_MAPPING.items()
+            for child_key, series_val in full_mapping.items()
             if series_val == game_key
         ]
         game_keys_for_entities = [game_key] + children
@@ -248,8 +249,9 @@ def _normalize_entity_name(name: str) -> str:
 
 def _resolve_graph_game_key(game_key: str) -> str:
     """Map child game keys to franchise context when applicable."""
-    if game_key in SERIES_MAPPING:
-        return SERIES_MAPPING[game_key]
+    full_mapping = get_full_series_mapping()
+    if game_key in full_mapping:
+        return full_mapping[game_key]
     return game_key
 
 
@@ -365,13 +367,14 @@ def _build_single_game_graph(
 
     # Determine which game keys to process — if franchise, include child games
     # Only merge child data in individual mode (no shared maps), not in all-games mode
+    full_mapping = get_full_series_mapping()
     game_keys_to_process = [game_key]
     if shared_node_id_map is None and shared_valid_ids is None:
-        is_franchise = game_key in SERIES_MAPPING.values()
+        is_franchise = game_key in full_mapping.values()
         if is_franchise:
             children = [
                 child_key
-                for child_key, series_val in SERIES_MAPPING.items()
+                for child_key, series_val in full_mapping.items()
                 if series_val == game_key
             ]
             game_keys_to_process = [game_key] + children

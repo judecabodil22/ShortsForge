@@ -197,7 +197,7 @@ export default function Settings() {
                       className="cyber-input"
                     >
                       <option value="">Select a Franchise Context...</option>
-                      {(gamesData?.games || []).map((game: any) => (
+                      {(gamesData?.games || []).filter((game: any) => game.is_series).map((game: any) => (
                         <option key={game.name} value={game.name}>{game.display_name || game.name}</option>
                       ))}
                     </select>

@@ -31,6 +31,43 @@ def _get_workspace():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 WORKSPACE = _get_workspace()
+CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
+CUSTOM_FRANCHISES_FILE = os.path.join(CONTEXT_DIR, "custom_franchises.json")
+
+
+def _load_custom_franchises() -> Dict[str, str]:
+    """Load custom franchise mappings from JSON file."""
+    if not os.path.exists(CUSTOM_FRANCHISES_FILE):
+        return {}
+    try:
+        with open(CUSTOM_FRANCHISES_FILE, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_custom_franchises(mapping: Dict[str, str]) -> None:
+    """Save custom franchise mappings to JSON file."""
+    os.makedirs(CONTEXT_DIR, exist_ok=True)
+    with open(CUSTOM_FRANCHISES_FILE, "w") as f:
+        json.dump(mapping, f, indent=2)
+
+
+def add_to_franchise(game_key: str, franchise_key: str) -> bool:
+    """Add a game to a franchise dynamically."""
+    custom = _load_custom_franchises()
+    custom[game_key] = franchise_key
+    _save_custom_franchises(custom)
+    return True
+
+
+def get_full_series_mapping() -> Dict[str, str]:
+    """Get the full series mapping (hardcoded + custom)."""
+    custom = _load_custom_franchises()
+    full_mapping = dict(SERIES_MAPPING)
+    full_mapping.update(custom)
+    return full_mapping
+
 
 # Child game key (normalized) -> franchise context key
 SERIES_MAPPING = {

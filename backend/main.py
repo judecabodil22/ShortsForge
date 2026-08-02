@@ -38,6 +38,8 @@ from workflows.context_manager_v2 import ContextManagerV2, get_context_manager
 from workflows.constants import TTS_VOICES
 from workflows.context_manager import (
     SERIES_MAPPING,
+    get_full_series_mapping,
+    add_to_franchise,
     get_mempalace_text_chunks,
     get_context_sources_summary,
     load_implicit_relationships,
@@ -710,8 +712,9 @@ async def get_games():
 
     # Build franchise structure
     # Reverse SERIES_MAPPING: series_name -> [game_keys]
+    full_mapping = get_full_series_mapping()
     series_to_games = {}
-    for game_key, series_name in SERIES_MAPPING.items():
+    for game_key, series_name in full_mapping.items():
         if series_name not in series_to_games:
             series_to_games[series_name] = []
         series_to_games[series_name].append(game_key)
@@ -758,7 +761,7 @@ async def get_games():
         if game_lower in seen_franchises:
             continue
         # Check if this game belongs to a known series
-        series_name = SERIES_MAPPING.get(game_lower)
+        series_name = full_mapping.get(game_lower)
         if series_name and series_name in seen_franchises:
             continue  # Skip, already added as part of franchise
         # Regular game (no franchise)
@@ -784,11 +787,12 @@ async def get_game_context(game: str):
     cm = get_context_manager()
 
     # Check if this is a franchise key or child game
-    is_franchise = game_key in SERIES_MAPPING.values()
+    full_mapping = get_full_series_mapping()
+    is_franchise = game_key in full_mapping.values()
     series_name = None
 
     if not is_franchise:
-        series_name = SERIES_MAPPING.get(game_key)
+        series_name = full_mapping.get(game_key)
         if series_name:
             # This is a child game - redirect to franchise context
             game_key = series_name
@@ -824,7 +828,7 @@ async def get_game_context(game: str):
     # If this is a franchise, also merge in context from child games
     if is_franchise or series_name:
         child_contexts = []
-        for child_key, series_val in SERIES_MAPPING.items():
+        for child_key, series_val in full_mapping.items():
             if series_val == game_key:
                 child_ctx = all_context.get(child_key, {}).get("context", {})
                 if child_ctx:
@@ -1356,6 +1360,14 @@ async def update_config(request: Request, updates: ConfigUpdate, _: bool = Depen
             
     with open(env_file, "w") as f:
         f.writelines(lines)
+    
+    # If PARENT_FRANCHISE was updated, add game to franchise mapping
+    if 'PARENT_FRANCHISE' in update_dict and 'GAME_TITLE' in update_dict:
+        franchise_key = update_dict['PARENT_FRANCHISE']
+        game_key = update_dict['GAME_TITLE'].lower().replace(" ", "_").strip()
+        if franchise_key and game_key:
+            add_to_franchise(game_key, franchise_key)
+    
     return {"status": "updated", "config": update_dict}
 
 class DownloadRequest(BaseModel):
@@ -1524,7 +1536,8 @@ async def create_game(request: Request, req: CreateGameRequest, _: bool = Depend
     cm.save_context(game_key)
     
     # Auto-set PARENT_FRANCHISE in .env if this is the first franchise
-    if game_key in SERIES_MAPPING.values():
+    full_mapping = get_full_series_mapping()
+    if game_key in full_mapping.values():
         env_file = os.path.join(WORKSPACE, ".env")
         parent_franchise = os.environ.get("PARENT_FRANCHISE", "")
         if not parent_franchise:
