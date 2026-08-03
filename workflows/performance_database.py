@@ -1656,7 +1656,7 @@ def get_ab_test_history() -> List[Dict]:
 AB_TEST_TYPES = {
     'content_type': {
         'name': 'Content Type',
-        'variants': ['horror', 'comedy', 'action', 'drama', 'mystery'],
+        'variants': ['mystery_recap', 'breakdown', 'timeline', 'lesson', 'narrative', 'news_report', 'documentary', 'true_crime', 'character_pov', 'true_story'],
     },
     'tts_voice': {
         'name': 'TTS Voice',
