@@ -161,8 +161,6 @@ def _detect_laughter(audio_path: str) -> bool:
         
     except Exception:
         return False
-    except:
-        return False
 
 
 def get_audio_features_for_scenes(video_path: str, scenes: List[Dict]) -> List[Dict]:

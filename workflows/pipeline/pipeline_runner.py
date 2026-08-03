@@ -155,11 +155,11 @@ def video_info(path):
 
 def run_pipeline(skip=None):
     c = _get_cogitator()
-    global PIPELINE_STOP_REQUESTED
-    PIPELINE_STOP_REQUESTED = False
 
     def check_stop():
-        if PIPELINE_STOP_REQUESTED:
+        # Read directly from cogitator module to get the current value
+        from workflows.cogitator import PIPELINE_STOP_REQUESTED as _stop_requested
+        if _stop_requested:
             c['log']("Pipeline stopped by user")
             c['set_status']("Pipeline Stopped")
             c['notify']("Pipeline stopped by user.")

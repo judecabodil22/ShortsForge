@@ -1132,7 +1132,6 @@ async def get_segment_references(game: str):
     """Get segment references for context nodes"""
     # Sanitize game name
     game = sanitize_input(game, max_length=100)
-    import os
     SEGMENT_REF_FILE = os.path.expanduser("~/Cogitator/Context/segment_references.json")
     game_key = game.lower().replace(" ", "_")
     
@@ -1262,7 +1261,7 @@ async def get_learning_dashboard():
     """Get learning dashboard data with insights and A/B test status."""
     from workflows.performance_database import (
         get_learning_insights, get_active_ab_tests, get_ab_test_history,
-        get_content_type_effectiveness, calculate_relative_performance,
+        get_content_type_effectiveness,
     )
     
     insights = get_learning_insights()

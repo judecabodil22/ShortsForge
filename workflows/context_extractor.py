@@ -1019,7 +1019,7 @@ def _store_corrections_as_constraints(corrections, game_title=None):
                 try:
                     with open(constraints_file, 'r') as f:
                         existing = json.load(f)
-                except:
+                except Exception:
                     pass
             
             # Deduplicate: only add constraints that don't already exist

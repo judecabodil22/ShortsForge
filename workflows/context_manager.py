@@ -249,15 +249,13 @@ def sync_context_to_mempalace(game_title: str, context: Dict[str, Any]) -> Dict[
         # Clean up temp file
         try:
             os.remove(temp_file)
-        except:
+        except Exception:
             pass
     
     except Exception as e:
         result["errors"].append(str(e))
     
     return result
-
-CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
 
 VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")
 CONTEXT_CORRECTIONS_FILE = os.path.join(CONTEXT_DIR, "context_corrections.jsonl")
@@ -1008,7 +1006,7 @@ def get_learned_corrections(game_title: str) -> Dict[str, List[Dict]]:
                                 "new": record.get("new_value", ""),
                                 "count": corrections[field].count({"old": record.get("old_value", ""), "new": record.get("new_value", "")}) + 1
                             })
-                except:
+                except Exception:
                     continue
     except Exception:
         pass
@@ -1051,7 +1049,7 @@ def load_context_history(game_title: str) -> List[Dict[str, Any]]:
                     data = json.load(f)
                     data["filename"] = filename
                     snapshots.append(data)
-            except:
+            except Exception:
                 continue
     
     snapshots.sort(key=lambda x: x.get("timestamp", ""))

@@ -531,7 +531,7 @@ def get_metrics_for_video(video_id: str) -> Optional[Dict]:
     return None
 
 
-def get_successful_scripts(limit: int = 10) -> List[Dict]:
+def get_successful_scripts(limit: int = 10, min_views: int = 0) -> List[Dict]:
     """Get scripts with highest performance scores."""
     conn = get_db()
     cursor = conn.cursor()
@@ -541,10 +541,10 @@ def get_successful_scripts(limit: int = 10) -> List[Dict]:
         FROM scripts s
         JOIN videos v ON v.script_id = s.id
         JOIN metrics m ON m.video_id = v.id
-        WHERE m.performance_score > 0
+        WHERE m.performance_score > 0 AND m.views >= ?
         ORDER BY m.performance_score DESC
         LIMIT ?
-    """, (limit,))
+    """, (min_views, limit))
     
     rows = cursor.fetchall()
     conn.close()
@@ -710,7 +710,7 @@ def get_generation_params() -> Dict[str, Any]:
     for row in rows:
         try:
             params[row['param_name']] = json.loads(row['param_value'])
-        except:
+        except Exception:
             params[row['param_name']] = row['param_value']
     
     return params

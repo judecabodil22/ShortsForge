@@ -225,7 +225,7 @@ export default function Layout({ children }: LayoutProps) {
           animate={{ opacity: 1 }}
           transition={{ delay: 0.5 }}
         >
-          <span>Cogitator v2.0.0 | {currentTheme.name} Edition</span>
+          <span>Cogitator v2.5.1 | {currentTheme.name} Edition</span>
           <span>Workspace: ~/Cogitator</span>
         </motion.footer>
       </main>

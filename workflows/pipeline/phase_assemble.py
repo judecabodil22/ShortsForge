@@ -365,7 +365,9 @@ def phase_assemble(duration, num_hours, video=None):
 
     assembled = 0
     for i in range(1, num_hours + 1):
-        if c['PIPELINE_STOP_REQUESTED']:
+        # Read directly from cogitator module to get the current value
+        from workflows.cogitator import PIPELINE_STOP_REQUESTED as _stop_requested
+        if _stop_requested:
             c['log']("Phase 7 stopped by user")
             break
 

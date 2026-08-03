@@ -721,7 +721,7 @@ def analyze_recent_failures(window_hours=24):
                     record_time = datetime.fromisoformat(record["timestamp"])
                     if record_time >= cutoff_time:
                         failures.append(record)
-                except:
+                except Exception:
                     continue
     except Exception:
         return {"error": "Failed to read failure data"}
@@ -843,7 +843,7 @@ def _analyze_successful_script_patterns():
                         wc = record.get("word_count", 0)
                         if wc:
                             word_counts.append(wc)
-                except:
+                except Exception:
                     continue
     except Exception:
         pass
@@ -857,7 +857,7 @@ def _analyze_successful_script_patterns():
                         record = json.loads(line)
                         if record.get("metrics", {}).get("factuality_score", 0) >= 0.8 and record.get("metrics", {}).get("engagement_overall", 0) >= 0.6:
                             pass
-                    except:
+                    except Exception:
                         continue
         except Exception:
             pass
@@ -903,7 +903,7 @@ def get_effective_prompts():
                             "hook_strength": record.get("hook_strength", 0),
                             "engagement_overall": record.get("engagement_overall", 0),
                         })
-                except:
+                except Exception:
                     continue
     except Exception:
         return {"error": "Failed to read metrics"}

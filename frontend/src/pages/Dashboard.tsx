@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [downloadUrl, setDownloadUrl] = useState('')
   const logsEndRef = useRef<HTMLDivElement>(null)
 
-  const wsUrl = `ws://${window.location.hostname}:8000/ws`
+  const wsUrl = `ws://${window.location.hostname}:${window.location.port || '8000'}/ws`
   const { isConnected, subscribe } = useWebSocket(wsUrl)
 
   useEffect(() => {

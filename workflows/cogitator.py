@@ -878,7 +878,7 @@ def handle_context_edit_input(txt, chat_id):
                 items.append({"from": char1, "to": char2, "relationship": rel})
                 state["current_items"] = items
                 log_notification(f"✅ Added: {char1} -> {char2}: {rel}")
-            except:
+            except Exception:
                 log_notification("Invalid format. Use: Name1 -> Name2: relationship")
         else:
             log_notification("Invalid. Enter number to remove, or 'Name1 -> Name2: relationship' to add")
@@ -2718,7 +2718,7 @@ def _store_corrections_as_constraints(corrections, game_title=None):
                 try:
                     with open(constraints_file, 'r') as f:
                         existing = json.load(f)
-                except:
+                except Exception:
                     pass
             
             # Deduplicate: only add constraints that don't already exist

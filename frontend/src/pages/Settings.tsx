@@ -492,7 +492,7 @@ export default function Settings() {
                         <Cpu className="w-8 h-8 text-40k-gold" />
                       </motion.div>
                       <div>
-                        <h4 className="text-white font-display font-bold">Cogitator v2.0.0</h4>
+                        <h4 className="text-white font-display font-bold">Cogitator v2.5.1</h4>
                         <p className="text-xs text-40k-gold">Cyberpunk Edition • System Online</p>
                       </div>
                     </div>

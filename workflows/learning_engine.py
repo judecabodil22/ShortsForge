@@ -141,7 +141,7 @@ def _analyze_script_features(scripts: List[Dict]) -> Optional[Dict]:
         if isinstance(features_str, str):
             try:
                 features = json.loads(features_str)
-            except:
+            except Exception:
                 features = {}
         else:
             features = features_str or {}
@@ -172,7 +172,7 @@ def _analyze_temporal_patterns(scripts: List[Dict]) -> Optional[Dict]:
         if isinstance(features_str, str):
             try:
                 features = json.loads(features_str)
-            except:
+            except Exception:
                 features = {}
         else:
             features = features_str or {}
@@ -572,15 +572,34 @@ def load_retention_history(max_samples: int = 100):
     try:
         from workflows.performance_database import get_successful_scripts
         scripts = get_successful_scripts(limit=max_samples)
+        # Parse features from JSON string for each script
+        parsed_scripts = []
+        for s in scripts:
+            if not s.get("performance_score"):
+                continue
+            features_raw = s.get("features", "{}")
+            if isinstance(features_raw, str):
+                try:
+                    features_dict = json.loads(features_raw)
+                except Exception:
+                    features_dict = {}
+            else:
+                features_dict = features_raw or {}
+            s["features_dict"] = features_dict
+            parsed_scripts.append(s)
+        
         _retention_history = [
             {
-                "word_count": s.get("word_count", 0),
-                "has_hook": bool(s.get("hook_score", 0) > 0.5),
-                "has_cta": "follow" in (s.get("script_text", "") or "").lower(),
+                "word_count": s.get("features_dict", {}).get("word_count", 0),
+                "has_dialogue": bool(s.get("features_dict", {}).get("has_dialogue", False)),
+                "has_excitement": bool(s.get("features_dict", {}).get("has_excitement", False)),
+                "has_laughter": bool(s.get("features_dict", {}).get("has_laughter", False)),
+                "duration": s.get("features_dict", {}).get("duration", 45),
                 "performance": s.get("performance_score", 50),
                 "video_name": s.get("video_name", ""),
+                "content_type": s.get("content_type", ""),
             }
-            for s in scripts if s.get("performance_score")
+            for s in parsed_scripts
         ]
     except Exception:
         pass
@@ -883,7 +902,7 @@ class ViralityPredictor:
             if isinstance(features, str):
                 try:
                     features = json.loads(features)
-                except:
+                except Exception:
                     continue
             
             score = item.get('performance_score', 0)

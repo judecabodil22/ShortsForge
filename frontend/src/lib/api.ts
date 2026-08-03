@@ -95,7 +95,6 @@ export const getScripts = () => fetchAPI<any>('/api/scripts')
 export const getScriptMetadata = (id: string) => fetchAPI<any>(`/api/scripts/${id}/metadata`)
 export const analyzeScript = (id: string) => fetchAPI<any>(`/api/scripts/${id}/analyze`, { method: 'POST' })
 
-export const getLearnings = () => fetchAPI<any>('/api/learnings')
 export const getLearningWeights = () => fetchAPI<any>('/api/learnings/weights')
 
 export const getLearningDashboard = () => fetchAPI<any>('/api/learning/dashboard')
@@ -106,11 +105,6 @@ export const createABTest = (testName: string, testType: string, variantA: any, 
   fetchAPI<any>('/api/learning/ab-test', { method: 'POST', body: { test_name: testName, test_type: testType, variant_a: variantA, variant_b: variantB } })
 export const getABTest = (testId: string) => fetchAPI<any>(`/api/learning/ab-test/${testId}`)
 
-export const getGraphSearch = (game: string, query: string, type: string) =>
-  fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/graph/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(type)}`)
-export const getGraphStats = (game: string) =>
-  fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/graph/stats`)
-
 export const getGames = () => fetchAPI<any>('/api/context/games')
 export const getGameContext = (game: string) => fetchAPI<any>(`/api/context/${game}`)
 export const getGraphData = (game: string) => fetchAPI<any>(`/api/context/${game}/graph`)
@@ -119,8 +113,6 @@ export const updateContextItem = (game: string, itemType: string, itemId: string
   fetchAPI<any>(`/api/context/${game}/${itemType}/${itemId}`, { method: 'PUT', body: data })
 export const deleteContextItem = (game: string, itemType: string, itemId: string) =>
   fetchAPI<any>(`/api/context/${game}/${itemType}/${itemId}`, { method: 'DELETE' })
-export const deleteGame = (game: string) =>
-  fetchAPI<any>(`/api/context/${game}`, { method: 'DELETE' })
 
 export const getConfig = () => fetchAPI<any>('/api/config')
 export const updateConfig = (data: any) => fetchAPI<any>('/api/config', { method: 'POST', body: data })
@@ -128,7 +120,6 @@ export const cleanupFiles = () => fetchAPI<any>('/api/system/cleanup', { method:
 export const downloadFromUrl = (url: string) => fetchAPI<any>('/api/pipeline/download', { method: 'POST', body: { url } })
 export const getLogs = (lines: number = 100) => fetchAPI<any>(`/api/logs?lines=${lines}`)
 export const createGameContext = (game: string) => fetchAPI<any>('/api/context/create_game', { method: 'POST', body: { game } })
-export const mergeContext = (target_game: string, source_game: string) => fetchAPI<any>('/api/context/merge', { method: 'POST', body: { target_game, source_game } })
 export const clearContext = (game: string) => fetchAPI<any>('/api/context/clear', { method: 'POST', body: { game } })
 export const getSegmentRefs = (game: string) => fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/segments`)
 export const getScriptPrompt = () => fetchAPI<{ content: string }>('/api/prompts/script')
