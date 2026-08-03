@@ -46,7 +46,10 @@ def init_db():
             variants TEXT,  -- JSON array of alternative variants
             selected_variant INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
-            phase INTEGER DEFAULT 4
+            phase INTEGER DEFAULT 4,
+            ab_test_id TEXT,  -- Links to ab_tests.id for A/B test tracking
+            ab_variant TEXT,  -- 'a' or 'b' which variant this script belongs to
+            FOREIGN KEY (ab_test_id) REFERENCES ab_tests(id)
         )
     """)
     
@@ -182,6 +185,14 @@ def init_db():
         cursor.execute("ALTER TABLE learnings ADD COLUMN variance REAL DEFAULT 0")
     if 'sum_squared_diff' not in columns:
         cursor.execute("ALTER TABLE learnings ADD COLUMN sum_squared_diff REAL DEFAULT 0")
+
+    # Migrate scripts table: add A/B test tracking columns
+    cursor.execute("PRAGMA table_info(scripts)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'ab_test_id' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN ab_test_id TEXT")
+    if 'ab_variant' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN ab_variant TEXT")
     
     conn.commit()
     conn.close()
@@ -206,6 +217,8 @@ def store_script(
     description: Optional[str] = None,
     hashtags: Optional[str] = None,
     tags: Optional[str] = None,
+    ab_test_id: Optional[str] = None,
+    ab_variant: Optional[str] = None,
 ) -> str:
     """Store a generated script."""
     conn = get_db()
@@ -218,8 +231,8 @@ def store_script(
     script_title = title or _extract_title_from_script(script_text)
 
     cursor.execute("""
-        INSERT INTO scripts (id, video_name, title, content_type, script_text, features, variants, selected_variant, created_at, description, hashtags, tags)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO scripts (id, video_name, title, content_type, script_text, features, variants, selected_variant, created_at, description, hashtags, tags, ab_test_id, ab_variant)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         script_id,
         video_name,
@@ -233,6 +246,8 @@ def store_script(
         description,
         hashtags,
         tags,
+        ab_test_id,
+        ab_variant,
     ))
     
     conn.commit()
@@ -931,6 +946,12 @@ def auto_match_and_fetch(recent_videos: List[Dict]) -> Dict[str, Any]:
                         update_learning_with_variance(feature_name='word_count', feature_value=str(features['word_count']),
                                        metric_type='combined', performance_score=performance_score)
 
+                    # Record A/B test result if this script is part of a test
+                    try:
+                        record_ab_result_for_script(best_match['id'], performance_score)
+                    except Exception:
+                        pass
+
                     clip_cursor = conn.cursor()
                     clip_cursor.execute("""
                         SELECT c.features FROM clips c
@@ -1627,6 +1648,228 @@ def get_ab_test_history() -> List[Dict]:
     
     conn.close()
     return results
+
+
+# ─── A/B Test Automation ─────────────────────────────────────────────────────
+
+# Test types and their possible variants
+AB_TEST_TYPES = {
+    'content_type': {
+        'name': 'Content Type',
+        'variants': ['horror', 'comedy', 'action', 'drama', 'mystery'],
+    },
+    'tts_voice': {
+        'name': 'TTS Voice',
+        'variants': ['af_heart', 'af_bella', 'af_nicole', 'af_sarah', 'am_adam', 'am_michael'],
+    },
+    'script_style': {
+        'name': 'Script Style',
+        'variants': ['direct_hook', 'question_hook', 'story_hook', 'shock_hook'],
+    },
+    'duration': {
+        'name': 'Video Duration',
+        'variants': ['short_20s', 'medium_35s', 'long_50s'],
+    },
+}
+
+
+def get_or_create_ab_test(test_type: str = None) -> Optional[Dict]:
+    """Get an active A/B test or create a new one.
+    
+    Automatically selects a test type if not specified.
+    Returns dict with test_id, variant_a, variant_b, and which variant to use.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Check for existing active test
+    existing = cursor.execute(
+        "SELECT * FROM ab_tests WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    
+    if existing:
+        result = {
+            'test_id': existing['id'],
+            'test_name': existing['test_name'],
+            'test_type': existing['test_type'],
+            'variant_a': json.loads(existing['variant_a']),
+            'variant_b': json.loads(existing['variant_b']),
+            'samples_a': existing['samples_a'],
+            'samples_b': existing['samples_b'],
+        }
+        conn.close()
+        return result
+    
+    # No active test — create a new one
+    if not test_type:
+        # Pick a random test type
+        import random
+        test_type = random.choice(list(AB_TEST_TYPES.keys()))
+    
+    test_config = AB_TEST_TYPES.get(test_type)
+    if not test_config:
+        conn.close()
+        return None
+    
+    import random
+    variants = test_config['variants']
+    # Pick two random variants for A/B comparison
+    if len(variants) >= 2:
+        chosen = random.sample(variants, 2)
+    else:
+        chosen = [variants[0], variants[0]]
+    
+    variant_a = {'value': chosen[0], 'label': f"{test_config['name']}: {chosen[0]}"}
+    variant_b = {'value': chosen[1], 'label': f"{test_config['name']}: {chosen[1]}"}
+    
+    test_id = create_ab_test(
+        test_name=f"Auto: {test_config['name']} ({chosen[0]} vs {chosen[1]})",
+        test_type=test_type,
+        variant_a=variant_a,
+        variant_b=variant_b,
+    )
+    
+    conn.close()
+    return {
+        'test_id': test_id,
+        'test_name': f"Auto: {test_config['name']} ({chosen[0]} vs {chosen[1]})",
+        'test_type': test_type,
+        'variant_a': variant_a,
+        'variant_b': variant_b,
+        'samples_a': 0,
+        'samples_b': 0,
+    }
+
+
+def assign_ab_variant(test_id: str, script_number: int) -> str:
+    """Assign a variant ('a' or 'b') based on script number (round-robin).
+    
+    Even-numbered scripts get variant 'a', odd get variant 'b'.
+    """
+    return 'a' if script_number % 2 == 0 else 'b'
+
+
+def record_ab_result_for_script(script_id: str, performance_score: float) -> None:
+    """Record A/B test result when metrics are fetched for a script.
+    
+    Looks up the script's ab_test_id and ab_variant, then records the result.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    script = cursor.execute(
+        "SELECT ab_test_id, ab_variant FROM scripts WHERE id = ?", (script_id,)
+    ).fetchone()
+    
+    if not script or not script['ab_test_id'] or not script['ab_variant']:
+        conn.close()
+        return
+    
+    test_id = script['ab_test_id']
+    variant = script['ab_variant']
+    
+    conn.close()
+    
+    # Record the result (this updates samples count and avg performance)
+    record_ab_test_result(test_id, variant, performance_score)
+    
+    # Check if test should be completed
+    result = get_ab_test_results(test_id)
+    if result and result.get('status') == 'completed':
+        _feed_ab_winner_to_learning(result)
+
+
+def _feed_ab_winner_to_learning(test_result: Dict) -> None:
+    """Feed A/B test winner into the learning system.
+    
+    Boosts the winning variant's weight in the learnings table.
+    """
+    test_type = test_result.get('test_type', '')
+    winner = test_result.get('winner', '')
+    
+    if not winner or winner == 'tie':
+        return
+    
+    # Determine the winning value
+    variant_key = f'variant_{winner}'
+    winning_variant = test_result.get(variant_key, {})
+    winning_value = winning_variant.get('value', '')
+    
+    if not winning_value:
+        return
+    
+    # Calculate boost based on performance difference
+    avg_a = test_result.get('avg_performance_a', 50)
+    avg_b = test_result.get('avg_performance_b', 50)
+    winner_avg = avg_a if winner == 'a' else avg_b
+    loser_avg = avg_b if winner == 'a' else avg_a
+    
+    # Boost score: winner gets positive, loser gets negative
+    boost = min(20.0, max(-10.0, (winner_avg - loser_avg) * 0.5))
+    
+    # Record in learnings table
+    update_learning_with_variance(
+        feature_name=f'ab_test_{test_type}',
+        feature_value=winning_value,
+        metric_type='ab_test',
+        performance_score=50 + boost,  # Center around 50 so boost is relative
+    )
+    
+    # Also boost the regular content_type or tts_voice learning
+    if test_type == 'content_type':
+        update_learning_with_variance(
+            feature_name='content_type',
+            feature_value=winning_value,
+            metric_type='combined',
+            performance_score=winner_avg,
+        )
+    elif test_type == 'tts_voice':
+        update_learning_with_variance(
+            feature_name='tts_voice',
+            feature_value=winning_value,
+            metric_type='combined',
+            performance_score=winner_avg,
+        )
+
+
+def get_current_ab_test_info() -> Optional[Dict]:
+    """Get info about the current active A/B test for display on dashboard."""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    test = cursor.execute(
+        "SELECT * FROM ab_tests WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    
+    if not test:
+        conn.close()
+        return None
+    
+    # Count scripts assigned to each variant
+    cursor.execute("""
+        SELECT ab_variant, COUNT(*) as count
+        FROM scripts
+        WHERE ab_test_id = ?
+        GROUP BY ab_variant
+    """, (test['id'],))
+    variant_counts = {row['ab_variant']: row['count'] for row in cursor.fetchall()}
+    
+    conn.close()
+    
+    return {
+        'id': test['id'],
+        'test_name': test['test_name'],
+        'test_type': test['test_type'],
+        'variant_a': json.loads(test['variant_a']),
+        'variant_b': json.loads(test['variant_b']),
+        'samples_a': test['samples_a'],
+        'samples_b': test['samples_b'],
+        'avg_performance_a': test['avg_performance_a'],
+        'avg_performance_b': test['avg_performance_b'],
+        'created_at': test['created_at'],
+        'scripts_a': variant_counts.get('a', 0),
+        'scripts_b': variant_counts.get('b', 0),
+    }
 
 
 init_db()

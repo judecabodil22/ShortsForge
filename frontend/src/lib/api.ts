@@ -101,6 +101,7 @@ export const getLearningWeights = () => fetchAPI<any>('/api/learnings/weights')
 export const getLearningDashboard = () => fetchAPI<any>('/api/learning/dashboard')
 export const getActiveABTests = () => fetchAPI<any>('/api/learning/ab-tests')
 export const getTikTokLearningSignals = () => fetchAPI<any>('/api/learning/tiktok-signals')
+export const getCurrentABTest = () => fetchAPI<any>('/api/learning/ab-current')
 export const createABTest = (testName: string, testType: string, variantA: any, variantB: any) =>
   fetchAPI<any>('/api/learning/ab-test', { method: 'POST', body: { test_name: testName, test_type: testType, variant_a: variantA, variant_b: variantB } })
 export const getABTest = (testId: string) => fetchAPI<any>(`/api/learning/ab-test/${testId}`)

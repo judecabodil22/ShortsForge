@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { Brain, TrendingUp, BarChart3, TestTube, CheckCircle, Clock, PieChart as PieChartIcon, Video } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
 import { SectionHeader } from '@/components/ui/SectionHeader'
-import { getLearningDashboard, getActiveABTests, getTikTokLearningSignals } from '@/lib/api'
+import { getLearningDashboard, getActiveABTests, getTikTokLearningSignals, getCurrentABTest } from '@/lib/api'
 import { stagger, slideLeft } from '@/lib/animations'
 import { formatNumber } from '@/lib/utils'
 import {
@@ -35,6 +35,11 @@ export default function LearningDashboard() {
   const { data: tiktokSignals } = useQuery({
     queryKey: ['tiktok-learning-signals'],
     queryFn: getTikTokLearningSignals,
+  })
+
+  const { data: currentTest } = useQuery({
+    queryKey: ['current-ab-test'],
+    queryFn: getCurrentABTest,
   })
 
   const activeTests = abTests?.active || []
@@ -106,6 +111,65 @@ export default function LearningDashboard() {
           </div>
         </Card>
       </motion.div>
+
+      {/* Current A/B Test */}
+      {currentTest && currentTest.id && (
+        <motion.div
+          variants={{ ...slideLeft, show: { opacity: 1 } }}
+          className="mb-6"
+        >
+          <Card accent="gold" notch>
+            <SectionHeader title="Current A/B Test" icon={<TestTube className="w-4 h-4" />} terminal />
+            <div className="mt-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Clock className="w-4 h-4 text-40k-gold" />
+                <span className="text-sm text-gray-400">Running</span>
+                <span className="text-xs text-gray-500">•</span>
+                <span className="text-xs text-gray-500">Created {new Date(currentTest.created_at).toLocaleDateString()}</span>
+              </div>
+              
+              <h4 className="text-white font-medium mb-2">{currentTest.test_name}</h4>
+              <p className="text-xs text-gray-400 mb-4">Type: {currentTest.test_type}</p>
+              
+              {/* Variant Comparison */}
+              <div className="grid grid-cols-2 gap-4">
+                {/* Variant A */}
+                <div className="p-3 bg-40k-dark rounded border border-40k-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-40k-gold">Variant A</span>
+                    <span className="text-xs text-gray-400">{currentTest.scripts_a || 0} scripts</span>
+                  </div>
+                  <p className="text-sm text-white mb-1">{currentTest.variant_a?.label || 'N/A'}</p>
+                  <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <span>Samples: {currentTest.samples_a}</span>
+                    <span>•</span>
+                    <span>Avg: {currentTest.avg_performance_a?.toFixed(1) || '0'}</span>
+                  </div>
+                </div>
+                
+                {/* Variant B */}
+                <div className="p-3 bg-40k-dark rounded border border-40k-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-40k-crimson-bright">Variant B</span>
+                    <span className="text-xs text-gray-400">{currentTest.scripts_b || 0} scripts</span>
+                  </div>
+                  <p className="text-sm text-white mb-1">{currentTest.variant_b?.label || 'N/A'}</p>
+                  <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <span>Samples: {currentTest.samples_b}</span>
+                    <span>•</span>
+                    <span>Avg: {currentTest.avg_performance_b?.toFixed(1) || '0'}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <p className="text-xs text-gray-500 mt-3">
+                Pipeline automatically assigns scripts to variants (even/odd round-robin).
+                Results are recorded when YouTube metrics are fetched.
+              </p>
+            </div>
+          </Card>
+        </motion.div>
+      )}
 
       {/* TikTok Learning Signals */}
       <motion.div

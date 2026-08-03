@@ -308,6 +308,9 @@ _LEARNING_VARIANT_STATS = {}
 _LEARNING_TTS_WEIGHTS = []
 _LEARNING_OPTIMIZED_PARAMS = {}
 
+# A/B test state (refreshed at pipeline start)
+_CURRENT_AB_TEST = None
+
 # Context editing state
 CONTEXT_EDIT_STATE = {}
 _ctx_edit_lock = threading.Lock()
@@ -332,6 +335,7 @@ def _refresh_learning_state():
     """
     global _LEARNING_BASELINE, _LEARNING_VARIANT_WEIGHTS, _LEARNING_VARIANT_STATS
     global _LEARNING_TTS_WEIGHTS, _LEARNING_OPTIMIZED_PARAMS, _SCRIPT_ID_MAP
+    global _CURRENT_AB_TEST
     _clear_shared_state()
 
     if not PERFORMANCE_DB_AVAILABLE:
@@ -352,6 +356,18 @@ def _refresh_learning_state():
         _LEARNING_VARIANT_WEIGHTS = get_learned_variant_weights(min_samples=3)
         _LEARNING_VARIANT_STATS = get_variant_performance_stats()
         _LEARNING_TTS_WEIGHTS = get_weighted_tts_voices()
+
+        # Initialize A/B test for this pipeline run
+        try:
+            from performance_database import get_or_create_ab_test
+            _CURRENT_AB_TEST = get_or_create_ab_test()
+            if _CURRENT_AB_TEST:
+                log(f"[A/B] Active test: {_CURRENT_AB_TEST['test_name']} (ID: {_CURRENT_AB_TEST['test_id'][:8]}...)")
+            else:
+                log("[A/B] No active test")
+        except Exception as ab_err:
+            log(f"[A/B] Failed to initialize: {ab_err}")
+            _CURRENT_AB_TEST = None
 
         try:
             from learning_engine import get_optimized_params, analyze_performance_patterns
@@ -4644,6 +4660,15 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
             if PERFORMANCE_DB_AVAILABLE and LEARNING_ENGINE_AVAILABLE:
                 try:
                     features = extract_script_features(best_script, variant_key)
+                    
+                    # Assign A/B test variant
+                    ab_test_id = None
+                    ab_variant = None
+                    if _CURRENT_AB_TEST:
+                        from performance_database import assign_ab_variant
+                        ab_test_id = _CURRENT_AB_TEST['test_id']
+                        ab_variant = assign_ab_variant(ab_test_id, i)
+                    
                     script_id = store_script(
                         video_name=video_basename,
                         content_type=variant_key,
@@ -4653,8 +4678,14 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                         description=script_metadata.get("description", ""),
                         hashtags=",".join(script_metadata.get("hashtags", [])),
                         tags=",".join(script_metadata.get("tags", [])),
+                        ab_test_id=ab_test_id,
+                        ab_variant=ab_variant,
                     )
-                    log(f"Performance: Script stored (ID: {script_id[:8]}...)")
+                    
+                    if ab_variant:
+                        log(f"Performance: Script stored (ID: {script_id[:8]}...) [A/B: variant {ab_variant.upper()}]")
+                    else:
+                        log(f"Performance: Script stored (ID: {script_id[:8]}...)")
                     _SCRIPT_ID_MAP[i] = script_id
                 except Exception as perf_err:
                     log(f"Performance DB: Failed to store script - {perf_err}")

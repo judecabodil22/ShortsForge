@@ -1369,6 +1369,14 @@ async def get_ab_tests_list():
     }
 
 
+@app.get("/api/learning/ab-current")
+async def get_current_ab_test():
+    """Get info about the current active A/B test with variant assignment details."""
+    from workflows.performance_database import get_current_ab_test_info
+    result = get_current_ab_test_info()
+    return result or {"message": "No active A/B test"}
+
+
 # ---------------------------------------------------------------------------
 # System / Desktop Port Endpoints
 # ---------------------------------------------------------------------------
