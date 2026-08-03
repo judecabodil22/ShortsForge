@@ -1278,6 +1278,53 @@ async def get_learning_dashboard():
     }
 
 
+@app.get("/api/learning/tiktok-signals")
+async def get_tiktok_learning_signals():
+    """Get TikTok engagement signals that influence the learning system."""
+    from workflows.tiktok_analytics import get_tiktok_engagement_by_game, get_tiktok_retention_signals
+    
+    engagement_by_game = get_tiktok_engagement_by_game()
+    retention_signals = get_tiktok_retention_signals()
+    
+    # Calculate bonuses/penalties for each game
+    game_effects = []
+    for signal in retention_signals:
+        game = signal['game']
+        engagement = signal['engagement_ratio']
+        
+        if engagement > 3.0:
+            bonus = min(5.0, (engagement - 3.0) * 1.0)
+            effect = 'bonus'
+        elif engagement < 1.0 and engagement > 0:
+            penalty = min(3.0, (1.0 - engagement) * 2.0)
+            bonus = -penalty
+            effect = 'penalty'
+        else:
+            bonus = 0
+            effect = 'neutral'
+        
+        game_effects.append({
+            'game': game,
+            'engagement_ratio': engagement,
+            'video_count': signal['video_count'],
+            'avg_views': signal['avg_views'],
+            'total_views': signal['total_views'],
+            'score_effect': round(bonus, 1),
+            'effect_type': effect,
+        })
+    
+    # Sort by effect (bonuses first, then neutral, then penalties)
+    game_effects.sort(key=lambda x: x['score_effect'], reverse=True)
+    
+    return {
+        'games': game_effects,
+        'total_games': len(game_effects),
+        'bonus_games': len([g for g in game_effects if g['effect_type'] == 'bonus']),
+        'penalty_games': len([g for g in game_effects if g['effect_type'] == 'penalty']),
+        'neutral_games': len([g for g in game_effects if g['effect_type'] == 'neutral']),
+    }
+
+
 @app.post("/api/learning/ab-test")
 async def create_ab_test_endpoint(request: Request, api_key: str = Depends(verify_api_key)):
     """Create a new A/B test."""

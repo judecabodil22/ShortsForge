@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Brain, TrendingUp, BarChart3, TestTube, CheckCircle, Clock, PieChart as PieChartIcon } from 'lucide-react'
+import { Brain, TrendingUp, BarChart3, TestTube, CheckCircle, Clock, PieChart as PieChartIcon, Video } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
 import { SectionHeader } from '@/components/ui/SectionHeader'
-import { getLearningDashboard, getActiveABTests } from '@/lib/api'
+import { getLearningDashboard, getActiveABTests, getTikTokLearningSignals } from '@/lib/api'
 import { stagger, slideLeft } from '@/lib/animations'
+import { formatNumber } from '@/lib/utils'
 import {
   ResponsiveContainer,
   PieChart,
@@ -29,6 +30,11 @@ export default function LearningDashboard() {
   const { data: abTests } = useQuery({
     queryKey: ['ab-tests'],
     queryFn: getActiveABTests,
+  })
+
+  const { data: tiktokSignals } = useQuery({
+    queryKey: ['tiktok-learning-signals'],
+    queryFn: getTikTokLearningSignals,
   })
 
   const activeTests = abTests?.active || []
@@ -71,9 +77,9 @@ export default function LearningDashboard() {
           icon={<CheckCircle className="w-5 h-5" />}
         />
         <StatCard
-          label="Content Types"
-          value={Object.keys(dashboard?.content_effectiveness || {}).length.toString()}
-          icon={<BarChart3 className="w-5 h-5" />}
+          label="TikTok Games"
+          value={tiktokSignals?.total_games?.toString() || '0'}
+          icon={<Video className="w-5 h-5" />}
         />
       </motion.div>
 
@@ -96,6 +102,92 @@ export default function LearningDashboard() {
               </ul>
             ) : (
               <p className="text-sm text-gray-400">No insights available yet. Run more pipelines to generate learning data.</p>
+            )}
+          </div>
+        </Card>
+      </motion.div>
+
+      {/* TikTok Learning Signals */}
+      <motion.div
+        variants={{ ...slideLeft, show: { opacity: 1 } }}
+        className="mb-6"
+      >
+        <Card accent="crimson" notch>
+          <SectionHeader title="TikTok Learning Signals" icon={<Video className="w-4 h-4" />} terminal />
+          <div className="mt-4">
+            {tiktokSignals?.games && tiktokSignals.games.length > 0 ? (
+              <>
+                {/* Summary */}
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div className="text-center p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                    <p className="text-2xl font-bold text-green-400">{tiktokSignals.bonus_games}</p>
+                    <p className="text-xs text-gray-400">Bonus Games (+5)</p>
+                  </div>
+                  <div className="text-center p-3 bg-gray-500/10 rounded-lg border border-gray-500/20">
+                    <p className="text-2xl font-bold text-gray-400">{tiktokSignals.neutral_games}</p>
+                    <p className="text-xs text-gray-400">Neutral</p>
+                  </div>
+                  <div className="text-center p-3 bg-red-500/10 rounded-lg border border-red-500/20">
+                    <p className="text-2xl font-bold text-red-400">{tiktokSignals.penalty_games}</p>
+                    <p className="text-xs text-gray-400">Penalty Games (-3)</p>
+                  </div>
+                </div>
+
+                {/* Game Details */}
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-40k-border">
+                        <th className="text-left py-2 px-3 text-gray-400 font-medium text-sm">Game</th>
+                        <th className="text-right py-2 px-3 text-gray-400 font-medium text-sm">Videos</th>
+                        <th className="text-right py-2 px-3 text-gray-400 font-medium text-sm">Avg Views</th>
+                        <th className="text-right py-2 px-3 text-gray-400 font-medium text-sm">Engagement</th>
+                        <th className="text-right py-2 px-3 text-gray-400 font-medium text-sm">Score Effect</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tiktokSignals.games.map((game: any, i: number) => (
+                        <tr key={i} className="border-b border-40k-border/50 hover:bg-40k-dark/50">
+                          <td className="py-2 px-3 text-white capitalize">
+                            {game.game.replace(/_/g, ' ')}
+                          </td>
+                          <td className="py-2 px-3 text-right text-gray-300">{game.video_count}</td>
+                          <td className="py-2 px-3 text-right text-gray-300">{formatNumber(game.avg_views)}</td>
+                          <td className="py-2 px-3 text-right">
+                            <span className={`px-2 py-0.5 rounded text-xs ${
+                              game.engagement_ratio > 3
+                                ? 'bg-green-500/20 text-green-400'
+                                : game.engagement_ratio > 1
+                                ? 'bg-yellow-500/20 text-yellow-400'
+                                : 'bg-gray-500/20 text-gray-400'
+                            }`}>
+                              {game.engagement_ratio.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            <span className={`font-medium ${
+                              game.score_effect > 0
+                                ? 'text-green-400'
+                                : game.score_effect < 0
+                                ? 'text-red-400'
+                                : 'text-gray-400'
+                            }`}>
+                              {game.score_effect > 0 ? '+' : ''}{game.score_effect}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <p className="text-xs text-gray-500 mt-3">
+                  TikTok engagement data feeds into <code className="text-40k-gold">retention_adjustment()</code>.
+                  Games with &gt;3% engagement get a +5 bonus; &lt;1% get a -3 penalty.
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-gray-400">No TikTok data imported yet. Import TikTok analytics to enable cross-platform learning.</p>
             )}
           </div>
         </Card>
