@@ -563,11 +563,12 @@ def _optimize_for_engagement(script: str) -> str:
 
 
 _retention_history: list = []
+_tiktok_engagement_by_game: dict = {}
 
 
 def load_retention_history(max_samples: int = 100):
     """Load past script performance data from performance DB."""
-    global _retention_history
+    global _retention_history, _tiktok_engagement_by_game
     try:
         from workflows.performance_database import get_successful_scripts
         scripts = get_successful_scripts(limit=max_samples)
@@ -577,17 +578,26 @@ def load_retention_history(max_samples: int = 100):
                 "has_hook": bool(s.get("hook_score", 0) > 0.5),
                 "has_cta": "follow" in (s.get("script_text", "") or "").lower(),
                 "performance": s.get("performance_score", 50),
+                "video_name": s.get("video_name", ""),
             }
             for s in scripts if s.get("performance_score")
         ]
     except Exception:
         pass
+    
+    # Load TikTok engagement signals for cross-platform learning
+    try:
+        from workflows.tiktok_analytics import get_tiktok_engagement_by_game
+        _tiktok_engagement_by_game = get_tiktok_engagement_by_game()
+    except Exception:
+        _tiktok_engagement_by_game = {}
 
 
 def retention_adjustment(features: Dict) -> float:
     """Calculate score adjustment based historical retention patterns (0-15 bonus).
     
     Uses historical data to adjust scores based on what actually performed well.
+    Now includes TikTok engagement signals for cross-platform learning.
     """
     if not _retention_history:
         return 0.0
@@ -598,6 +608,7 @@ def retention_adjustment(features: Dict) -> float:
     has_laughter = features.get("has_laughter", False)
     duration = features.get("duration", 45)
     volume_spike = features.get("volume_spike", False)
+    game_name = features.get("game_name", "")
     
     # Find similar clips in history
     similar = []
@@ -616,8 +627,22 @@ def retention_adjustment(features: Dict) -> float:
     # Calculate average performance of similar clips
     avg_perf = sum(r.get("performance", 50) for r in similar) / len(similar)
     
-    # Return adjustment: positive if above average, negative if below
-    return min(15.0, max(-10.0, (avg_perf - 50) * 0.3))
+    # Base adjustment from YouTube history
+    adjustment = min(15.0, max(-10.0, (avg_perf - 50) * 0.3))
+    
+    # TikTok boost: if this game performed well on TikTok, add bonus
+    if game_name and _tiktok_engagement_by_game:
+        tiktok_engagement = _tiktok_engagement_by_game.get(game_name.lower(), 0)
+        if tiktok_engagement > 3.0:  # High engagement on TikTok
+            # Bonus up to +5 based on TikTok engagement
+            tiktok_bonus = min(5.0, (tiktok_engagement - 3.0) * 1.0)
+            adjustment += tiktok_bonus
+        elif tiktok_engagement < 1.0 and tiktok_engagement > 0:
+            # Penalty for low TikTok engagement
+            tiktok_penalty = min(3.0, (1.0 - tiktok_engagement) * 2.0)
+            adjustment -= tiktok_penalty
+    
+    return min(15.0, max(-10.0, adjustment))
 
 
 def calculate_virality_score(

@@ -661,6 +661,17 @@ async def get_cross_platform_comparison():
     return {"matched": matched, "total_tiktok": len(tiktok_vids), "total_youtube": len(youtube_vids)}
 
 
+@app.get("/api/metrics/cross-platform")
+async def get_cross_platform_stats():
+    """Get cross-platform performance statistics for unified dashboard."""
+    from workflows.performance_database import get_cross_platform_stats as _get_stats
+    try:
+        stats = _get_stats()
+        return stats
+    except Exception as e:
+        return {"error": str(e), "youtube": {}, "tiktok": {}, "tiktok_games": []}
+
+
 @app.post("/api/metrics/tiktok/import")
 @limiter.limit("1/minute")
 async def import_tiktok_data(request: Request, _: bool = Depends(verify_api_key)):

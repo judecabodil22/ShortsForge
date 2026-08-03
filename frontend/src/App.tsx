@@ -8,12 +8,11 @@ import Layout from '@/components/layout/Layout'
 import Dashboard from '@/pages/Dashboard'
 import Graph from '@/pages/Graph'
 import Scripts from '@/pages/Scripts'
-import Metrics from '@/pages/Metrics'
+import Performance from '@/pages/Performance'
 import Context from '@/pages/Context'
 import Settings from '@/pages/Settings'
 import PromptEditor from '@/pages/PromptEditor'
 import LearningDashboard from '@/pages/LearningDashboard'
-import TikTokAnalytics from '@/pages/TikTokAnalytics'
 import { pageVariants, pageTransition } from '@/lib/animations'
 
 const queryClient = new QueryClient({
@@ -49,8 +48,7 @@ function AppRoutes() {
         <Route path="/dashboard" element={<AnimatedPage><Dashboard /></AnimatedPage>} />
         <Route path="/graph" element={<AnimatedPage><Graph /></AnimatedPage>} />
         <Route path="/scripts" element={<AnimatedPage><Scripts /></AnimatedPage>} />
-        <Route path="/metrics" element={<AnimatedPage><Metrics /></AnimatedPage>} />
-        <Route path="/tiktok" element={<AnimatedPage><TikTokAnalytics /></AnimatedPage>} />
+        <Route path="/metrics" element={<AnimatedPage><Performance /></AnimatedPage>} />
         <Route path="/context" element={<AnimatedPage><Context /></AnimatedPage>} />
         <Route path="/settings" element={<AnimatedPage><Settings /></AnimatedPage>} />
         <Route path="/prompts" element={<AnimatedPage><PromptEditor /></AnimatedPage>} />

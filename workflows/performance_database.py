@@ -536,6 +536,91 @@ def get_successful_scripts(limit: int = 10) -> List[Dict]:
     return [dict(row) for row in rows]
 
 
+def get_cross_platform_stats() -> Dict:
+    """Get cross-platform performance statistics combining YouTube and TikTok.
+    
+    Returns aggregated stats for the unified Performance dashboard.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # YouTube stats
+    cursor.execute("""
+        SELECT COUNT(DISTINCT v.id) as total_videos,
+               COALESCE(AVG(m.views), 0) as avg_views,
+               COALESCE(AVG(m.engagement_ratio), 0) as avg_engagement,
+               COALESCE(AVG(m.performance_score), 0) as avg_performance
+        FROM videos v
+        JOIN metrics m ON m.video_id = v.id
+    """)
+    yt_row = cursor.fetchone()
+    
+    # YouTube content type breakdown
+    cursor.execute("""
+        SELECT s.content_type,
+               COUNT(*) as count,
+               COALESCE(AVG(m.views), 0) as avg_views,
+               COALESCE(AVG(m.performance_score), 0) as avg_score
+        FROM scripts s
+        JOIN videos v ON v.script_id = s.id
+        JOIN metrics m ON m.video_id = v.id
+        GROUP BY s.content_type
+    """)
+    yt_content = [dict(r) for r in cursor.fetchall()]
+    
+    # TikTok stats (from tiktok_videos table if it exists)
+    tt_stats = {'total_videos': 0, 'avg_views': 0, 'avg_engagement': 0}
+    try:
+        cursor.execute("""
+            SELECT COUNT(*) as total_videos,
+                   COALESCE(AVG(total_views), 0) as avg_views,
+                   CASE WHEN SUM(total_views) > 0 
+                        THEN (SUM(total_likes) + SUM(total_comments) + SUM(total_shares)) * 100.0 / SUM(total_views)
+                        ELSE 0 END as avg_engagement
+            FROM tiktok_videos
+        """)
+        tt_row = cursor.fetchone()
+        if tt_row:
+            tt_stats = {
+                'total_videos': tt_row['total_videos'],
+                'avg_views': round(tt_row['avg_views'], 1),
+                'avg_engagement': round(tt_row['avg_engagement'], 2),
+            }
+    except Exception:
+        pass
+    
+    # TikTok game breakdown
+    tt_games = []
+    try:
+        cursor.execute("""
+            SELECT game,
+                   COUNT(*) as count,
+                   AVG(total_views) as avg_views,
+                   CASE WHEN SUM(total_views) > 0 
+                        THEN (SUM(total_likes) + SUM(total_comments) + SUM(total_shares)) * 100.0 / SUM(total_views)
+                        ELSE 0 END as avg_engagement
+            FROM tiktok_videos
+            GROUP BY game
+        """)
+        tt_games = [dict(r) for r in cursor.fetchall()]
+    except Exception:
+        pass
+    
+    conn.close()
+    
+    return {
+        'youtube': {
+            'total_videos': yt_row['total_videos'] if yt_row else 0,
+            'avg_views': round(yt_row['avg_views'] or 0, 1),
+            'avg_engagement': round(yt_row['avg_engagement'] or 0, 2),
+            'avg_performance': round(yt_row['avg_performance'] or 0, 1),
+            'content_types': yt_content,
+        },
+        'tiktok': tt_stats,
+        'tiktok_games': tt_games,
+    }
+
+
 def get_learnings(metric_type: str = None) -> List[Dict]:
     """Get stored learnings."""
     conn = get_db()

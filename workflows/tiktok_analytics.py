@@ -610,3 +610,157 @@ def _normalize_title(title: str) -> str:
     # Lowercase and collapse whitespace
     text = ' '.join(text.lower().split())
     return text.strip()
+
+
+# ─── Cross-Platform Learning Functions ──────────────────────────────────────
+
+def get_tiktok_performance_for_game(game_name: str) -> Optional[Dict]:
+    """Get TikTok performance stats for a specific game.
+    
+    Used by the learning engine to weight clips that performed well on TikTok.
+    Returns avg engagement ratio, total views, video count for the game.
+    """
+    conn = _get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT COUNT(*) as video_count,
+               SUM(total_views) as total_views,
+               AVG(total_views) as avg_views,
+               SUM(total_likes) as total_likes,
+               SUM(total_comments) as total_comments,
+               SUM(total_shares) as total_shares
+        FROM tiktok_videos
+        WHERE LOWER(game) = LOWER(?)
+    """, (game_name,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or row['video_count'] == 0:
+        return None
+    
+    total_views = row['total_views'] or 0
+    total_likes = row['total_likes'] or 0
+    total_comments = row['total_comments'] or 0
+    total_shares = row['total_shares'] or 0
+    
+    # Calculate engagement ratio (likes + comments + shares) / views
+    engagement = ((total_likes + total_comments + total_shares) / total_views * 100) if total_views > 0 else 0
+    
+    return {
+        'game': game_name,
+        'video_count': row['video_count'],
+        'total_views': total_views,
+        'avg_views': round(row['avg_views'] or 0, 1),
+        'total_likes': total_likes,
+        'total_comments': total_comments,
+        'total_shares': total_shares,
+        'engagement_ratio': round(engagement, 2),
+    }
+
+
+def get_tiktok_engagement_by_game() -> Dict[str, float]:
+    """Get engagement ratios by game for learning engine.
+    
+    Returns dict mapping game name to engagement ratio (0-100 scale).
+    Used by retention_adjustment() to boost clips from high-engagement games.
+    """
+    conn = _get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT game,
+               SUM(total_views) as total_views,
+               SUM(total_likes) + SUM(total_comments) + SUM(total_shares) as total_engagement
+        FROM tiktok_videos
+        GROUP BY game
+        HAVING total_views > 0
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    result = {}
+    for row in rows:
+        engagement = (row['total_engagement'] / row['total_views'] * 100) if row['total_views'] > 0 else 0
+        result[row['game']] = round(engagement, 2)
+    
+    return result
+
+
+def calculate_cross_platform_score(
+    youtube_views: int = 0,
+    youtube_engagement: float = 0,
+    tiktok_views: int = 0,
+    tiktok_engagement: float = 0,
+    youtube_weight: float = 0.5,
+    tiktok_weight: float = 0.5,
+) -> float:
+    """Calculate a combined cross-platform performance score (0-100).
+    
+    Normalizes both platforms to 0-100 scale and blends them.
+    If one platform has no data, uses only the other.
+    """
+    has_youtube = youtube_views > 0
+    has_tiktok = tiktok_views > 0
+    
+    if not has_youtube and not has_tiktok:
+        return 0.0
+    
+    # Normalize YouTube score (0-100)
+    yt_score = 0.0
+    if has_youtube:
+        views_score = min(youtube_views / 100, 100) * 0.4
+        engagement_score = min(youtube_engagement * 10, 100) * 0.6
+        yt_score = views_score + engagement_score
+    
+    # Normalize TikTok score (0-100)
+    tt_score = 0.0
+    if has_tiktok:
+        views_score = min(tiktok_views / 100, 100) * 0.4
+        engagement_score = min(tiktok_engagement * 10, 100) * 0.6
+        tt_score = views_score + engagement_score
+    
+    # Blend scores, adjusting weights if one platform is missing
+    if not has_youtube:
+        return min(100, tt_score)
+    if not has_tiktok:
+        return min(100, yt_score)
+    
+    combined = (yt_score * youtube_weight) + (tt_score * tiktok_weight)
+    return min(100, combined)
+
+
+def get_tiktok_retention_signals() -> List[Dict]:
+    """Get TikTok performance signals for retention learning.
+    
+    Returns list of dicts with game, engagement_ratio, and video_count.
+    Used by learning_engine.py to enhance retention_adjustment().
+    """
+    conn = _get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT game,
+               SUM(total_views) as total_views,
+               SUM(total_likes) + SUM(total_comments) + SUM(total_shares) as total_engagement,
+               COUNT(*) as video_count,
+               AVG(total_views) as avg_views
+        FROM tiktok_videos
+        GROUP BY game
+        HAVING total_views > 0
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for row in rows:
+        engagement = (row['total_engagement'] / row['total_views'] * 100) if row['total_views'] > 0 else 0
+        result.append({
+            'game': row['game'],
+            'engagement_ratio': round(engagement, 2),
+            'video_count': row['video_count'],
+            'avg_views': round(row['avg_views'] or 0, 1),
+            'total_views': row['total_views'],
+        })
+    
+    return result
