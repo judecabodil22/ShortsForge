@@ -13,6 +13,7 @@ import Context from '@/pages/Context'
 import Settings from '@/pages/Settings'
 import PromptEditor from '@/pages/PromptEditor'
 import LearningDashboard from '@/pages/LearningDashboard'
+import TikTokAnalytics from '@/pages/TikTokAnalytics'
 import { pageVariants, pageTransition } from '@/lib/animations'
 
 const queryClient = new QueryClient({
@@ -49,6 +50,7 @@ function AppRoutes() {
         <Route path="/graph" element={<AnimatedPage><Graph /></AnimatedPage>} />
         <Route path="/scripts" element={<AnimatedPage><Scripts /></AnimatedPage>} />
         <Route path="/metrics" element={<AnimatedPage><Metrics /></AnimatedPage>} />
+        <Route path="/tiktok" element={<AnimatedPage><TikTokAnalytics /></AnimatedPage>} />
         <Route path="/context" element={<AnimatedPage><Context /></AnimatedPage>} />
         <Route path="/settings" element={<AnimatedPage><Settings /></AnimatedPage>} />
         <Route path="/prompts" element={<AnimatedPage><PromptEditor /></AnimatedPage>} />

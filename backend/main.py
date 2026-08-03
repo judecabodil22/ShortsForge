@@ -588,6 +588,105 @@ async def sync_youtube_metrics(request: Request, _: bool = Depends(verify_api_ke
 
 
 # ---------------------------------------------------------------------------
+# TikTok Analytics Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/metrics/tiktok/summary")
+async def get_tiktok_summary():
+    """Aggregated TikTok stats"""
+    from workflows.tiktok_analytics import get_tiktok_summary as _get_summary
+    return _get_summary()
+
+
+@app.get("/api/metrics/tiktok/videos")
+async def get_tiktok_videos():
+    """All TikTok videos with metrics"""
+    from workflows.tiktok_analytics import get_tiktok_videos as _get_videos
+    return {"videos": _get_videos()}
+
+
+@app.get("/api/metrics/tiktok/daily")
+async def get_tiktok_daily(days: int = 30):
+    """Daily trend data for charts"""
+    from workflows.tiktok_analytics import get_tiktok_daily_metrics
+    return {"daily": get_tiktok_daily_metrics(days)}
+
+
+@app.get("/api/metrics/tiktok/games")
+async def get_tiktok_games():
+    """Per-game stats for TikTok videos"""
+    from workflows.tiktok_analytics import get_tiktok_game_stats
+    return {"games": get_tiktok_game_stats()}
+
+
+@app.get("/api/metrics/tiktok/comparison")
+async def get_cross_platform_comparison():
+    """Side-by-side YouTube vs TikTok for matched videos"""
+    from workflows.tiktok_analytics import get_tiktok_videos
+    from workflows.performance_database import get_all_videos_with_metrics
+
+    tiktok_vids = get_tiktok_videos()
+    youtube_vids = get_all_videos_with_metrics()
+
+    # Build comparison by matching titles
+    matched = []
+    for tt in tiktok_vids:
+        tt_title = (tt.get('title') or '').lower()
+        best_match = None
+        best_score = 0
+
+        for yt in youtube_vids:
+            yt_title = (yt.get('title') or '').lower()
+            if not yt_title:
+                continue
+
+            # Simple substring matching
+            if tt_title[:20] in yt_title or yt_title[:20] in tt_title:
+                score = 80
+            else:
+                from difflib import SequenceMatcher
+                score = int(SequenceMatcher(None, tt_title[:50], yt_title[:50]).ratio() * 100)
+
+            if score > best_score:
+                best_score = score
+                best_match = yt
+
+        if best_match and best_score >= 50:
+            matched.append({
+                'tiktok': tt,
+                'youtube': best_match,
+                'confidence': best_score,
+            })
+
+    return {"matched": matched, "total_tiktok": len(tiktok_vids), "total_youtube": len(youtube_vids)}
+
+
+@app.post("/api/metrics/tiktok/import")
+@limiter.limit("1/minute")
+async def import_tiktok_data(request: Request, _: bool = Depends(verify_api_key)):
+    """Import TikTok CSV files from Tiktok Analytics/ folder"""
+    from workflows.tiktok_analytics import import_tiktok_data as _import
+    try:
+        result = _import()
+        await ws_manager.broadcast({"type": "tiktok:updated", "data": result})
+        return {"status": "imported", "result": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/metrics/tiktok/match")
+@limiter.limit("1/minute")
+async def match_tiktok_to_local(request: Request, _: bool = Depends(verify_api_key)):
+    """Match TikTok videos to Cogitator clips"""
+    from workflows.tiktok_analytics import match_tiktok_to_clips
+    try:
+        result = match_tiktok_to_clips()
+        return {"status": "matched", "result": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
 # Scripts Endpoints
 # ---------------------------------------------------------------------------
 

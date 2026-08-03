@@ -132,3 +132,12 @@ export const getSegmentRefs = (game: string) => fetchAPI<any>(`/api/context/${en
 export const getScriptPrompt = () => fetchAPI<{ content: string }>('/api/prompts/script')
 export const saveScriptPrompt = (content: string) =>
   fetchAPI<{ status: string }>('/api/prompts/script', { method: 'PUT', body: { content } })
+
+// ─── TikTok Analytics ────────────────────────────────────────────────────────
+export const getTikTokSummary = () => fetchAPI<any>('/api/metrics/tiktok/summary')
+export const getTikTokVideos = () => fetchAPI<any>('/api/metrics/tiktok/videos')
+export const getTikTokDaily = (days: number = 30) => fetchAPI<any>(`/api/metrics/tiktok/daily?days=${days}`)
+export const getTikTokGames = () => fetchAPI<any>('/api/metrics/tiktok/games')
+export const getCrossPlatformComparison = () => fetchAPI<any>('/api/metrics/tiktok/comparison')
+export const importTikTokData = () => fetchAPI<any>('/api/metrics/tiktok/import', { method: 'POST' })
+export const matchTikTokToLocal = () => fetchAPI<any>('/api/metrics/tiktok/match', { method: 'POST' })
