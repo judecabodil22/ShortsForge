@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
-  Video, Eye, Heart, Users, TrendingUp, Download,
-  RefreshCw, BarChart3, PieChart as PieChartIcon, ArrowUpRight, ArrowDownRight
+  Video, Eye, Users, TrendingUp, Download,
+  RefreshCw, BarChart3,
 } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
 import { SectionHeader } from '@/components/ui/SectionHeader'
@@ -15,12 +15,9 @@ import {
   importTikTokData,
   matchTikTokToLocal,
 } from '@/lib/api'
-import { stagger, slideLeft } from '@/lib/animations'
 import { formatNumber } from '@/lib/utils'
 import {
   ResponsiveContainer,
-  LineChart,
-  Line,
   AreaChart,
   Area,
   BarChart,
@@ -47,12 +44,12 @@ export default function TikTokAnalytics() {
   const queryClient = useQueryClient()
   const [dailyDays, setDailyDays] = useState(30)
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  const { data: summary } = useQuery({
     queryKey: ['tiktok-summary'],
     queryFn: getTikTokSummary,
   })
 
-  const { data: videosData, isLoading: videosLoading } = useQuery({
+  const { data: videosData } = useQuery({
     queryKey: ['tiktok-videos'],
     queryFn: getTikTokVideos,
   })
