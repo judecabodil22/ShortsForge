@@ -7,13 +7,89 @@ import os
 import json
 import uuid
 import tempfile
+import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
 
-from workflows.context_manager import load_markdown_context
+from workflows.constants import WORKSPACE, CONTEXT_DIR
+import threading
 
-WORKSPACE = os.path.expanduser("~/Cogitator")
-CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
+logger = logging.getLogger(__name__)
+
+# Thread lock for verified context updates
+_context_file_lock = threading.Lock()
+
+def _wiki_name(cell: str) -> str:
+    """Extract name from Obsidian wiki link if present, else return cell text."""
+    if "[[" in cell and "]]" in cell:
+        # Get content between [[ ]]
+        start = cell.find("[[") + 2
+        end = cell.find("]]", start)
+        content = cell[start:end]
+        # Handle aliased links like [[real_name|alias]]
+        if "|" in content:
+            return content.split("|")[0].strip()
+        return content.strip()
+    return cell.strip()
+
+def load_markdown_context(game_key: str) -> Dict[str, Any]:
+    """Load characters, locations, terms, relationships from Obsidian markdown tables."""
+    ctx_dir = os.path.join(CONTEXT_DIR, game_key)
+    if not os.path.isdir(ctx_dir):
+        return {"characters": [], "locations": [], "key_terms": [], "relationships": []}
+
+    result = {"characters": [], "locations": [], "key_terms": [], "relationships": []}
+    file_map = {
+        "characters": "characters.md",
+        "locations": "locations.md",
+        "key_terms": "key_terms.md",
+    }
+
+    for field, fname in file_map.items():
+        path = os.path.join(ctx_dir, fname)
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line.startswith("|") or "---" in line:
+                continue
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if not parts or parts[0].lower() in ("name", "character", "location", "term"):
+                continue
+            name = _wiki_name(parts[0])
+            if name and name not in result[field]:
+                result[field].append(name)
+
+    rel_path = os.path.join(ctx_dir, "relationships.md")
+    if os.path.exists(rel_path):
+        with open(rel_path, "r", encoding="utf-8") as f:
+            rel_content = f.read()
+        if "|" in rel_content and "---" in rel_content:
+            for line in rel_content.split("\n"):
+                line = line.strip()
+                if not line.startswith("|") or "---" in line or "Character A" in line:
+                    continue
+                parts = [p.strip() for p in line.split("|")[1:-1]]
+                if len(parts) < 3:
+                    continue
+                char_a = _wiki_name(parts[0])
+                connection = parts[1]
+                char_b = _wiki_name(parts[2])
+                if not char_a or char_a == "-":
+                    continue
+                if char_b and char_b != "-":
+                    rel = {"from": char_a, "to": char_b, "relationship": connection}
+                else:
+                    rel = {"from": char_a, "to": char_a, "relationship": connection}
+                if rel not in result["relationships"]:
+                    result["relationships"].append(rel)
+    return result
+
+# Thread lock for verified context updates
+_context_file_lock = threading.Lock()
+
 VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")
 HISTORY_DIR = os.path.join(CONTEXT_DIR, "history")
 SCHEMA_FILE = os.path.join(CONTEXT_DIR, "schema.json")
@@ -63,11 +139,6 @@ def _is_entity_deleted(game_key: str, item_id: str = None, item_name: str = None
             if item_name and ename.lower() == item_name.lower():
                 return True
     return False
-
-
-def _filter_deleted_items(game_key: str, items: List[ContextItem]) -> List[ContextItem]:
-    """Remove items that have been manually deleted."""
-    return [item for item in items if not _is_entity_deleted(game_key, item_id=item.id, item_name=item.name)]
 
 
 class ContextItem:
@@ -170,6 +241,11 @@ class ContextItem:
         if self.type not in ["character", "location", "term", "relationship"]:
             errors.append(f"Invalid type: {self.type}")
         return errors
+
+
+def _filter_deleted_items(game_key: str, items: List[ContextItem]) -> List[ContextItem]:
+    """Remove items that have been manually deleted."""
+    return [item for item in items if not _is_entity_deleted(game_key, item_id=item.id, item_name=item.name)]
 
 
 class ContextHistory:
@@ -686,7 +762,7 @@ def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool 
     if merge:
         cm.load_all_contexts()
         existing = cm.contexts.get(game_key, {})
-        from context_manager import merge_context_dicts
+        from workflows.context_utils import merge_context_dicts
         raw_existing = {
             "characters": [i.to_dict() if hasattr(i, 'to_dict') else i for i in existing.get("character", [])],
             "locations": [i.to_dict() if hasattr(i, 'to_dict') else i for i in existing.get("location", [])],
@@ -702,7 +778,8 @@ def save_verified_context(game_title: str, context: Dict[str, Any], merge: bool 
         try:
             with open(VERIFIED_CONTEXT_FILE, "r") as f:
                 all_data = json.load(f)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not read verified context file: {e}")
             pass
     
     all_data[game_key] = {
@@ -798,13 +875,157 @@ def is_first_run(game_title: str) -> bool:
         return True
 
 
-def compute_and_save_implicit_relationships(game_title: str, transcript_text: str) -> Dict[str, Any]:
-    """Compute and save implicit relationships (v1-compatible)."""
-    from context_manager import compute_and_save_implicit_relationships as v1_compute
-    return v1_compute(game_title, transcript_text)
 
+def get_context_sources_summary(game_key: str) -> dict:
+    """Inventory counts across verified JSON, markdown, MemPalace, and transcripts."""
+    from workflows.mempalace_integration import get_mempalace_text_chunks
+    import os
+    
+    verified = load_verified_context(game_key)
+    ctx = verified.get("context", {}) if verified else {}
+    mp_chunks = get_mempalace_text_chunks(game_key)
+    
+    transcripts_dir = os.path.join(WORKSPACE, "transcripts")
+    transcript_files = []
+    if os.path.isdir(transcripts_dir):
+        transcript_files = [f for f in os.listdir(transcripts_dir) if f.endswith(".json")]
+        
+    return {
+        "game_key": game_key,
+        "verified": {
+            "characters": len(ctx.get("characters", [])),
+            "locations": len(ctx.get("locations", [])),
+            "key_terms": len(ctx.get("key_terms", [])),
+            "relationships": len(ctx.get("relationships", [])),
+        },
+        "markdown": {
+            "characters": 0,
+            "locations": 0,
+            "key_terms": 0,
+            "relationships": 0,
+        },
+        "mempalace_chunks": len(mp_chunks),
+        "transcript_files": transcript_files,
+    }
 
 def save_implicit_relationships(game_title: str, implicit_edges: list) -> None:
-    """Save implicit relationships (v1-compatible)."""
-    from context_manager import save_implicit_relationships as v1_save
-    v1_save(game_title, implicit_edges)
+    """Save implicit co-occurrence relationships to verified_context.json."""
+    import os, json
+    from datetime import datetime
+    game_key = game_title.lower().replace(" ", "_").strip()
+    
+    with _context_file_lock:
+        all_context = {}
+        if os.path.exists(VERIFIED_CONTEXT_FILE):
+            try:
+                with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                    all_context = json.load(f)
+            except Exception as e:
+                logger.debug(f"Could not read verified context file: {e}")
+                pass
+
+        if game_key not in all_context:
+            all_context[game_key] = {"context": {}, "verified_at": datetime.now().isoformat()}
+
+        all_context[game_key]["implicit_relationships"] = implicit_edges
+
+        try:
+            with open(VERIFIED_CONTEXT_FILE, "w") as f:
+                json.dump(all_context, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save implicit relationships: {e}")
+
+def load_implicit_relationships(game_title: str) -> list:
+    """Load stored implicit co-occurrence relationships."""
+    import os, json
+    game_key = game_title.lower().replace(" ", "_").strip()
+
+    with _context_file_lock:
+        if not os.path.exists(VERIFIED_CONTEXT_FILE):
+            return []
+
+        try:
+            with open(VERIFIED_CONTEXT_FILE, "r") as f:
+                all_context = json.load(f)
+            return all_context.get(game_key, {}).get("implicit_relationships", [])
+        except Exception as e:
+            logger.debug(f"Could not read implicit relationships: {e}")
+            return []
+
+def compute_and_save_implicit_relationships(game_title: str, transcript_text: str):
+    """Compute co-occurrence from transcript text and merge with existing stored data."""
+    from collections import defaultdict
+
+    game_key = game_title.lower().replace(" ", "_").strip()
+
+    verified = load_verified_context(game_key)
+    context = verified.get("context", {}) if verified else {}
+
+    entities = {}
+    for etype in ['characters', 'locations', 'key_terms']:
+        for item in context.get(etype, []):
+            if isinstance(item, str):
+                name = item
+                entity_id = item
+            else:
+                name = item.get('name', item.get('from', ''))
+                entity_id = item.get('id', name)
+            if name:
+                entities[name.lower()] = entity_id
+
+    if not entities:
+        return
+
+    entity_occurrences = defaultdict(list)
+    text_lower = transcript_text.lower()
+
+    for entity_name, entity_id in entities.items():
+        if entity_name in text_lower:
+            segment_size = max(1, len(text_lower) // 100)
+            pos = text_lower.find(entity_name)
+            while pos >= 0:
+                segment = pos // segment_size
+                entity_occurrences[entity_name].append(segment)
+                pos = text_lower.find(entity_name, pos + 1)
+
+    cooccurrence = defaultdict(int)
+    entity_names = list(entity_occurrences.keys())
+
+    for i, e1 in enumerate(entity_names):
+        for e2 in entity_names[i+1:]:
+            segments1 = set(entity_occurrences[e1])
+            segments2 = set(entity_occurrences[e2])
+            common = segments1 & segments2
+            if common:
+                pair = tuple(sorted([e1, e2]))
+                cooccurrence[pair] = len(common)
+
+    new_edges = []
+    for (e1, e2), count in cooccurrence.items():
+        if count >= 1:
+            new_edges.append({
+                'source': entities[e1],
+                'target': entities[e2],
+                'type': 'co_occurs',
+                'weight': count,
+                'label': f'appears in {count} segment(s)'
+            })
+
+    if not new_edges:
+        return
+
+    existing = load_implicit_relationships(game_title)
+    existing_map = {}
+    for edge in existing:
+        key = tuple(sorted([edge.get('source', ''), edge.get('target', '')]))
+        existing_map[key] = edge
+
+    for edge in new_edges:
+        key = tuple(sorted([edge['source'], edge['target']]))
+        if key in existing_map:
+            existing_map[key]['weight'] = max(existing_map[key].get('weight', 0), edge['weight'])
+        else:
+            existing_map[key] = edge
+
+    merged = list(existing_map.values())
+    save_implicit_relationships(game_title, merged)

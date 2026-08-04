@@ -6,8 +6,9 @@ import { Card } from '@/components/ui/Card'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { useTheme, themes } from '@/contexts/ThemeContext'
 import { useToast } from '@/contexts/ToastContext'
-import { getConfig, updateConfig, cleanupFiles, getGames } from '@/lib/api'
+import { getConfig, updateConfig, cleanupFiles, getGames, getTtsVoices } from '@/lib/api'
 import { stagger, slideLeft, springGentle } from '@/lib/animations'
+import { APP_VERSION } from '@/lib/utils'
 
 type TabId = 'general' | 'subtitles' | 'variety' | 'system' | 'voice'
 
@@ -53,6 +54,11 @@ export default function Settings() {
   const { data: gamesData } = useQuery({
     queryKey: ['games'],
     queryFn: getGames,
+  })
+
+  const { data: ttsVoicesData } = useQuery({
+    queryKey: ['tts-voices'],
+    queryFn: getTtsVoices,
   })
 
   const { data: config, isLoading } = useQuery({
@@ -101,11 +107,7 @@ export default function Settings() {
       toast('success', 'Configuration saved successfully!')
     },
     onError: (error: any) => {
-      if (error?.response?.data?.errors) {
-        toast('error', `Validation errors: ${error.response.data.errors.join(', ')}`)
-      } else {
-        toast('error', `Failed to save config: ${error.message}`)
-      }
+      toast('error', `Failed to save config: ${error.message}`)
     }
   })
 
@@ -213,7 +215,7 @@ export default function Settings() {
                     className="cyber-input"
                   >
                     <option value="">Let system handle (learning-weighted round-robin)</option>
-                    {["Vindemiatrix", "Puck", "Aoede", "Charon", "Kore", "Fenrir", "Orus", "Enceladus", "Iapetus", "Nereus", "Zephyr", "Atlas", "Callirhoe", "Ceres"].map(voice => (
+                    {(ttsVoicesData?.voices || ["Vindemiatrix", "Puck", "Aoede", "Charon", "Kore", "Fenrir", "Orus", "Enceladus", "Iapetus", "Nereus", "Zephyr", "Atlas", "Callirhoe", "Ceres"]).map((voice: string) => (
                       <option key={voice} value={voice}>{voice}</option>
                     ))}
                   </select>
@@ -492,7 +494,7 @@ export default function Settings() {
                         <Cpu className="w-8 h-8 text-40k-gold" />
                       </motion.div>
                       <div>
-                        <h4 className="text-white font-display font-bold">Cogitator v2.5.1</h4>
+                        <h4 className="text-white font-display font-bold">Cogitator v{APP_VERSION}</h4>
                         <p className="text-xs text-40k-gold">Cyberpunk Edition • System Online</p>
                       </div>
                     </div>

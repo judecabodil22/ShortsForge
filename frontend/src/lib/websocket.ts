@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 
 type MessageHandler = (data: any) => void
 
-export function useWebSocket(url: string) {
+export function useWebSocket(url: string | null) {
   const [isConnected, setIsConnected] = useState(false)
   const [lastMessage, setLastMessage] = useState<any>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const handlersRef = useRef<Map<string, MessageHandler[]>>(new Map())
 
   const connect = useCallback(() => {
+    if (!url) return;
     try {
       const ws = new WebSocket(url)
       wsRef.current = ws

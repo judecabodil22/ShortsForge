@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+export const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const API_KEY_STORAGE_KEY = 'cogitator_api_key'
 
@@ -6,7 +6,7 @@ export function getStoredApiKey(): string | null {
   return localStorage.getItem(API_KEY_STORAGE_KEY)
 }
 
-export function setStoredApiKey(key: string): void {
+function setStoredApiKey(key: string): void {
   localStorage.setItem(API_KEY_STORAGE_KEY, key)
 }
 
@@ -83,8 +83,7 @@ export const getStatus = () => fetchAPI<{ pipeline: any; oauth_configured: boole
 
 export const runPipeline = (source: string = 'youtube', videoUrl: string = '') => fetchAPI<{ status: string }>('/api/pipeline/run', { method: 'POST', body: { source, video_url: videoUrl } })
 export const stopPipeline = () => fetchAPI<{ status: string }>('/api/pipeline/stop', { method: 'POST' })
-export const getPipelineSettings = () => fetchAPI<any>('/api/pipeline/settings')
-export const savePipelineSettings = (settings: any) => fetchAPI<{ status: string }>('/api/pipeline/settings', { method: 'POST', body: settings })
+
 
 export const getMetricsSummary = () => fetchAPI<any>('/api/metrics/summary')
 export const getVideoMetrics = () => fetchAPI<any>('/api/metrics/videos')
@@ -101,9 +100,7 @@ export const getLearningDashboard = () => fetchAPI<any>('/api/learning/dashboard
 export const getActiveABTests = () => fetchAPI<any>('/api/learning/ab-tests')
 export const getTikTokLearningSignals = () => fetchAPI<any>('/api/learning/tiktok-signals')
 export const getCurrentABTest = () => fetchAPI<any>('/api/learning/ab-current')
-export const createABTest = (testName: string, testType: string, variantA: any, variantB: any) =>
-  fetchAPI<any>('/api/learning/ab-test', { method: 'POST', body: { test_name: testName, test_type: testType, variant_a: variantA, variant_b: variantB } })
-export const getABTest = (testId: string) => fetchAPI<any>(`/api/learning/ab-test/${testId}`)
+
 
 export const getGames = () => fetchAPI<any>('/api/context/games')
 export const getGameContext = (game: string) => fetchAPI<any>(`/api/context/${game}`)
@@ -131,7 +128,9 @@ export const getTikTokSummary = () => fetchAPI<any>('/api/metrics/tiktok/summary
 export const getTikTokVideos = () => fetchAPI<any>('/api/metrics/tiktok/videos')
 export const getTikTokDaily = (days: number = 30) => fetchAPI<any>(`/api/metrics/tiktok/daily?days=${days}`)
 export const getTikTokGames = () => fetchAPI<any>('/api/metrics/tiktok/games')
-export const getCrossPlatformComparison = () => fetchAPI<any>('/api/metrics/tiktok/comparison')
 export const getCrossPlatformStats = () => fetchAPI<any>('/api/metrics/cross-platform')
 export const importTikTokData = () => fetchAPI<any>('/api/metrics/tiktok/import', { method: 'POST' })
 export const matchTikTokToLocal = () => fetchAPI<any>('/api/metrics/tiktok/match', { method: 'POST' })
+
+// ─── TTS ─────────────────────────────────────────────────────────────────────
+export const getTtsVoices = () => fetchAPI<any>('/api/tts/voices')

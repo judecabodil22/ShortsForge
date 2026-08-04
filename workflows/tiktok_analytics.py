@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from difflib import SequenceMatcher
 
-WORKSPACE = os.path.expanduser("~/Cogitator")
+from workflows.constants import WORKSPACE
 DB_DIR = os.path.join(WORKSPACE, ".cogitator")
 DB_PATH = os.path.join(DB_DIR, "performance.db")
 TIKTOK_CSV_DIR = os.path.join(WORKSPACE, "Tiktok Analytics")
@@ -106,7 +106,7 @@ def _infer_post_year(video_id: str) -> int:
         ts = (int(video_id) >> 32) / 1024
         return datetime.fromtimestamp(ts).year
     except Exception:
-        return 2025
+        return datetime.now().year
 
 
 def _parse_tiktok_date(month_day: str, year: int) -> str:
@@ -548,6 +548,23 @@ def match_tiktok_to_clips() -> Dict[str, Any]:
                     'score': score,
                 }
 
+        # Try matching against clips (source_file contains filename)
+        for clip in local_clips:
+            clip_filename = os.path.basename(clip['source_file'] or '')
+            # Remove extension and normalize
+            clip_title = os.path.splitext(clip_filename)[0].replace('_', ' ')
+            clip_game = ''  # Clips don't store game name directly
+
+            score = _match_score(tt_title, clip_title, tt_game, clip_game)
+            if score > best_score:
+                best_score = score
+                best_match = {
+                    'type': 'clip',
+                    'id': clip['id'],
+                    'title': clip_title,
+                    'score': score,
+                }
+
         # Update match in database
         if best_match and best_score >= 50:
             matched_clip_id = best_match['id'] if best_match['type'] == 'clip' else None
@@ -613,51 +630,6 @@ def _normalize_title(title: str) -> str:
 
 
 # ─── Cross-Platform Learning Functions ──────────────────────────────────────
-
-def get_tiktok_performance_for_game(game_name: str) -> Optional[Dict]:
-    """Get TikTok performance stats for a specific game.
-    
-    Used by the learning engine to weight clips that performed well on TikTok.
-    Returns avg engagement ratio, total views, video count for the game.
-    """
-    conn = _get_db()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT COUNT(*) as video_count,
-               SUM(total_views) as total_views,
-               AVG(total_views) as avg_views,
-               SUM(total_likes) as total_likes,
-               SUM(total_comments) as total_comments,
-               SUM(total_shares) as total_shares
-        FROM tiktok_videos
-        WHERE LOWER(game) = LOWER(?)
-    """, (game_name,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if not row or row['video_count'] == 0:
-        return None
-    
-    total_views = row['total_views'] or 0
-    total_likes = row['total_likes'] or 0
-    total_comments = row['total_comments'] or 0
-    total_shares = row['total_shares'] or 0
-    
-    # Calculate engagement ratio (likes + comments + shares) / views
-    engagement = ((total_likes + total_comments + total_shares) / total_views * 100) if total_views > 0 else 0
-    
-    return {
-        'game': game_name,
-        'video_count': row['video_count'],
-        'total_views': total_views,
-        'avg_views': round(row['avg_views'] or 0, 1),
-        'total_likes': total_likes,
-        'total_comments': total_comments,
-        'total_shares': total_shares,
-        'engagement_ratio': round(engagement, 2),
-    }
-
 
 def get_tiktok_engagement_by_game() -> Dict[str, float]:
     """Get engagement ratios by game for learning engine.

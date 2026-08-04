@@ -5,6 +5,7 @@ import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save, 
 import { Card } from '@/components/ui/Card'
 import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, createGameContext, getStatus } from '@/lib/api'
 import { stagger, slideLeft } from '@/lib/animations'
+import { useToast } from '@/contexts/ToastContext'
 
 const TYPE_CONFIG = {
   character: { icon: Users, color: 'text-40k-gold', bg: 'bg-40k-gold/20' },
@@ -33,6 +34,7 @@ interface GameEntry {
 
 export default function Context() {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [selectedFranchise, setSelectedFranchise] = useState<string>('')
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState<'all' | 'character' | 'location' | 'term' | 'relationship'>('all')
@@ -103,7 +105,7 @@ export default function Context() {
       queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
       setEditingItem(null)
     },
-    onError: (error: Error) => alert(`Failed to update: ${error.message}`)
+    onError: (error: Error) => toast('error', `Failed to update: ${error.message}`)
   })
 
   const deleteMutation = useMutation({
@@ -113,7 +115,7 @@ export default function Context() {
       queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
       setEditingItem(null)
     },
-    onError: (error: Error) => alert(`Failed to delete: ${error.message}`)
+    onError: (error: Error) => toast('error', `Failed to delete: ${error.message}`)
   })
 
   const verifyMutation = useMutation({
@@ -122,32 +124,32 @@ export default function Context() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
     },
-    onError: (error: Error) => alert(`Failed to verify: ${error.message}`)
+    onError: (error: Error) => toast('error', `Failed to verify: ${error.message}`)
   })
   
   const clearMutation = useMutation({
     mutationFn: (game: string) => clearContext(game),
     onSuccess: (data) => {
-      if (data.error) alert(`Error: ${data.error}`)
-      else alert('Context and memory cleared.')
+      if (data.error) toast('error', `Error: ${data.error}`)
+      else toast('success', 'Context and memory cleared.')
       queryClient.invalidateQueries({ queryKey: ['context', selectedFranchise] })
     },
-    onError: (error: Error) => alert(`Failed to clear context: ${error.message}`)
+    onError: (error: Error) => toast('error', `Failed to clear context: ${error.message}`)
   })
 
   const createGameMutation = useMutation({
     mutationFn: (game: string) => createGameContext(game),
     onSuccess: (data) => {
-      if (data.error) alert(`Error: ${data.error}`)
+      if (data.error) toast('error', `Error: ${data.error}`)
       else {
-        alert(`Franchise "${data.game}" created successfully.`)
+        toast('success', `Franchise "${data.game}" created successfully.`)
         setSelectedFranchise(data.game)
         setShowCreateModal(false)
         setCreateGameName('')
         queryClient.invalidateQueries({ queryKey: ['games'] })
       }
     },
-    onError: (error: Error) => alert(`Failed to create franchise: ${error.message}`)
+    onError: (error: Error) => toast('error', `Failed to create franchise: ${error.message}`)
   })
 
   const handleEdit = (item: ContextItem) => {

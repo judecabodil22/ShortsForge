@@ -73,13 +73,60 @@ X-API-Key: sf_xxxxxxxxxxxxxxxxxxxxx
 #### Protected Endpoints
 
 The following endpoints require API key authentication:
-- `POST /api/config` - Update configuration
-- `POST /api/system/cleanup` - Cleanup files
-- `POST /api/context/import` - Import context
-- `POST /api/context/clear` - Clear context
-- `POST /api/pipeline/download` - Download from URL
+- `GET /api/status` - Get system status
+- `POST /api/pipeline/run` - Start pipeline
+- `POST /api/pipeline/stop` - Stop pipeline
+- `GET /api/pipeline/settings` - Get pipeline settings
+- `POST /api/pipeline/settings` - Save pipeline settings
+- `GET /api/pipeline/logs` - Get pipeline logs
+- `GET /api/metrics/summary` - Get performance summary
+- `GET /api/metrics/videos` - Get all videos with metrics
+- `GET /api/metrics/content-performance` - Get content type performance
+- `POST /api/metrics/sync` - Sync YouTube metrics
+- `GET /api/metrics/tiktok/summary` - Get TikTok summary
+- `GET /api/metrics/tiktok/videos` - Get TikTok videos
+- `GET /api/metrics/tiktok/daily` - Get TikTok daily trends
+- `GET /api/metrics/tiktok/games` - Get TikTok per-game stats
+- `GET /api/metrics/tiktok/comparison` - Get TikTok comparison
+- `POST /api/metrics/tiktok/import` - Import TikTok data
+- `POST /api/metrics/tiktok/match` - Match TikTok to local
+- `GET /api/metrics/cross-platform` - Get cross-platform stats
+- `GET /api/scripts` - Get all scripts
+- `GET /api/scripts/{script_id}` - Get script details
+- `GET /api/scripts/{script_id}/metadata` - Get script metadata
+- `POST /api/scripts/{id}/analyze` - Analyze script
+- `GET /api/learnings` - Get all learnings
+- `GET /api/learnings/weights` - Get content type weights
+- `GET /api/context/games` - Get all game contexts
+- `GET /api/context/{game}` - Get game context items
+- `PUT /api/context/{game}/{item_type}/{item_id}` - Update context item
+- `DELETE /api/context/{game}/{item_type}/{item_id}` - Delete context item
+- `GET /api/context/all/graph` - Get all-games graph
+- `GET /api/context/{game}/graph` - Get single-game graph
+- `GET /api/context/{game}/graph/search` - Search graph entities
+- `GET /api/context/{game}/graph/stats` - Get graph statistics
+- `GET /api/context/{game}/segments` - Get segment references
+- `GET /api/prompts/script` - Get script prompt template
+- `PUT /api/prompts/script` - Save script prompt
+- `GET /api/tts/voices` - Get TTS voices
+- `GET /api/tts/learnings` - Get TTS learnings
+- `GET /api/learning/dashboard` - Get learning dashboard
+- `GET /api/learning/tiktok-signals` - Get TikTok signals
 - `POST /api/learning/ab-test` - Create A/B test
 - `POST /api/learning/ab-test/{test_id}/result` - Record A/B test result
+- `GET /api/learning/ab-test/{test_id}` - Get A/B test results
+- `GET /api/learning/ab-tests` - Get all A/B tests
+- `GET /api/learning/ab-current` - Get current A/B test
+- `GET /api/config` - Get configuration
+- `POST /api/config` - Update configuration
+- `POST /api/pipeline/download` - Download from URL
+- `GET /api/logs` - Get application logs
+- `POST /api/system/cleanup` - Cleanup files
+- `POST /api/context/import` - Import context
+- `POST /api/context/create_game` - Create game context
+- `POST /api/context/clear` - Clear context
+- `POST /api/context/merge` - Merge context
+- `DELETE /api/context/{game}` - Delete game context
 
 ### Production Deployment
 

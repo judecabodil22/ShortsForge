@@ -3,10 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Search, FileText, BarChart2, Sparkles, Tag, Hash, Copy, Check, ImageOff } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
-import { getScripts, getScriptMetadata, analyzeScript } from '@/lib/api'
+import { getScripts, getScriptMetadata, analyzeScript, API_BASE } from '@/lib/api'
 import { cn } from '@/lib/utils'
-
-const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 export default function Scripts() {
   const [search, setSearch] = useState('')

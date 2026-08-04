@@ -14,6 +14,7 @@ import {
 } from '@/lib/api'
 import { formatNumber } from '@/lib/utils'
 import { AnimatedCounter } from '@/components/ui/AnimatedCounter'
+import { useToast } from '@/contexts/ToastContext'
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -36,6 +37,7 @@ export default function Performance() {
   const [activeTab, setActiveTab] = useState<Tab>('youtube')
   const [dailyDays, setDailyDays] = useState(30)
   const queryClient = useQueryClient()
+  const { toast } = useToast()
 
   // YouTube queries
   const { data: summary } = useQuery({
@@ -84,11 +86,15 @@ export default function Performance() {
       queryClient.invalidateQueries({ queryKey: ['tiktok-daily'] })
       queryClient.invalidateQueries({ queryKey: ['tiktok-games'] })
       queryClient.invalidateQueries({ queryKey: ['cross-platform-stats'] })
+      toast('success', 'TikTok data imported successfully')
     },
+    onError: (error: Error) => toast('error', `Failed to import TikTok data: ${error.message}`),
   })
 
   const matchMutation = useMutation({
     mutationFn: matchTikTokToLocal,
+    onSuccess: () => toast('success', 'TikTok clips matched successfully'),
+    onError: (error: Error) => toast('error', `Failed to match TikTok clips: ${error.message}`),
   })
 
   // YouTube data processing
@@ -193,7 +199,16 @@ export default function Performance() {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             className="cyber-button flex items-center gap-2"
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ['metrics-summary'] })
+              queryClient.invalidateQueries({ queryKey: ['video-metrics'] })
+              queryClient.invalidateQueries({ queryKey: ['content-performance'] })
+              queryClient.invalidateQueries({ queryKey: ['tiktok-summary'] })
+              queryClient.invalidateQueries({ queryKey: ['tiktok-videos'] })
+              queryClient.invalidateQueries({ queryKey: ['tiktok-daily'] })
+              queryClient.invalidateQueries({ queryKey: ['tiktok-games'] })
+              queryClient.invalidateQueries({ queryKey: ['cross-platform-stats'] })
+            }}
           >
             <RefreshCw className="w-4 h-4" />
             Refresh

@@ -10,6 +10,7 @@ _workflow_dir = os.path.dirname(os.path.abspath(__file__))
 _workspace = os.path.dirname(_workflow_dir)
 if _workspace not in sys.path:
     sys.path.insert(0, _workspace)
+from workflows.context_utils import _cs_load_context
 
 from update_manager import (
     get_local_version,
@@ -18,13 +19,13 @@ from update_manager import (
     perform_update,
     cleanup_old_backups,
 )
-from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score, parse_duration, get_next_groq_key, dedupe_entity_list, fuzzy_dedup_against_list
+from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score, parse_duration, get_next_groq_key, dedupe_entity_list, fuzzy_dedup_against_list, CONTEXT_DIR
 from workflows.core.round_robin import init_round_robin, get_next_variant_perspective, get_next_voice_style, reset as reset_round_robin, get_state as _rr_get_state
-from performance_database import (
+from workflows.performance_database import (
     store_script,
     backfill_script_titles,
 )
-from keychain_manager import (
+from workflows.keychain_manager import (
     get_gemini_keys,
     get_groq_keys,
     get_service_password,
@@ -55,7 +56,7 @@ from script_validation import (
 )
 
 try:
-    from performance_database import (
+    from workflows.performance_database import (
         store_script,
         store_clip,
         link_video,
@@ -88,7 +89,7 @@ except ImportError:
     def backfill_script_titles(*args, **kwargs): return {}
 
 try:
-    from learning_engine import (
+    from workflows.learning_engine import (
         extract_script_features,
         calculate_virality_score,
         analyze_performance_patterns,
@@ -111,7 +112,7 @@ except ImportError:
     AUDIO_ANALYSIS_AVAILABLE = False
     def enhance_scene_selection(*args, **kwargs): return args[0] if args else []
 
-from context_manager_v2 import (
+from workflows.context_manager_v2 import (
     load_verified_context,
     save_verified_context,
     save_implicit_relationships,
@@ -122,7 +123,7 @@ from context_manager_v2 import (
     get_verified_context_for_validation,
     clear_verified_context,
 )
-from context_manager import merge_context_dicts
+from workflows.context_utils import merge_context_dicts
 import requests
 from jinja2 import Environment, FileSystemLoader, BaseLoader
 try:
@@ -282,9 +283,6 @@ CS_SHORTS_DIR      = os.path.join(CONTENT_STUDIO_DIR, "shorts")
 CS_SCRIPTS_DIR     = os.path.join(CONTENT_STUDIO_DIR, "scripts")
 CS_TTS_DIR         = os.path.join(CONTENT_STUDIO_DIR, "tts")
 
-# Centralized Context Directory
-CONTEXT_DIR = os.path.join(WORKSPACE, "Context")
-
 # Get game-specific context file based on current game title (called at runtime)
 def get_cs_context_file():
     """Get the context file path for current game."""
@@ -299,6 +297,40 @@ CS_CONTEXT_FILE = None  # Will be set lazily
 
 PIPELINE_RUNNING = False
 PIPELINE_STOP_REQUESTED = False  # set True to request pipeline stop
+_SCRIPT_ID_MAP = {}
+import threading
+_pipeline_lock = threading.Lock()
+_script_id_map_lock = threading.Lock()
+
+def get_pipeline_stop_requested():
+    with _pipeline_lock:
+        return PIPELINE_STOP_REQUESTED
+
+def set_pipeline_stop_requested(val):
+    global PIPELINE_STOP_REQUESTED
+    with _pipeline_lock:
+        PIPELINE_STOP_REQUESTED = val
+
+def get_pipeline_running():
+    with _pipeline_lock:
+        return PIPELINE_RUNNING
+
+def set_pipeline_running(val):
+    global PIPELINE_RUNNING
+    with _pipeline_lock:
+        PIPELINE_RUNNING = val
+
+def set_script_id(idx, script_id):
+    with _script_id_map_lock:
+        _SCRIPT_ID_MAP[idx] = script_id
+
+def get_script_id_map():
+    with _script_id_map_lock:
+        return dict(_SCRIPT_ID_MAP)
+
+def clear_script_id_map():
+    with _script_id_map_lock:
+        _SCRIPT_ID_MAP.clear()
 _pipeline_globals_lock = threading.Lock()
 
 # Learning state (refreshed at pipeline start)
@@ -316,13 +348,13 @@ CONTEXT_EDIT_STATE = {}
 _ctx_edit_lock = threading.Lock()
 
 # Shared state between phases (used for linking clips to scripts in DB)
-_SCRIPT_ID_MAP = {}  # {script_hour_index: script_id}
+clear_script_id_map()  # {script_hour_index: script_id}
 
 
 def _clear_shared_state():
     """Clear shared state between phase runs."""
     global _SCRIPT_ID_MAP
-    _SCRIPT_ID_MAP = {}
+    clear_script_id_map()
     reset_round_robin()
 
 
@@ -345,7 +377,7 @@ def _refresh_learning_state():
         oauth_file = os.path.join(WORKSPACE, ".cogitator", "youtube_oauth.json")
         if os.path.exists(oauth_file):
             try:
-                from performance_database import sync_youtube_metrics
+                from workflows.performance_database import sync_youtube_metrics
                 log("[LEARNING] Syncing YouTube metrics...")
                 result = sync_youtube_metrics(days=30, max_results=50)
                 log(f"[LEARNING] YouTube sync: {result.get('matched_count', 0)} matched, {result.get('new_metrics', 0)} new metrics")
@@ -359,7 +391,7 @@ def _refresh_learning_state():
 
         # Initialize A/B test for this pipeline run
         try:
-            from performance_database import get_or_create_ab_test
+            from workflows.performance_database import get_or_create_ab_test
             _CURRENT_AB_TEST = get_or_create_ab_test()
             if _CURRENT_AB_TEST:
                 log(f"[A/B] Active test: {_CURRENT_AB_TEST['test_name']} (ID: {_CURRENT_AB_TEST['test_id'][:8]}...)")
@@ -370,8 +402,8 @@ def _refresh_learning_state():
             _CURRENT_AB_TEST = None
 
         try:
-            from learning_engine import get_optimized_params, analyze_performance_patterns
-            from performance_database import get_learnings as pdb_get_learnings
+            from workflows.learning_engine import get_optimized_params, analyze_performance_patterns
+            from workflows.performance_database import get_learnings as pdb_get_learnings
             learnings = pdb_get_learnings()
             _LEARNING_OPTIMIZED_PARAMS = get_optimized_params(learnings, _LEARNING_BASELINE)
         except Exception:
@@ -379,7 +411,7 @@ def _refresh_learning_state():
 
         # Analyze performance patterns and wire up learning feedback
         try:
-            from performance_database import get_successful_scripts
+            from workflows.performance_database import get_successful_scripts
             successful = get_successful_scripts(limit=20)
             if len(successful) >= 3:
                 startup_metrics = getattr(_refresh_learning_state, '_metrics_cache', [])
@@ -391,8 +423,8 @@ def _refresh_learning_state():
 
         # Train virality model if enough samples
         try:
-            from learning_engine import train_virality_model
-            from performance_database import get_successful_scripts as _gss
+            from workflows.learning_engine import train_virality_model
+            from workflows.performance_database import get_successful_scripts as _gss
             all_scripts = _gss(limit=50)
             if len(all_scripts) >= 5:
                 result = train_virality_model(all_scripts)
@@ -533,7 +565,7 @@ def cli_context_confirmation(game_title, formatted):
 
 def handle_context_callback(callback_data, game_title, cb_id):
     """Handle context confirmation callback."""
-    from context_manager import save_verified_context, load_verified_context, compare_context_with_history
+    from workflows.context_manager_v2 import save_verified_context, load_verified_context, compare_context_with_history
     global CONTEXT_EDIT_STATE
     
     log(f"[DEBUG] handle_context_callback: checking CONTEXT_EDIT_STATE")
@@ -545,8 +577,8 @@ def handle_context_callback(callback_data, game_title, cb_id):
     
     if callback_data.startswith("ctx_approve_"):
         # Approve and save verified context
-        from context_manager import save_verified_context
-        from context_manager import compare_context_with_history
+        from workflows.context_manager_v2 import save_verified_context
+        from workflows.context_manager_v2 import compare_context_with_history
         
         # Get extracted context from current run
         extracted = _cs_load_context()
@@ -969,7 +1001,7 @@ def clear_pending_context(game_title):
 
 def _show_context_view():
     """Show current context in a formatted message."""
-    from context_manager import load_verified_context
+    from workflows.context_manager_v2 import load_verified_context
     ctx = _cs_load_context()
     game = env("GAME_TITLE", "Unknown")
     verified = load_verified_context(game)
@@ -1006,7 +1038,7 @@ def _show_context_view():
 
 def _reload_context_from_obsidian():
     """Reload context from Obsidian markdown files and save as verified."""
-    from context_manager import save_verified_context
+    from workflows.context_manager_v2 import save_verified_context
     
     ctx = _cs_load_context()
     game = env("GAME_TITLE", "Unknown")
@@ -1930,161 +1962,7 @@ def _cs_generate_tts_only():
 # (ASR corrector already defined above)
 
 
-def _cs_load_context():
-    """Load context from centralized Context directory (handles both list and table format)."""
-    ctx = {
-        "characters": [],
-        "locations": [],
-        "key_terms": [],
-        "relationships": [],
-        "processed_transcripts": [],
-        "previous_scripts": []
-    }
-    
-    # Use centralized Context directory
-    game = env("GAME_TITLE", "default").lower().replace(" ", "_")
-    ctx_dir = os.path.join(CONTEXT_DIR, game)
-    os.makedirs(ctx_dir, exist_ok=True)
-    
-    def extract_from_list(line):
-        """Extract name from list item or table cell."""
-        name = line.strip()
-        if name.startswith('[[') and name.endswith(']]'):
-            name = name[2:-2]
-        return name
-    
-    # Helper to extract items from table
-    def extract_items_from_table(content, category):
-        items = []
-        for line in content.split('\n'):
-            line = line.strip()
-            if line.startswith('|') and '---' not in line:
-                parts = [p.strip() for p in line.split('|')[1:-1]]
-                if parts and parts[0]:
-                    item = extract_from_table_cell(parts[0])
-                    # Skip header rows
-                    if item and item.lower() not in ['name', 'character', 'location', 'term', 'character a'] and item not in items:
-                        items.append(item)
-        return items
-    
-    # Load alias maps from verified_context.json for cross-run persistence
-    try:
-        game_title = env("GAME_TITLE", "")
-        if game_title:
-            from context_manager import load_verified_context
-            verified = load_verified_context(game_title)
-            if isinstance(verified, dict):
-                if verified.get("character_aliases"):
-                    ctx["character_aliases"] = verified["character_aliases"]
-                if verified.get("location_aliases"):
-                    ctx["location_aliases"] = verified["location_aliases"]
-    except Exception:
-        pass
 
-    def extract_from_table_cell(cell):
-        """Extract name from table cell."""
-        cell = cell.strip()
-        if cell.startswith('[[') and cell.endswith(']]'):
-            return cell[2:-2]
-        return cell
-    
-    def extract_from_table(line):
-        """Extract items from table row."""
-        if not line.startswith('|') or '---' in line:
-            return []
-        parts = [p.strip() for p in line.split('|')[1:-1]]
-        if not parts or not parts[0]:
-            return []
-        # First column contains the name (may have wiki-links)
-        name = parts[0].strip()
-        if name.startswith('[[') and name.endswith(']]'):
-            name = name[2:-2]
-        # Skip header rows
-        if name.lower() in ['name', 'character', 'location', 'term', 'character a']:
-            return []
-        return [name] if name else []
-    
-    # Load characters from markdown (table format)
-    chars_file = os.path.join(ctx_dir, "characters.md")
-    if os.path.exists(chars_file):
-        with open(chars_file, 'r') as f:
-            content = f.read()
-        for line in content.split('\n'):
-            items = extract_from_table(line)
-            for item in items:
-                if item and item not in ctx["characters"]:
-                    ctx["characters"].append(item)
-    
-    # Load locations from markdown (table format)
-    locs_file = os.path.join(ctx_dir, "locations.md")
-    if os.path.exists(locs_file):
-        with open(locs_file, 'r') as f:
-            content = f.read()
-        for line in content.split('\n'):
-            items = extract_from_table(line)
-            for item in items:
-                if item and item not in ctx["locations"]:
-                    ctx["locations"].append(item)
-    
-    # Load key_terms from markdown (table format)
-    terms_file = os.path.join(ctx_dir, "key_terms.md")
-    if os.path.exists(terms_file):
-        with open(terms_file, 'r') as f:
-            content = f.read()
-        for line in content.split('\n'):
-            items = extract_from_table(line)
-            for item in items:
-                if item and item not in ctx["key_terms"]:
-                    ctx["key_terms"].append(item)
-    
-    # Load relationships from markdown
-    rels_file = os.path.join(ctx_dir, "relationships.md")
-    if os.path.exists(rels_file):
-        with open(rels_file, 'r') as f:
-            content = f.read()
-        
-        # For relationships, handle table format: Character A | Connection | Character B
-        if '|' in content and '---' in content:
-            for line in content.split('\n'):
-                line = line.strip()
-                if line.startswith('|') and '---' not in line:
-                    # Skip header
-                    if 'Character A' in line or 'Character' in line:
-                        continue
-                    
-                    parts = [p.strip() for p in line.split('|')[1:-1]]
-                    if len(parts) >= 3:
-                        # Parse: Character A | Connection | Character B
-                        char_a = extract_from_table_cell(parts[0])
-                        connection = parts[1]
-                        char_b = extract_from_table_cell(parts[2])
-                        
-                        # Skip if Character A is empty or just "-"
-                        if not char_a or char_a == '-':
-                            continue
-                        
-                        # Build relationship string
-                        if char_b and char_b != '-':
-                            rel = f"{char_a} and {char_b} are {connection}"
-                        else:
-                            # Single character relationship
-                            rel = f"{char_a} is {connection}"
-                        
-                        if rel and rel not in ctx["relationships"]:
-                            ctx["relationships"].append(rel)
-        else:
-            # Fall back to list format
-            for line in content.split('\n'):
-                line = line.strip()
-                if not line or line.startswith('#') or not line.startswith('- '):
-                    continue
-                rel_line = line.lstrip('- ').strip()
-                rel = rel_line
-                rel = re.sub(r'\[\[([^\]]+)\]\]', r'\1', rel)
-                if rel and rel not in ctx["relationships"]:
-                    ctx["relationships"].append(rel)
-    
-    return ctx
 
 
 def _cs_save_context(ctx):
@@ -2101,7 +1979,7 @@ def _cs_save_context(ctx):
             alias_data["location_aliases"] = ctx["location_aliases"]
         if alias_data:
             game_title = env("GAME_TITLE", "default")
-            from context_manager import load_verified_context, save_verified_context
+            from workflows.context_manager_v2 import load_verified_context, save_verified_context
             verified = load_verified_context(game_title)
             if isinstance(verified, dict):
                 verified.update(alias_data)
@@ -4665,7 +4543,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                     ab_test_id = None
                     ab_variant = None
                     if _CURRENT_AB_TEST:
-                        from performance_database import assign_ab_variant
+                        from workflows.performance_database import assign_ab_variant
                         ab_test_id = _CURRENT_AB_TEST['test_id']
                         ab_variant = assign_ab_variant(ab_test_id, i)
                     
@@ -4686,7 +4564,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                         log(f"Performance: Script stored (ID: {script_id[:8]}...) [A/B: variant {ab_variant.upper()}]")
                     else:
                         log(f"Performance: Script stored (ID: {script_id[:8]}...)")
-                    _SCRIPT_ID_MAP[i] = script_id
+                    set_script_id(i, script_id)
                 except Exception as perf_err:
                     log(f"Performance DB: Failed to store script - {perf_err}")
             set_status(f"Phase 4: Script {i}/{num_hours} generated")
@@ -5013,11 +4891,11 @@ def video_info(path):
 def run_local_recordings(recording_path):
     """Process local recordings from a directory."""
     global PIPELINE_STOP_REQUESTED, PIPELINE_RUNNING
-    PIPELINE_STOP_REQUESTED = False
-    PIPELINE_RUNNING = True
+    set_pipeline_stop_requested(False)
+    set_pipeline_running(True)
 
     def check_stop():
-        if PIPELINE_STOP_REQUESTED:
+        if get_pipeline_stop_requested():
             log("Pipeline stopped by user")
             set_status("Pipeline Stopped")
             notify("Pipeline stopped by user.")
@@ -5081,7 +4959,7 @@ def run_local_recordings(recording_path):
                 phase_scripts(json_file, duration, num_hours, video=video_file)
                 if check_stop(): return
 
-                phase_clips(video_file, json_file, duration, num_hours, script_id_map=_SCRIPT_ID_MAP)
+                phase_clips(video_file, json_file, duration, num_hours, script_id_map=get_script_id_map())
                 if check_stop(): return
 
                 from workflows.pipeline.phase_tts import phase_tts
@@ -5112,10 +4990,10 @@ def run_local_recordings(recording_path):
 # ─── Pipeline orchestrator ────────────────────────────────────────────────────
 def run_pipeline(skip=None):
     global PIPELINE_STOP_REQUESTED
-    PIPELINE_STOP_REQUESTED = False
+    set_pipeline_stop_requested(False)
 
     def check_stop():
-        if PIPELINE_STOP_REQUESTED:
+        if get_pipeline_stop_requested():
             log("Pipeline stopped by user")
             set_status("Pipeline Stopped")
             notify("Pipeline stopped by user.")
@@ -5187,7 +5065,7 @@ def run_pipeline(skip=None):
         log_error("No transcript for script generation")
 
     if 5 not in skip and json_file:
-        phase_clips(video, json_file, duration, num_hours, script_id_map=_SCRIPT_ID_MAP)
+        phase_clips(video, json_file, duration, num_hours, script_id_map=get_script_id_map())
         if check_stop(): return
     elif 5 not in skip:
         log_error("No transcript for clip generation")

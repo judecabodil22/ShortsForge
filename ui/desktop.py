@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from datetime import datetime
 
-WORKSPACE = os.path.expanduser("~/Cogitator")
+from workflows.constants import WORKSPACE
 if WORKSPACE not in sys.path:
     sys.path.insert(0, WORKSPACE)
 

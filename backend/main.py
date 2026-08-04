@@ -14,8 +14,8 @@ from datetime import datetime
 from typing import Optional, Any, Tuple
 
 # Add parent directory to path for imports
-WORKSPACE = os.path.expanduser("~/Cogitator")
-sys.path.insert(0, WORKSPACE)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from workflows.constants import WORKSPACE
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,17 +35,9 @@ from workflows.performance_database import (
 from workflows.metrics_fetcher import get_recent_uploads, is_oauth_configured
 from workflows.learning_engine import extract_script_features, get_virality_predictor
 from workflows.context_manager_v2 import ContextManagerV2, get_context_manager
+from workflows.mempalace_integration import get_full_series_mapping, add_to_franchise
 from workflows.constants import TTS_VOICES
-from workflows.context_manager import (
-    SERIES_MAPPING,
-    get_full_series_mapping,
-    add_to_franchise,
-    get_mempalace_text_chunks,
-    get_context_sources_summary,
-    load_implicit_relationships,
-    save_implicit_relationships,
-)
-from workflows.ws_manager import ConnectionManager, manager as ws_manager, pipeline_status
+from workflows.ws_manager import ConnectionManager, manager as ws_manager, pipeline_status, update_pipeline_status, get_pipeline_status
 
 # ============================================================================
 # SECURITY CONFIGURATION
@@ -145,7 +137,7 @@ app.add_middleware(
 # WebSocket manager and pipeline status imported from workflows.ws_manager
 
 # Pipeline settings storage
-SETTINGS_FILE = os.path.expanduser("~/Cogitator/.cogitator/web_settings.json")
+SETTINGS_FILE = os.path.join(WORKSPACE, ".cogitator/web_settings.json")
 
 def load_pipeline_settings():
     """Load pipeline settings from file"""
@@ -200,7 +192,7 @@ async def get_api_key(request: Request):
 
 
 @app.get("/api/status")
-async def get_status():
+async def get_status(_: bool = Depends(verify_api_key)):
     """Get overall system status"""
     env_file = os.path.join(WORKSPACE, ".env")
     game_title = "Not set"
@@ -215,7 +207,7 @@ async def get_status():
                     elif k == "PARENT_FRANCHISE":
                         parent_franchise = v.strip('"\'')
     return {
-        "pipeline": pipeline_status,
+        "pipeline": get_pipeline_status(),
         "oauth_configured": is_oauth_configured(),
         "workspace": WORKSPACE,
         "game_title": game_title,
@@ -257,7 +249,7 @@ async def broadcast_status():
     """Broadcast current pipeline status to all connected clients"""
     await ws_manager.broadcast({
         "type": "pipeline:status",
-        "data": pipeline_status
+        "data": get_pipeline_status()
     })
 
 def read_status_file():
@@ -326,19 +318,15 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
         with open(PENDING_DOWNLOAD_FILE, "w") as f:
             f.write(video_url.strip())
         cmd = [sys.executable, "workflows/cogitator.py", "run"]
-        pipeline_status["message"] = "Downloading from URL..."
+        update_pipeline_status(message="Downloading from URL...")
     elif source == "local":
         cmd = [sys.executable, "workflows/cogitator.py", "run_local", "media"]
-        pipeline_status["message"] = "Processing local media..."
+        update_pipeline_status(message="Processing local media...")
     else:
         cmd = [sys.executable, "workflows/cogitator.py", "run"]
-        pipeline_status["message"] = "Downloading from YouTube..."
+        update_pipeline_status(message="Downloading from YouTube...")
     
-    pipeline_status["running"] = True
-    pipeline_status["current_phase"] = "Starting"
-    pipeline_status["progress"] = 0
-    pipeline_status["logs"] = []
-    pipeline_status["error"] = None
+    update_pipeline_status(running=True, current_phase="Starting", progress=0, logs=[], error=None)
 
     # Open log file for pipeline output
     log_file = open(PIPELINE_LOG, "w")
@@ -397,9 +385,7 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
                 parsed, progress = parse_status(status_text)
 
                 if parsed:
-                    pipeline_status["current_phase"] = parsed["label"]
-                    pipeline_status["progress"] = progress
-                    pipeline_status["message"] = parsed["raw"]
+                    update_pipeline_status(current_phase=parsed["label"], progress=progress, message=parsed["raw"])
 
             time.sleep(0.5)
         
@@ -413,34 +399,25 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
         
         # Check for errors in status
         if status_text and ("failed" in status_text.lower() or "error" in status_text.lower()):
-            pipeline_status["error"] = status_text
-            pipeline_status["current_phase"] = "Error"
-            pipeline_status["progress"] = 0
+            update_pipeline_status(error=status_text, current_phase="Error", progress=0)
         elif proc is None:
             # Distinguish between never run and stopped/finished
             if not status_text:
-                pipeline_status["current_phase"] = "Idle"
-                pipeline_status["message"] = "Ready to run"
+                update_pipeline_status(current_phase="Idle", message="Ready to run")
             else:
-                pipeline_status["current_phase"] = "Stopped"
-                pipeline_status["message"] = "Pipeline stopped by user"
+                update_pipeline_status(current_phase="Stopped", message="Pipeline stopped by user")
         elif proc.returncode == 0:
-            pipeline_status["current_phase"] = "Complete"
-            pipeline_status["progress"] = 100
-            pipeline_status["message"] = "Pipeline completed successfully"
+            update_pipeline_status(current_phase="Complete", progress=100, message="Pipeline completed successfully")
         else:
-            pipeline_status["error"] = f"Pipeline exited with code {proc.returncode}"
-            pipeline_status["current_phase"] = "Failed"
+            update_pipeline_status(error=f"Pipeline exited with code {proc.returncode}", current_phase="Failed")
             
     except Exception as e:
-        pipeline_status["error"] = str(e)
-        pipeline_status["message"] = f"Error: {str(e)}"
-        pipeline_status["current_phase"] = "Error"
+        update_pipeline_status(error=str(e), message=f"Error: {str(e)}", current_phase="Error")
         if log_file:
             log_file.close()
             log_file = None
     finally:
-        pipeline_status["running"] = False
+        update_pipeline_status(running=False)
         with _pipeline_lock:
             pipeline_process = None
         
@@ -471,7 +448,7 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
 @limiter.limit("5/minute")
 async def run_pipeline(request: Request, _: bool = Depends(verify_api_key)):
     """Trigger pipeline run - accepts JSON body with optional video_url"""
-    if pipeline_status["running"]:
+    if get_pipeline_status()["running"]:
         return {"status": "already_running", "message": "Pipeline is already running"}
     
     body = await request.json()
@@ -501,19 +478,18 @@ async def stop_pipeline(request: Request, _: bool = Depends(verify_api_key)):
                 proc.kill()
             pipeline_process = None
     
-    pipeline_status["running"] = False
-    pipeline_status["message"] = "Stopped"
+    update_pipeline_status(running=False, message="Stopped")
     
     await ws_manager.broadcast({
         "type": "pipeline:status",
-        "data": pipeline_status
+        "data": get_pipeline_status()
     })
     
     return {"status": "stopped"}
 
 
 @app.get("/api/pipeline/settings")
-async def get_pipeline_settings():
+async def get_pipeline_settings(_: bool = Depends(verify_api_key)):
     """Get pipeline settings"""
     return load_pipeline_settings()
 
@@ -543,7 +519,7 @@ async def get_pipeline_logs(_: bool = Depends(verify_api_key)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/metrics/summary")
-async def get_metrics_summary():
+async def get_metrics_summary(_: bool = Depends(verify_api_key)):
     """Get performance summary"""
     stats = get_performance_stats()
     baseline = get_channel_baseline()
@@ -557,14 +533,14 @@ async def get_metrics_summary():
 
 
 @app.get("/api/metrics/videos")
-async def get_video_metrics():
+async def get_video_metrics(_: bool = Depends(verify_api_key)):
     """Get all videos with metrics"""
     videos = get_all_videos_with_metrics()
     return {"videos": videos}
 
 
 @app.get("/api/metrics/content-performance")
-async def get_content_performance():
+async def get_content_performance(_: bool = Depends(verify_api_key)):
     """Get content type performance stats"""
     return get_variant_performance_stats()
 
@@ -592,35 +568,35 @@ async def sync_youtube_metrics(request: Request, _: bool = Depends(verify_api_ke
 # ---------------------------------------------------------------------------
 
 @app.get("/api/metrics/tiktok/summary")
-async def get_tiktok_summary():
+async def get_tiktok_summary(_: bool = Depends(verify_api_key)):
     """Aggregated TikTok stats"""
     from workflows.tiktok_analytics import get_tiktok_summary as _get_summary
     return _get_summary()
 
 
 @app.get("/api/metrics/tiktok/videos")
-async def get_tiktok_videos():
+async def get_tiktok_videos(_: bool = Depends(verify_api_key)):
     """All TikTok videos with metrics"""
     from workflows.tiktok_analytics import get_tiktok_videos as _get_videos
     return {"videos": _get_videos()}
 
 
 @app.get("/api/metrics/tiktok/daily")
-async def get_tiktok_daily(days: int = 30):
+async def get_tiktok_daily(days: int = 30, _: bool = Depends(verify_api_key)):
     """Daily trend data for charts"""
     from workflows.tiktok_analytics import get_tiktok_daily_metrics
     return {"daily": get_tiktok_daily_metrics(days)}
 
 
 @app.get("/api/metrics/tiktok/games")
-async def get_tiktok_games():
+async def get_tiktok_games(_: bool = Depends(verify_api_key)):
     """Per-game stats for TikTok videos"""
     from workflows.tiktok_analytics import get_tiktok_game_stats
     return {"games": get_tiktok_game_stats()}
 
 
 @app.get("/api/metrics/tiktok/comparison")
-async def get_cross_platform_comparison():
+async def get_cross_platform_comparison(_: bool = Depends(verify_api_key)):
     """Side-by-side YouTube vs TikTok for matched videos"""
     from workflows.tiktok_analytics import get_tiktok_videos
     from workflows.performance_database import get_all_videos_with_metrics
@@ -662,7 +638,7 @@ async def get_cross_platform_comparison():
 
 
 @app.get("/api/metrics/cross-platform")
-async def get_cross_platform_stats():
+async def get_cross_platform_stats(_: bool = Depends(verify_api_key)):
     """Get cross-platform performance statistics for unified dashboard."""
     from workflows.performance_database import get_cross_platform_stats as _get_stats
     try:
@@ -702,7 +678,7 @@ async def match_tiktok_to_local(request: Request, _: bool = Depends(verify_api_k
 # ---------------------------------------------------------------------------
 
 @app.get("/api/scripts")
-async def get_scripts():
+async def get_scripts(_: bool = Depends(verify_api_key)):
     """Get all scripts"""
     from workflows.performance_database import get_all_scripts
     scripts = get_all_scripts()
@@ -710,7 +686,7 @@ async def get_scripts():
 
 
 @app.get("/api/scripts/{script_id}")
-async def get_script(script_id: str):
+async def get_script(script_id: str, _: bool = Depends(verify_api_key)):
     """Get single script details with NLP features"""
     from workflows.performance_database import get_script_by_id
     
@@ -733,7 +709,7 @@ async def get_script(script_id: str):
 
 
 @app.get("/api/scripts/{script_id}/metadata")
-async def get_script_metadata(script_id: str):
+async def get_script_metadata(script_id: str, _: bool = Depends(verify_api_key)):
     """Get script metadata (description, hashtags, tags)"""
     from workflows.performance_database import get_script_by_id
 
@@ -780,14 +756,14 @@ async def analyze_script(script_id: str, _: bool = Depends(verify_api_key)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/learnings")
-async def get_all_learnings():
+async def get_all_learnings(_: bool = Depends(verify_api_key)):
     """Get all learnings"""
     learnings = get_learnings()
     return {"learnings": learnings}
 
 
 @app.get("/api/learnings/weights")
-async def get_learning_weights():
+async def get_learning_weights(_: bool = Depends(verify_api_key)):
     """Get content type selection weights (70/30)"""
     result = get_thompson_sampling_weights(explore_ratio=0.3)
     selected = select_content_type_70_30()
@@ -804,7 +780,7 @@ async def get_learning_weights():
 # ---------------------------------------------------------------------------
 
 @app.get("/api/context/games")
-async def get_games():
+async def get_games(_: bool = Depends(verify_api_key)):
     """Get all game contexts with franchise structure.
 
     Returns franchise keys with their child games listed.
@@ -825,9 +801,10 @@ async def get_games():
     full_mapping = get_full_series_mapping()
     series_to_games = {}
     for game_key, series_name in full_mapping.items():
-        if series_name not in series_to_games:
-            series_to_games[series_name] = []
-        series_to_games[series_name].append(game_key)
+        if game_key in games or series_name in games:
+            if series_name not in series_to_games:
+                series_to_games[series_name] = []
+            series_to_games[series_name].append(game_key)
 
     # Also scan Context directory for franchise keys
     verified_file = os.path.join(context_dir, "verified_context.json")
@@ -886,7 +863,7 @@ async def get_games():
 
 
 @app.get("/api/context/{game}")
-async def get_game_context(game: str):
+async def get_game_context(game: str, _: bool = Depends(verify_api_key)):
     """Get all context items for a game or franchise.
 
     If game is a franchise key, returns franchise context.
@@ -1007,14 +984,14 @@ async def get_game_context(game: str):
 
 
 @app.get("/api/context/all/graph")
-async def get_all_games_graph():
+async def get_all_games_graph(_: bool = Depends(verify_api_key)):
     """Get graph data for all games combined."""
     from workflows.graph_builder import build_all_games_graph
     return build_all_games_graph()
 
 
 @app.get("/api/context/{game}/graph")
-async def get_graph_data(game: str):
+async def get_graph_data(game: str, _: bool = Depends(verify_api_key)):
     """Get graph data in Cytoscape.js format for a single game."""
     from workflows.graph_builder import build_single_game_graph, get_graph_cache_key, get_cached_graph, set_cached_graph
     game_title = sanitize_input(game, max_length=100)
@@ -1035,7 +1012,7 @@ async def get_graph_data(game: str):
 
 
 @app.get("/api/context/{game}/graph/search")
-async def search_graph(game: str, q: str = "", type: str = ""):
+async def search_graph(game: str, q: str = "", type: str = "", _: bool = Depends(verify_api_key)):
     """Search for entities in the graph by name or type."""
     from workflows.graph_builder import build_single_game_graph, get_graph_cache_key, get_cached_graph, set_cached_graph
     game_title = sanitize_input(game, max_length=100)
@@ -1074,7 +1051,7 @@ async def search_graph(game: str, q: str = "", type: str = ""):
 
 
 @app.get("/api/context/{game}/graph/stats")
-async def get_graph_statistics(game: str):
+async def get_graph_statistics(game: str, _: bool = Depends(verify_api_key)):
     """Get detailed graph statistics including centrality and clustering."""
     from workflows.graph_builder import build_single_game_graph, get_graph_cache_key, get_cached_graph, set_cached_graph
     game_title = sanitize_input(game, max_length=100)
@@ -1128,11 +1105,11 @@ async def get_graph_statistics(game: str):
 
 
 @app.get("/api/context/{game}/segments")
-async def get_segment_references(game: str):
+async def get_segment_references(game: str, _: bool = Depends(verify_api_key)):
     """Get segment references for context nodes"""
     # Sanitize game name
     game = sanitize_input(game, max_length=100)
-    SEGMENT_REF_FILE = os.path.expanduser("~/Cogitator/Context/segment_references.json")
+    SEGMENT_REF_FILE = os.path.join(WORKSPACE, "Context/segment_references.json")
     game_key = game.lower().replace(" ", "_")
     
     try:
@@ -1154,7 +1131,7 @@ PROMPT_BACKUP_FILE = os.path.join(WORKSPACE, "prompts", "base.j2.bak")
 
 
 @app.get("/api/prompts/script")
-async def get_script_prompt():
+async def get_script_prompt(_: bool = Depends(verify_api_key)):
     """Get the current script generation prompt template."""
     try:
         if os.path.exists(PROMPT_FILE):
@@ -1244,20 +1221,20 @@ async def delete_context_item(request: Request, game: str, item_type: str, item_
 # ---------------------------------------------------------------------------
 
 @app.get("/api/tts/voices")
-async def get_tts_voices():
+async def get_tts_voices(_: bool = Depends(verify_api_key)):
     """Get available TTS voices"""
     return {"voices": TTS_VOICES}
 
 
 @app.get("/api/tts/learnings")
-async def get_tts_learnings():
+async def get_tts_learnings(_: bool = Depends(verify_api_key)):
     """Get TTS performance learning data"""
     learnings = get_tts_learning_data()
     return {"learnings": learnings}
 
 
 @app.get("/api/learning/dashboard")
-async def get_learning_dashboard():
+async def get_learning_dashboard(_: bool = Depends(verify_api_key)):
     """Get learning dashboard data with insights and A/B test status."""
     from workflows.performance_database import (
         get_learning_insights, get_active_ab_tests, get_ab_test_history,
@@ -1278,7 +1255,7 @@ async def get_learning_dashboard():
 
 
 @app.get("/api/learning/tiktok-signals")
-async def get_tiktok_learning_signals():
+async def get_tiktok_learning_signals(_: bool = Depends(verify_api_key)):
     """Get TikTok engagement signals that influence the learning system."""
     from workflows.tiktok_analytics import get_tiktok_engagement_by_game, get_tiktok_retention_signals
     
@@ -1349,7 +1326,7 @@ async def record_ab_test_result_endpoint(request: Request, test_id: str, api_key
 
 
 @app.get("/api/learning/ab-test/{test_id}")
-async def get_ab_test_result_endpoint(test_id: str):
+async def get_ab_test_result_endpoint(test_id: str, _: bool = Depends(verify_api_key)):
     """Get A/B test results."""
     from workflows.performance_database import get_ab_test_results
     result = get_ab_test_results(test_id)
@@ -1359,7 +1336,7 @@ async def get_ab_test_result_endpoint(test_id: str):
 
 
 @app.get("/api/learning/ab-tests")
-async def get_ab_tests_list():
+async def get_ab_tests_list(_: bool = Depends(verify_api_key)):
     """Get all active and completed A/B tests."""
     from workflows.performance_database import get_active_ab_tests, get_ab_test_history
     return {
@@ -1369,7 +1346,7 @@ async def get_ab_tests_list():
 
 
 @app.get("/api/learning/ab-current")
-async def get_current_ab_test():
+async def get_current_ab_test(_: bool = Depends(verify_api_key)):
     """Get info about the current active A/B test with variant assignment details."""
     from workflows.performance_database import get_current_ab_test_info
     result = get_current_ab_test_info()
@@ -1382,7 +1359,7 @@ async def get_current_ab_test():
 from pydantic import BaseModel
 
 @app.get("/api/config")
-async def get_config():
+async def get_config(_: bool = Depends(verify_api_key)):
     env_file = os.path.join(WORKSPACE, ".env")
     config = {"GAME_TITLE": "", "TTS_VOICE": "", "CLIPS_PER_HOUR": "4", "PARENT_FRANCHISE": "", "SRT_MAX_WORDS": "5", "SRT_FONT_SIZE": "22", "SRT_FONT_COLOR": "", "SRT_MARGIN_V": "60", "SRT_FONT_NAME": "Open Sans", "SRT_FONT_OUTLINE": "2", "SRT_FONT_SHADOW": "1", "SRT_OUTLINE_COLOR": "", "SRT_SUB_GAP": "0.5", "SRT_MIN_DURATION": "1.0", "SRT_MAX_DURATION": "6.0", "SRT_BORDER_STYLE": "outline", "SRT_ALIGNMENT": "center", "CLIP_ORDER": "sequential", "VARIETY_SEED": "42", "TTS_EMOTION": "default", "TTS_SPEED": "1.0"}
     if os.path.exists(env_file):
@@ -1542,7 +1519,7 @@ class DownloadRequest(BaseModel):
 async def download_from_url(request: Request, req: DownloadRequest, _: bool = Depends(verify_api_key)):
     """Download from URL - requires API key"""
     global pipeline_status, pipeline_process
-    if pipeline_status["running"]:
+    if get_pipeline_status()["running"]:
         return {"status": "error", "message": "Pipeline already running"}
     
     # Validate and sanitize URL
@@ -1566,9 +1543,7 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
         return {"status": "error", "message": "Invalid hostname"}
     
     cmd = [sys.executable, "workflows/cogitator.py", "download", "-url", url]
-    pipeline_status["message"] = f"Downloading from {url}..."
-    pipeline_status["running"] = True
-    pipeline_status["current_phase"] = "downloading"
+    update_pipeline_status(message=f"Downloading from {url}...", running=True, current_phase="downloading")
     
     def run_download():
         global pipeline_process
@@ -1581,7 +1556,7 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
         except Exception as e:
             pass
         finally:
-            pipeline_status["running"] = False
+            update_pipeline_status(running=False)
             with _pipeline_lock:
                 pipeline_process = None
             
@@ -1672,7 +1647,7 @@ async def import_context(request: Request, req: ImportRequest, _: bool = Depends
         
     if context["characters"] or context["locations"]:
         try:
-            from workflows.context_manager import save_verified_context
+            from workflows.context_manager_v2 import save_verified_context
             save_verified_context(game_key, context)
             
             # Update memory
@@ -1765,7 +1740,7 @@ async def clear_context(request: Request, req: ImportRequest, _: bool = Depends(
     game_title = sanitize_input(req.game, max_length=100)
     game_key = game_title.lower().replace(" ", "_").strip()
     try:
-        from workflows.context_manager import clear_all_context_for_game
+        from workflows.context_manager_v2 import clear_verified_context as clear_all_context_for_game
         result = clear_all_context_for_game(game_key)
         
         # Clear from memory so it's not rewritten
@@ -1781,7 +1756,7 @@ async def clear_context(request: Request, req: ImportRequest, _: bool = Depends(
 @limiter.limit("5/minute")
 async def delete_game_context(request: Request, game: str, _: bool = Depends(verify_api_key)):
     """Delete entire game context - requires API key"""
-    from workflows.context_manager import clear_all_context_for_game
+    from workflows.context_manager_v2 import clear_verified_context as clear_all_context_for_game
     
     # Sanitize game name
     game_title = sanitize_input(game, max_length=100)
@@ -1812,12 +1787,15 @@ async def delete_game_context(request: Request, game: str, _: bool = Depends(ver
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket for real-time updates"""
+    """WebSocket for real-time updates — requires API key via query param"""
+    api_key = websocket.query_params.get("api_key")
+    if not api_key or api_key != API_KEY:
+        await websocket.close(code=4001, reason="Invalid or missing API key")
+        return
     await ws_manager.connect(websocket)
     try:
         while True:
             data = await websocket.receive_text()
-            # Handle incoming messages if needed
             message = json.loads(data)
             
             if message.get("type") == "ping":

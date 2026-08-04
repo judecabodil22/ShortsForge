@@ -15,6 +15,7 @@ import {
   type VisualTheme,
 } from '@/lib/graphSettings'
 import { stagger, slideLeft } from '@/lib/animations'
+import { useToast } from '@/contexts/ToastContext'
 
 const NODE_COLORS = {
   character: '#c9a227',
@@ -53,15 +54,10 @@ interface NodeData {
   game_key?: string
 }
 
-// interface LinkData {
-//   source: string | NodeData
-//   target: string | NodeData
-//   label: string
-// }
-
 export default function Graph() {
   const containerRef = useRef<HTMLDivElement>(null)
   const fgRef = useRef<any>(null)
+  const { toast } = useToast()
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [selectedGame, setSelectedGame] = useState<string>('')
   const [selectedNode, setSelectedNode] = useState<NodeData | null>(null)
@@ -594,7 +590,7 @@ export default function Graph() {
       setShowEditModal(false)
       setSelectedNode(null)
     },
-    onError: (error: Error) => alert(`Failed to update: ${error.message}`)
+    onError: (error: Error) => toast('error', `Failed to update: ${error.message}`)
   })
 
   const deleteMutation = useMutation({
@@ -604,6 +600,7 @@ export default function Graph() {
       refetch()
       setSelectedNode(null)
     },
+    onError: (error: Error) => toast('error', `Failed to delete: ${error.message}`),
   })
 
   const handleZoomIn = () => fgRef.current?.zoom(fgRef.current.zoom() * 1.5, 400)

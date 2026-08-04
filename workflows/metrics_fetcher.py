@@ -15,7 +15,7 @@ from typing import Dict, Optional, List, Any
 
 from workflows.constants import calculate_performance_score, parse_duration
 
-WORKSPACE = os.path.expanduser("~/Cogitator")
+from workflows.constants import WORKSPACE
 CLIENT_SECRETS_FILE = os.path.join(WORKSPACE, "client_secret.json")
 OAUTH_CREDENTIALS_FILE = os.path.join(WORKSPACE, ".cogitator", "youtube_oauth.json")
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
@@ -139,26 +139,6 @@ def get_video_id_from_url(url: str) -> Optional[str]:
     return None
 
 
-def fetch_video_metadata(video_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch video metadata from YouTube Data API."""
-    api_key = get_api_key()
-    if not api_key:
-        return None
-    
-    url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id={video_id}&key={api_key}"
-    
-    try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read().decode())
-        
-        if data.get('items') and len(data['items']) > 0:
-            return data['items'][0]
-        return None
-        
-    except Exception:
-        return None
-
-
 def fetch_metrics(video_id: str) -> Optional[Dict[str, Any]]:
     """Fetch public metrics for a YouTube video."""
     api_key = get_api_key()
@@ -196,39 +176,6 @@ def fetch_metrics(video_id: str) -> Optional[Dict[str, Any]]:
         
     except Exception:
         return None
-
-
-def search_channel_videos(channel_id: str = None, max_results: int = 50) -> List[Dict]:
-    """Search for videos on a YouTube channel."""
-    api_key = get_api_key()
-    if not api_key:
-        return []
-    
-    if not channel_id:
-        channel_id = get_own_channel_id()
-        if not channel_id:
-            return []
-    
-    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={channel_id}&type=video&order=date&maxResults={max_results}&key={api_key}"
-    
-    try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read().decode())
-        
-        videos = []
-        for item in data.get('items', []):
-            if item['id']['kind'] == 'youtube#video':
-                videos.append({
-                    'video_id': item['id']['videoId'],
-                    'title': item['snippet']['title'],
-                    'published_at': item['snippet']['publishedAt'],
-                    'thumbnail': item['snippet']['thumbnails'].get('default', {}).get('url')
-                })
-        
-        return videos
-        
-    except Exception:
-        return []
 
 
 def get_own_channel_id() -> Optional[str]:
@@ -555,33 +502,6 @@ def fetch_video_details(url_or_id: str) -> Optional[Dict[str, Any]]:
             'fetched_at': datetime.now(timezone.utc).isoformat(),
             'raw_data': item
         }
-        
-    except Exception:
-        return None
-
-
-def get_video_id_from_title(title: str, channel_id: str = None) -> Optional[str]:
-    """Search for a video by title and return its ID."""
-    api_key = get_api_key()
-    if not api_key:
-        return None
-    
-    if not channel_id:
-        channel_id = get_own_channel_id()
-        if not channel_id:
-            return None
-    
-    query = urllib.parse.quote(title[:100])
-    url = f"https://www.googleapis.com/youtube/v3/search?part=id&channelId={channel_id}&q={query}&type=video&maxResults=5&key={api_key}"
-    
-    try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read().decode())
-        
-        for item in data.get('items', []):
-            if item['id']['kind'] == 'youtube#video':
-                return item['id']['videoId']
-        return None
         
     except Exception:
         return None

@@ -16,8 +16,65 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
+from workflows.constants import WORKSPACE, CONTEXT_DIR
 
-from workflows.context_manager import get_full_series_mapping
+CUSTOM_FRANCHISES_FILE = os.path.join(CONTEXT_DIR, "custom_franchises.json")
+
+def _load_custom_franchises() -> Dict[str, str]:
+    """Load custom franchise mappings from JSON."""
+    if os.path.exists(CUSTOM_FRANCHISES_FILE):
+        try:
+            with open(CUSTOM_FRANCHISES_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_custom_franchises(mapping: Dict[str, str]) -> None:
+    """Save custom franchise mappings to JSON file."""
+    os.makedirs(CONTEXT_DIR, exist_ok=True)
+    with open(CUSTOM_FRANCHISES_FILE, "w") as f:
+        json.dump(mapping, f, indent=2)
+
+def add_to_franchise(game_key: str, franchise_key: str) -> bool:
+    """Add a game to a franchise dynamically."""
+    custom = _load_custom_franchises()
+    custom[game_key] = franchise_key
+    _save_custom_franchises(custom)
+    return True
+
+def get_full_series_mapping() -> Dict[str, str]:
+    """Get the full series mapping (hardcoded + custom)."""
+    custom = _load_custom_franchises()
+    full_mapping = dict(SERIES_MAPPING)
+    full_mapping.update(custom)
+    return full_mapping
+
+SERIES_MAPPING = {
+    "the_shadow_of_the_tomb_raider": "tomb_raider_series",
+    "shadow_of_the_tomb_raider": "tomb_raider_series",
+    "rise_of_the_tomb_raider": "tomb_raider_series",
+    "tomb_raider": "tomb_raider_series",
+    "tomb_raider_(2013)": "tomb_raider_series",
+    "tomb_raider_definitive_edition": "tomb_raider_series",
+    "star_wars:_jedi_survivor": "star_wars_series",
+    "star_wars_jedi_fallen_order": "star_wars_series",
+}
+
+MEMPALACE_GAME_KEYWORDS = {
+    "tomb_raider_series": [
+        "tomb raider", "lara croft", "trinity", "shadow of the tomb", "rise of the tomb",
+        "peruvian jungle", "cozumel", "jonah",
+    ],
+    "star_wars_series": [
+        "star wars", "jedi", "cal kestis", "bd-1", "empire", "rebel", "force",
+        "lightsaber", "coruscant", "tanalorr", "jedha",
+    ],
+    "cyberpunk_2077": ["cyberpunk", "night city", "johnny silverhand", "arasaka"],
+    "tell_me_why": ["tell me why", "goblin", "allison", "tyler"],
+}
+
+MEMPALACE_CHROMA_DB = os.path.expanduser("~/.mempalace/palace/chroma.sqlite3")
 
 # Lazy imports for optional dependencies
 _mempalace_manager = None
@@ -182,10 +239,22 @@ def _extract_entities_from_text(text: str) -> Dict[str, List[str]]:
     # Common location indicators
     loc_indicators = ["city", "village", "temple", "ruins", "forest", "mountain", "cave", "palace", "fortress"]
     
+    text_lower = text.lower()
+    
     for word in chars:
         if len(word) > 2:
-            # Check if it's near a location indicator
-            if any(ind in text.lower() for ind in loc_indicators):
+            # Check if a location indicator is near this word (within 50 chars)
+            word_pos = text_lower.find(word.lower())
+            is_location = False
+            if word_pos >= 0:
+                for ind in loc_indicators:
+                    # Search in a window around the word
+                    start = max(0, word_pos - 50)
+                    end = min(len(text_lower), word_pos + len(word) + 50)
+                    if ind in text_lower[start:end]:
+                        is_location = True
+                        break
+            if is_location:
                 entities["locations"].append(word)
             else:
                 entities["characters"].append(word)
@@ -646,3 +715,31 @@ def get_mempalace_status() -> Dict[str, Any]:
         "total_drawers": status.get("total_drawers", 0),
         "games": status.get("games", {}),
     }
+
+
+def get_mempalace_text_chunks(game_key: str) -> List[str]:
+    """Return MemPalace narrative chunks relevant to a franchise (from ChromaDB)."""
+    import os
+    keywords = MEMPALACE_GAME_KEYWORDS.get(game_key, [])
+    if not keywords or not os.path.exists(MEMPALACE_CHROMA_DB):
+        return []
+
+    chunks: List[str] = []
+    try:
+        import sqlite3
+        conn = sqlite3.connect(MEMPALACE_CHROMA_DB)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT c0 FROM embedding_fulltext_search_content WHERE c0 IS NOT NULL")
+            for (text,) in cur.fetchall():
+                if not text or len(text.strip()) < 40:
+                    continue
+                lower = text.lower()
+                if any(kw in lower for kw in keywords):
+                    chunks.append(text)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return chunks
+

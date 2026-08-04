@@ -14,7 +14,7 @@ from pathlib import Path
 
 from workflows.constants import TTS_VOICES, TTS_STYLE_OPTIONS, calculate_performance_score
 
-WORKSPACE = os.path.expanduser("~/Cogitator")
+from workflows.constants import WORKSPACE
 DB_DIR = os.path.join(WORKSPACE, ".cogitator")
 DB_PATH = os.path.join(DB_DIR, "performance.db")
 
@@ -512,25 +512,6 @@ def get_video_by_youtube_id(youtube_id: str) -> Optional[Dict]:
     return None
 
 
-def get_metrics_for_video(video_id: str) -> Optional[Dict]:
-    """Get latest metrics for a video."""
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT * FROM metrics 
-        WHERE video_id = ? 
-        ORDER BY fetched_at DESC 
-        LIMIT 1
-    """, (video_id,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return dict(row)
-    return None
-
-
 def get_successful_scripts(limit: int = 10, min_views: int = 0) -> List[Dict]:
     """Get scripts with highest performance scores."""
     conn = get_db()
@@ -692,47 +673,6 @@ def store_learning(
             INSERT INTO learnings (id, feature_name, feature_value, metric_type, impact_score, sample_count, confidence, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (learning_id, feature_name, feature_value, metric_type, impact_score, sample_count, confidence, updated_at))
-    
-    conn.commit()
-    conn.close()
-
-
-def get_generation_params() -> Dict[str, Any]:
-    """Get current generation parameters."""
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT param_name, param_value FROM generation_params")
-    rows = cursor.fetchall()
-    conn.close()
-    
-    params = {}
-    for row in rows:
-        try:
-            params[row['param_name']] = json.loads(row['param_value'])
-        except Exception:
-            params[row['param_name']] = row['param_value']
-    
-    return params
-
-
-def update_generation_param(param_name: str, param_value: Any):
-    """Update a generation parameter."""
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    updated_at = datetime.now(timezone.utc).isoformat()
-    cursor.execute("""
-        INSERT OR REPLACE INTO generation_params (id, param_name, param_value, based_on_samples, updated_at)
-        VALUES (
-            COALESCE((SELECT id FROM generation_params WHERE param_name = ?), ?),
-            ?, ?, COALESCE((SELECT based_on_samples FROM generation_params WHERE param_name = ?) + 1, 1), ?
-        )
-    """, (
-        param_name, str(uuid.uuid4()),
-        param_name, json.dumps(param_value),
-        param_name, updated_at
-    ))
     
     conn.commit()
     conn.close()
@@ -995,7 +935,7 @@ def sync_youtube_metrics(days: int = 7, max_results: int = 50) -> Dict[str, Any]
         Dict with matched_count, new_metrics, errors, total_videos_processed
     """
     try:
-        from metrics_fetcher import get_recent_uploads
+        from workflows.metrics_fetcher import get_recent_uploads
     except ImportError:
         from workflows.metrics_fetcher import get_recent_uploads
     
@@ -1013,7 +953,7 @@ def backfill_script_titles() -> Dict[str, Any]:
     """
     updated = 0
     errors = []
-    scripts_dir = os.path.expanduser("~/Cogitator/scripts")
+    scripts_dir = os.path.join(WORKSPACE, "scripts")
     
     if not os.path.exists(scripts_dir):
         return {'updated_count': 0, 'errors': ['scripts directory does not exist']}
@@ -1250,7 +1190,6 @@ def update_learning_with_variance(
         new_mean = (old_mean * old_count + performance_score) / new_count
         
         if old_count > 0:
-            old_var = old_ssd / old_count if old_count > 1 else 0
             new_ssd = old_ssd + (performance_score - old_mean) ** 2
             new_variance = new_ssd / new_count if new_count > 1 else 0
         else:
@@ -1359,51 +1298,6 @@ def select_content_type_70_30() -> str:
         return None
     
     return result.get('selected')
-
-
-def calculate_relative_performance(video_id: str) -> Dict[str, Any]:
-    """Calculate how a video performed relative to channel baseline.
-    
-    Returns dict with:
-    - relative_views: video views / avg views (1.0 = average, 2.0 = 2x average)
-    - relative_engagement: video engagement / avg engagement
-    - relative_score: video score / avg score
-    - is_outperforming: True if relative_score > 1.2
-    - is_underperforming: True if relative_score < 0.8
-    """
-    baseline = get_channel_baseline()
-    if baseline['sample_count'] == 0:
-        return {'relative_views': 1.0, 'relative_engagement': 1.0, 'relative_score': 1.0, 
-                'is_outperforming': False, 'is_underperforming': False}
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT m.views, m.engagement_ratio, m.performance_score
-        FROM metrics m
-        WHERE m.video_id = ?
-        ORDER BY m.fetched_at DESC
-        LIMIT 1
-    """, (video_id,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if not row or not row['views']:
-        return {'relative_views': 1.0, 'relative_engagement': 1.0, 'relative_score': 1.0,
-                'is_outperforming': False, 'is_underperforming': False}
-    
-    relative_views = row['views'] / max(baseline['avg_views'], 1)
-    relative_engagement = (row['engagement_ratio'] or 0) / max(baseline['avg_engagement'], 0.001)
-    relative_score = (row['performance_score'] or 50) / max(baseline['avg_score'], 1)
-    
-    return {
-        'relative_views': round(relative_views, 2),
-        'relative_engagement': round(relative_engagement, 2),
-        'relative_score': round(relative_score, 2),
-        'is_outperforming': relative_score > 1.2,
-        'is_underperforming': relative_score < 0.8,
-    }
 
 
 def get_content_type_effectiveness() -> Dict[str, Dict[str, Any]]:

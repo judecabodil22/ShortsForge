@@ -16,6 +16,7 @@ import {
 import clsx from 'clsx'
 import { useTheme } from '@/contexts/ThemeContext'
 import { springGentle } from '@/lib/animations'
+import { APP_VERSION } from '@/lib/utils'
 import CommandPalette from '@/components/ui/CommandPalette'
 
 const navItems = [
@@ -225,8 +226,8 @@ export default function Layout({ children }: LayoutProps) {
           animate={{ opacity: 1 }}
           transition={{ delay: 0.5 }}
         >
-          <span>Cogitator v2.5.1 | {currentTheme.name} Edition</span>
-          <span>Workspace: ~/Cogitator</span>
+          <span>Cogitator v{APP_VERSION} | {currentTheme.name} Edition</span>
+          <span>Workspace: Default</span>
         </motion.footer>
       </main>
     </div>

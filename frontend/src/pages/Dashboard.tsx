@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Square, RefreshCw, FileText, Video, Zap, Activity, FolderOpen, Settings, X, Download, ExternalLink, Wifi, WifiOff } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
-import { getMetricsSummary, getStatus, getLearningWeights, runPipeline, stopPipeline, syncMetrics, getLogs, downloadFromUrl } from '@/lib/api'
+import { getMetricsSummary, getStatus, getLearningWeights, runPipeline, stopPipeline, syncMetrics, getLogs, downloadFromUrl, getStoredApiKey } from '@/lib/api'
 import { formatNumber } from '@/lib/utils'
 import { AnimatedCounter } from '@/components/ui/AnimatedCounter'
 import { useToast } from '@/contexts/ToastContext'
@@ -23,7 +23,19 @@ export default function Dashboard() {
   const [downloadUrl, setDownloadUrl] = useState('')
   const logsEndRef = useRef<HTMLDivElement>(null)
 
-  const wsUrl = `ws://${window.location.hostname}:${window.location.port || '8000'}/ws`
+  const [apiKey, setApiKey] = useState(getStoredApiKey() || '')
+
+  useEffect(() => {
+    if (!apiKey) {
+      import('@/lib/api').then(({ fetchApiKey }) => {
+        fetchApiKey().then(key => {
+          if (key) setApiKey(key)
+        })
+      })
+    }
+  }, [apiKey])
+
+  const wsUrl = apiKey ? `ws://${window.location.hostname}:${window.location.port || '8000'}/ws?api_key=${encodeURIComponent(apiKey)}` : null
   const { isConnected, subscribe } = useWebSocket(wsUrl)
 
   useEffect(() => {
@@ -169,7 +181,7 @@ export default function Dashboard() {
         <StatCard label="Total Videos" value={<AnimatedCounter value={metrics?.total_videos || 0} />} icon={<Video className="w-6 h-6" />} delay={0.05} />
         <StatCard label="Total Scripts" value={<AnimatedCounter value={metrics?.total_scripts || 0} />} icon={<FileText className="w-6 h-6" />} delay={0.1} />
         <StatCard label="Avg Views" value={<AnimatedCounter value={baseline.avg_views || 0} format={(v) => formatNumber(v)} />} icon={<Activity className="w-6 h-6" />} delay={0.15} />
-        <StatCard label="Avg Engagement" value={<AnimatedCounter value={baseline.avg_engagement || 0} format={(v) => `${v.toFixed(2)}%`} />} icon={<Zap className="w-6 h-6" />} trend={{ value: 12, positive: true }} delay={0.2} />
+        <StatCard label="Avg Engagement" value={<AnimatedCounter value={baseline.avg_engagement || 0} format={(v) => `${v.toFixed(2)}%`} />} icon={<Zap className="w-6 h-6" />} delay={0.2} />
       </div>
 
       {/* Pipeline Status & Content Type */}

@@ -105,6 +105,8 @@ TTS_STYLE_OPTIONS = [
 
 # ─── Groq Key Rotation ───────────────────────────────────────────────────────
 
+import threading
+_groq_lock = threading.Lock()
 _GROQ_KEY_INDEX = 0
 
 def get_groq_keys():
@@ -133,8 +135,9 @@ def get_next_groq_key():
     keys = get_groq_keys()
     if not keys:
         return ""
-    key = keys[_GROQ_KEY_INDEX % len(keys)]
-    _GROQ_KEY_INDEX = (_GROQ_KEY_INDEX + 1) % len(keys)
+    with _groq_lock:
+        key = keys[_GROQ_KEY_INDEX % len(keys)]
+        _GROQ_KEY_INDEX = (_GROQ_KEY_INDEX + 1) % len(keys)
     return key
 
 # ─── Performance Score ───────────────────────────────────────────────────────
@@ -242,3 +245,16 @@ def calculate_hook_strength(script_text: str) -> float:
         strength += 0.2
 
     return min(strength, 1.0)
+
+import os
+def _find_workspace():
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                if line.strip().startswith("WORKSPACE="):
+                    return line.strip().split("=", 1)[1].strip().strip('"')
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+WORKSPACE = _find_workspace()
+CONTEXT_DIR = os.path.join(WORKSPACE, "Context")

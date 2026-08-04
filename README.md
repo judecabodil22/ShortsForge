@@ -344,7 +344,7 @@ WHISPER_MODEL=medium
 ### Running the Pipeline
 
 ```bash
-# Full pipeline (all 6 phases)
+# Full pipeline (all 7 phases)
 python workflows/cogitator.py run
 
 # Specific phases
@@ -368,22 +368,6 @@ python workflows/cogitator.py onboard     # Interactive setup
 ---
 
 ## Web Interface
-
-### Starting the Web Server
-
-```bash
-# Backend only
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
-
-# Or use the script
-./start_web.sh
-```
-
-### Accessing the UI
-
-Open `http://localhost:8000` in your browser.
-
-### Features
 
 ### Starting the Web Server
 
@@ -449,14 +433,14 @@ The Context page features an interactive force-directed graph:
 | `/api/pipeline/run` | POST | Start pipeline |
 | `/api/pipeline/stop` | POST | Stop pipeline |
 | `/api/pipeline/settings` | GET/POST | Pipeline settings |
-| `/api/pipeline/logs` | GET | Pipeline logs (query param: `lines=100`) |
+| `/api/pipeline/logs` | GET | Pipeline execution logs |
 | `/api/metrics/summary` | GET | Performance summary |
 | `/api/metrics/videos` | GET | All videos with metrics |
 | `/api/metrics/sync` | POST | Sync YouTube metrics |
 | `/api/metrics/content-performance` | GET | Content type performance |
 | `/api/scripts` | GET | All scripts |
 | `/api/scripts/{id}` | GET | Get script by ID |
-| `/api/scripts/{id}/metadata` | PUT | Update script metadata |
+| `/api/scripts/{id}/metadata` | GET | Get script metadata |
 | `/api/scripts/{id}/analyze` | POST | Analyze script |
 | `/api/learnings` | GET | ML learnings |
 | `/api/learnings/weights` | GET | Content type weights |
@@ -628,7 +612,6 @@ Cogitator/
 | **Frontend** | React | 18.2.0 |
 | **Frontend Build** | Vite | 5.1.0 |
 | **UI Components** | Radix UI | Latest |
-| **State Management** | Zustand | Latest |
 | **Database** | SQLite | 3.x |
 | **Video Processing** | FFmpeg | Latest |
 
@@ -678,7 +661,7 @@ Cogitator supports secure API key storage via `keychain_manager.py`:
 
 ### Web Interface Security
 
-- **API Key Authentication**: Protected endpoints require `X-Goog-Api-Key` header (not URL params)
+- **API Key Authentication**: Protected endpoints require `X-API-Key` header (not URL params)
 - **Rate Limiting**: Prevents abuse (5-60 requests/minute depending on endpoint)
 - **Security Headers**: X-Frame-Options, X-XSS-Protection, HSTS, Referrer-Policy
 - **Input Sanitization**: Prevents injection attacks
@@ -686,12 +669,61 @@ Cogitator supports secure API key storage via `keychain_manager.py`:
 
 ### Protected Endpoints
 
-These endpoints require API key authentication (sent via `X-Goog-Api-Key` header, not URL params):
-- `POST /api/config`
-- `POST /api/system/cleanup`
-- `POST /api/context/import`
-- `POST /api/context/clear`
-- `POST /api/pipeline/download`
+These endpoints require API key authentication (sent via `X-API-Key` header, not URL params):
+- `GET /api/status` - Get system status
+- `POST /api/pipeline/run` - Start pipeline
+- `POST /api/pipeline/stop` - Stop pipeline
+- `GET /api/pipeline/settings` - Get pipeline settings
+- `POST /api/pipeline/settings` - Save pipeline settings
+- `GET /api/pipeline/logs` - Get pipeline logs
+- `GET /api/metrics/summary` - Get performance summary
+- `GET /api/metrics/videos` - Get all videos with metrics
+- `GET /api/metrics/content-performance` - Get content type performance
+- `POST /api/metrics/sync` - Sync YouTube metrics
+- `GET /api/metrics/tiktok/summary` - Get TikTok summary
+- `GET /api/metrics/tiktok/videos` - Get TikTok videos
+- `GET /api/metrics/tiktok/daily` - Get TikTok daily trends
+- `GET /api/metrics/tiktok/games` - Get TikTok per-game stats
+- `GET /api/metrics/tiktok/comparison` - Get TikTok comparison
+- `POST /api/metrics/tiktok/import` - Import TikTok data
+- `POST /api/metrics/tiktok/match` - Match TikTok to local
+- `GET /api/metrics/cross-platform` - Get cross-platform stats
+- `GET /api/scripts` - Get all scripts
+- `GET /api/scripts/{script_id}` - Get script details
+- `GET /api/scripts/{script_id}/metadata` - Get script metadata
+- `POST /api/scripts/{id}/analyze` - Analyze script
+- `GET /api/learnings` - Get all learnings
+- `GET /api/learnings/weights` - Get content type weights
+- `GET /api/context/games` - Get all game contexts
+- `GET /api/context/{game}` - Get game context items
+- `PUT /api/context/{game}/{item_type}/{item_id}` - Update context item
+- `DELETE /api/context/{game}/{item_type}/{item_id}` - Delete context item
+- `GET /api/context/all/graph` - Get all-games graph
+- `GET /api/context/{game}/graph` - Get single-game graph
+- `GET /api/context/{game}/graph/search` - Search graph entities
+- `GET /api/context/{game}/graph/stats` - Get graph statistics
+- `GET /api/context/{game}/segments` - Get segment references
+- `GET /api/prompts/script` - Get script prompt template
+- `PUT /api/prompts/script` - Save script prompt
+- `GET /api/tts/voices` - Get TTS voices
+- `GET /api/tts/learnings` - Get TTS learnings
+- `GET /api/learning/dashboard` - Get learning dashboard
+- `GET /api/learning/tiktok-signals` - Get TikTok signals
+- `POST /api/learning/ab-test` - Create A/B test
+- `POST /api/learning/ab-test/{test_id}/result` - Record A/B test result
+- `GET /api/learning/ab-test/{test_id}` - Get A/B test results
+- `GET /api/learning/ab-tests` - Get all A/B tests
+- `GET /api/learning/ab-current` - Get current A/B test
+- `GET /api/config` - Get configuration
+- `POST /api/config` - Update configuration
+- `POST /api/pipeline/download` - Download from URL
+- `GET /api/logs` - Get application logs
+- `POST /api/system/cleanup` - Cleanup files
+- `POST /api/context/import` - Import context
+- `POST /api/context/create_game` - Create game context
+- `POST /api/context/clear` - Clear context
+- `POST /api/context/merge` - Merge context
+- `DELETE /api/context/{game}` - Delete game context
 
 Path traversal protections are enforced on all file-related endpoints. Thread-safe locking ensures database integrity during concurrent pipeline operations.
 
@@ -727,7 +759,7 @@ Path traversal protections are enforced on all file-related endpoints. Thread-sa
 - Verify YouTube OAuth is configured (`client_secret.json` in workspace)
 - Check video duration (must be < 3 minutes to be treated as Short)
 - Ensure the Short exists on YouTube and appears in recent uploads
-- Run sync via API: `curl -X POST http://localhost:8000/api/metrics/sync -H "X-Goog-Api-Key: YOUR_KEY"`
+- Run sync via API: `curl -X POST http://localhost:8000/api/metrics/sync -H "X-API-Key: YOUR_KEY"`
 - Check the database: stored YouTube IDs must match actual YouTube video IDs
 
 **Q: Scene detection produces poor cuts**

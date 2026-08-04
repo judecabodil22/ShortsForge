@@ -6,14 +6,17 @@ Analyzes performance patterns and optimizes generation parameters.
 import json
 import os
 import re
+import logging
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
 
+logger = logging.getLogger(__name__)
+
 from workflows.constants import calculate_readability, calculate_hook_strength
 
-WORKSPACE = os.path.expanduser("~/Cogitator")
+from workflows.constants import WORKSPACE
 
 
 def analyze_performance_patterns(
@@ -476,92 +479,6 @@ def get_optimized_params(learnings: List[Dict], baseline: Dict) -> Dict[str, Any
     return params
 
 
-def generate_script_variants(
-    base_script: str,
-    content_type: str,
-    optimization_target: str = 'engagement'
-) -> List[Dict]:
-    """Generate optimized variants of a script based on learnings."""
-    variants = []
-    
-    variant_1 = _optimize_for_hook_strength(base_script)
-    variants.append({
-        'type': 'hook_strength',
-        'script': variant_1,
-        'focus': 'Stronger opening hook'
-    })
-    
-    variant_2 = _optimize_for_pacing(base_script)
-    variants.append({
-        'type': 'pacing',
-        'script': variant_2,
-        'focus': 'Better rhythm and tempo'
-    })
-    
-    variant_3 = _optimize_for_engagement(base_script)
-    variants.append({
-        'type': 'engagement',
-        'script': variant_3,
-        'focus': 'More interactive and engaging'
-    })
-    
-    return variants
-
-
-def _optimize_for_hook_strength(script: str) -> str:
-    """Optimize script for stronger hooks."""
-    lines = script.strip().split('\n')
-    if not lines:
-        return script
-    
-    first_line = lines[0]
-    
-    hook_intensifiers = ['This is ', 'Here\'s ', 'The truth about ', 'What nobody tells you about ']
-    
-    has_hook_word = any(word in first_line.lower() for word in ['secret', 'truth', 'revealed', 'never', 'amazing'])
-    
-    if not any(intensifier in first_line for intensifier in hook_intensifiers) and not has_hook_word:
-        intensifier = hook_intensifiers[len(first_line) % len(hook_intensifiers)]
-        lines[0] = intensifier + first_line[0].lower() + first_line[1:] if len(first_line) > 1 else first_line
-    
-    return '\n'.join(lines)
-
-
-def _optimize_for_pacing(script: str) -> str:
-    """Optimize script for better pacing."""
-    lines = [l.strip() for l in script.strip().split('\n') if l.strip()]
-    
-    for i, line in enumerate(lines):
-        if len(line) > 150 and i < len(lines) - 1:
-            mid = len(line) // 2
-            for j in range(mid, len(line)):
-                if line[j] == ' ':
-                    lines[i] = line[:j]
-                    lines.insert(i + 1, line[j+1:].strip())
-                    break
-    
-    return '\n'.join(lines)
-
-
-def _optimize_for_engagement(script: str) -> str:
-    """Optimize script for engagement."""
-    engagement_phrases = [
-        'Can you relate?',
-        'Let me know in the comments.',
-        'What do you think?',
-        'Follow for more.'
-    ]
-    
-    lines = script.strip().split('\n')
-    
-    has_cta = any('?' in line or any(phrase in line.lower() for phrase in ['subscribe', 'like', 'comment']) for line in lines)
-    
-    if not has_cta and len(lines) >= 2:
-        lines.append(engagement_phrases[len(lines) % len(engagement_phrases)])
-    
-    return '\n'.join(lines)
-
-
 _retention_history: list = []
 _tiktok_engagement_by_game: dict = {}
 
@@ -601,7 +518,8 @@ def load_retention_history(max_samples: int = 100):
             }
             for s in parsed_scripts
         ]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load retention history: {e}")
         pass
     
     # Load TikTok engagement signals for cross-platform learning
@@ -793,58 +711,6 @@ def calculate_virality_score(
     return min(100.0, max(0.0, total_score))
 
 
-def should_regenerate(script_features: Dict, learnings: List[Dict], baseline: Dict) -> Tuple[bool, str]:
-    """Determine if a script should be regenerated based on learnings."""
-    min_samples = baseline.get('sample_count', 0)
-    
-    if min_samples < 5:
-        return False, "Not enough data for recommendations"
-    
-    confidence = sum(l.get('confidence', 0) for l in learnings) / max(len(learnings), 1)
-    
-    if confidence < 0.5:
-        return False, f"Learning confidence too low ({confidence:.0%})"
-    
-    suboptimal_count = 0
-    reasons = []
-    
-    for learning in learnings:
-        if learning.get('impact_score', 0) < 0:
-            suboptimal_count += 1
-            reasons.append(f"{learning.get('feature_name')}: {learning.get('feature_value')}")
-    
-    if suboptimal_count > 3:
-        return True, f"Script has {suboptimal_count} suboptimal features: {', '.join(reasons[:3])}"
-    
-    return False, "Script parameters within acceptable range"
-
-
-def update_learning(
-    feature_name: str,
-    feature_value: str,
-    metric_type: str,
-    performance_before: float,
-    performance_after: float
-) -> Dict:
-    """Update learning based on new performance data."""
-    impact = performance_after - performance_before
-    
-    sample_increment = 1
-    current_confidence = 0.5
-    
-    confidence = min(current_confidence + (sample_increment * 0.1), 0.95)
-    
-    return {
-        'feature_name': feature_name,
-        'feature_value': feature_value,
-        'metric_type': metric_type,
-        'impact_score': impact,
-        'sample_count': sample_increment,
-        'confidence': confidence,
-        'updated_at': datetime.now(timezone.utc).isoformat()
-    }
-
-
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
@@ -877,7 +743,8 @@ class ViralityPredictor:
                 self.model = xgb.XGBRegressor()
                 self.model.load_model(self.model_path)
                 self.is_trained = True
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to load virality model: {e}")
                 self.is_trained = False
     
     def _extract_features_array(self, features: Dict) -> List:
@@ -989,15 +856,6 @@ def get_virality_predictor() -> ViralityPredictor:
     return _virality_predictor
 
 
-def predict_virality(script_features: Dict) -> float:
-    """Predict virality score for a script.
-    
-    Convenience function using singleton predictor.
-    """
-    predictor = get_virality_predictor()
-    return predictor.predict(script_features)
-
-
 def train_virality_model(scripts_data: List[Dict]) -> Dict:
     """Train virality model from scripts data.
     
@@ -1064,7 +922,7 @@ def sync_and_train_from_youtube(days: int = 30, max_results: int = 50) -> Dict:
     try:
         from workflows.performance_database import sync_youtube_metrics, get_successful_scripts
     except ImportError:
-        from performance_database import sync_youtube_metrics, get_successful_scripts
+        from workflows.performance_database import sync_youtube_metrics, get_successful_scripts
 
     sync_result = sync_youtube_metrics(days=days, max_results=max_results)
 
@@ -1115,7 +973,7 @@ def update_optimal_params_from_youtube(days: int = 30) -> Dict:
     try:
         from workflows.performance_database import get_successful_scripts
     except ImportError:
-        from performance_database import get_successful_scripts
+        from workflows.performance_database import get_successful_scripts
 
     scripts = get_successful_scripts(limit=50, min_views=10)
     if not scripts:

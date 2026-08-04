@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { ThemeProvider } from '@/contexts/ThemeContext'
 import { ToastProvider } from '@/contexts/ToastContext'
 import ToastContainer from '@/components/ui/Toast'
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
 import Layout from '@/components/layout/Layout'
 import Dashboard from '@/pages/Dashboard'
 import Graph from '@/pages/Graph'
@@ -39,6 +40,21 @@ function AnimatedPage({ children }: { children: React.ReactNode }) {
   )
 }
 
+function NotFound() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-center">
+      <h1 className="text-6xl font-display font-bold text-40k-gold mb-4">404</h1>
+      <p className="text-xl text-gray-400 mb-8">Page not found</p>
+      <a
+        href="/dashboard"
+        className="cyber-button-primary px-6 py-3 text-sm font-medium"
+      >
+        Return to Dashboard
+      </a>
+    </div>
+  )
+}
+
 function AppRoutes() {
   const location = useLocation()
   return (
@@ -53,6 +69,7 @@ function AppRoutes() {
         <Route path="/settings" element={<AnimatedPage><Settings /></AnimatedPage>} />
         <Route path="/prompts" element={<AnimatedPage><PromptEditor /></AnimatedPage>} />
         <Route path="/learning" element={<AnimatedPage><LearningDashboard /></AnimatedPage>} />
+        <Route path="*" element={<AnimatedPage><NotFound /></AnimatedPage>} />
       </Routes>
     </AnimatePresence>
   )
@@ -60,18 +77,20 @@ function AppRoutes() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <ToastProvider>
-          <BrowserRouter>
-            <Layout>
-              <AppRoutes />
-            </Layout>
-          </BrowserRouter>
-          <ToastContainer />
-        </ToastProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <ToastProvider>
+            <BrowserRouter>
+              <Layout>
+                <AppRoutes />
+              </Layout>
+            </BrowserRouter>
+            <ToastContainer />
+          </ToastProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   )
 }
 

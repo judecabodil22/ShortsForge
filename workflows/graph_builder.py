@@ -13,18 +13,19 @@ from collections import defaultdict
 
 from workflows.performance_database import get_performance_stats
 from workflows.context_manager_v2 import ContextManagerV2, get_context_manager
-from workflows.context_manager import (
+from workflows.mempalace_integration import (
     get_mempalace_text_chunks,
+    get_full_series_mapping,
+)
+from workflows.context_manager_v2 import (
     load_implicit_relationships,
     save_implicit_relationships,
     get_context_sources_summary,
-    get_full_series_mapping,
 )
 
-WORKSPACE = os.path.expanduser("~/Cogitator")
+from workflows.constants import WORKSPACE
 
 # Graph data cache
-GAME_GRAPH_CACHE: Dict[str, tuple] = {}
 _graph_cache: dict = {}
 _graph_cache_time: float = 0
 _GRAPH_CACHE_TTL = 60
@@ -526,13 +527,6 @@ def _set_cached_graph(cache_key: str, data: dict) -> None:
     global _graph_cache, _graph_cache_time
     _graph_cache[cache_key] = data
     _graph_cache_time = time.time()
-
-
-def build_graph(game_key: str) -> dict:
-    """Build a graph for a specific game."""
-    cm = get_context_manager()
-    cm.load_all_contexts()
-    return _build_single_game_graph(game_key, cm)
 
 
 # Public wrappers for backend API
