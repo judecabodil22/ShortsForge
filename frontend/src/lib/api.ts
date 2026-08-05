@@ -81,7 +81,11 @@ async function fetchAPI<T>(endpoint: string, options: FetchOptions = {}): Promis
 
 export const getStatus = () => fetchAPI<{ pipeline: any; oauth_configured: boolean; workspace: string; game_title: string; parent_franchise: string }>('/api/status')
 
-export const runPipeline = (source: string = 'youtube', videoUrl: string = '') => fetchAPI<{ status: string }>('/api/pipeline/run', { method: 'POST', body: { source, video_url: videoUrl } })
+export const runPipeline = (source: string = 'youtube', videoUrl: string = '', phases?: number[]) =>
+  fetchAPI<{ status: string }>('/api/pipeline/run', {
+    method: 'POST',
+    body: { source, video_url: videoUrl, ...(phases?.length ? { phases } : {}) },
+  })
 export const stopPipeline = () => fetchAPI<{ status: string }>('/api/pipeline/stop', { method: 'POST' })
 
 
@@ -93,14 +97,28 @@ export const syncMetrics = () => fetchAPI<any>('/api/metrics/sync', { method: 'P
 export const getScripts = () => fetchAPI<any>('/api/scripts')
 export const getScriptMetadata = (id: string) => fetchAPI<any>(`/api/scripts/${id}/metadata`)
 export const analyzeScript = (id: string) => fetchAPI<any>(`/api/scripts/${id}/analyze`, { method: 'POST' })
+export const reviewScript = (id: string, status: 'approved' | 'quarantined' | 'pending') =>
+  fetchAPI<any>(`/api/scripts/${id}/review`, { method: 'POST', body: { status } })
+
+export const getMemPalaceStatus = () => fetchAPI<any>('/api/mempalace/status')
+export const clearMemPalace = (game: string) =>
+  fetchAPI<any>('/api/mempalace/clear', { method: 'POST', body: { game } })
+export const getPublishChecklist = (video: string) =>
+  fetchAPI<any>(`/api/publish/checklist?video=${encodeURIComponent(video)}`)
+export const autoImportTikTok = () =>
+  fetchAPI<any>('/api/metrics/tiktok/auto-import', { method: 'POST' })
+export const searchGraph = (game: string, q: string) =>
+  fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/graph/search?q=${encodeURIComponent(q)}`)
+export const getGraphStats = (game: string) =>
+  fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/graph/stats`)
+export const createABTest = (data: any) =>
+  fetchAPI<any>('/api/learning/ab-test', { method: 'POST', body: data })
 
 export const getLearningWeights = () => fetchAPI<any>('/api/learnings/weights')
-
 export const getLearningDashboard = () => fetchAPI<any>('/api/learning/dashboard')
 export const getActiveABTests = () => fetchAPI<any>('/api/learning/ab-tests')
 export const getTikTokLearningSignals = () => fetchAPI<any>('/api/learning/tiktok-signals')
 export const getCurrentABTest = () => fetchAPI<any>('/api/learning/ab-current')
-
 
 export const getGames = () => fetchAPI<any>('/api/context/games')
 export const getGameContext = (game: string) => fetchAPI<any>(`/api/context/${game}`)

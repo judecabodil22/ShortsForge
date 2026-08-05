@@ -19,74 +19,6 @@ logger = logging.getLogger(__name__)
 # Thread lock for verified context updates
 _context_file_lock = threading.Lock()
 
-def _wiki_name(cell: str) -> str:
-    """Extract name from Obsidian wiki link if present, else return cell text."""
-    if "[[" in cell and "]]" in cell:
-        # Get content between [[ ]]
-        start = cell.find("[[") + 2
-        end = cell.find("]]", start)
-        content = cell[start:end]
-        # Handle aliased links like [[real_name|alias]]
-        if "|" in content:
-            return content.split("|")[0].strip()
-        return content.strip()
-    return cell.strip()
-
-def load_markdown_context(game_key: str) -> Dict[str, Any]:
-    """Load characters, locations, terms, relationships from Obsidian markdown tables."""
-    ctx_dir = os.path.join(CONTEXT_DIR, game_key)
-    if not os.path.isdir(ctx_dir):
-        return {"characters": [], "locations": [], "key_terms": [], "relationships": []}
-
-    result = {"characters": [], "locations": [], "key_terms": [], "relationships": []}
-    file_map = {
-        "characters": "characters.md",
-        "locations": "locations.md",
-        "key_terms": "key_terms.md",
-    }
-
-    for field, fname in file_map.items():
-        path = os.path.join(ctx_dir, fname)
-        if not os.path.exists(path):
-            continue
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        for line in content.split("\n"):
-            line = line.strip()
-            if not line.startswith("|") or "---" in line:
-                continue
-            parts = [p.strip() for p in line.split("|")[1:-1]]
-            if not parts or parts[0].lower() in ("name", "character", "location", "term"):
-                continue
-            name = _wiki_name(parts[0])
-            if name and name not in result[field]:
-                result[field].append(name)
-
-    rel_path = os.path.join(ctx_dir, "relationships.md")
-    if os.path.exists(rel_path):
-        with open(rel_path, "r", encoding="utf-8") as f:
-            rel_content = f.read()
-        if "|" in rel_content and "---" in rel_content:
-            for line in rel_content.split("\n"):
-                line = line.strip()
-                if not line.startswith("|") or "---" in line or "Character A" in line:
-                    continue
-                parts = [p.strip() for p in line.split("|")[1:-1]]
-                if len(parts) < 3:
-                    continue
-                char_a = _wiki_name(parts[0])
-                connection = parts[1]
-                char_b = _wiki_name(parts[2])
-                if not char_a or char_a == "-":
-                    continue
-                if char_b and char_b != "-":
-                    rel = {"from": char_a, "to": char_b, "relationship": connection}
-                else:
-                    rel = {"from": char_a, "to": char_a, "relationship": connection}
-                if rel not in result["relationships"]:
-                    result["relationships"].append(rel)
-    return result
-
 VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")
 HISTORY_DIR = os.path.join(CONTEXT_DIR, "history")
 SCHEMA_FILE = os.path.join(CONTEXT_DIR, "schema.json")
@@ -383,71 +315,11 @@ class ContextManagerV2:
                         item = ContextItem(game_key, "relationship", str(rel))
                     self.contexts[game_key]["relationship"].append(item)
 
-                # Merge Obsidian markdown (entities + relationship tables)
-                self._merge_markdown_context(game_key)
-
             # Track file mtime to skip future reloads if unchanged
             self._context_mtime = current_mtime
         except Exception as e:
             print(f"Error loading contexts: {e}")
 
-    def _merge_markdown_context(self, game_key: str):
-        """Add entities/relationships from Context/{game_key}/*.md not already in memory."""
-        md = load_markdown_context(game_key)
-        if game_key not in self.contexts:
-            self.contexts[game_key] = {
-                "character": [], "location": [], "term": [], "relationship": []
-            }
-
-        def _names(items):
-            return {i.name.lower() for i in items}
-
-        for char in md.get("characters", []):
-            if char.lower() not in _names(self.contexts[game_key]["character"]):
-                self.contexts[game_key]["character"].append(
-                    ContextItem(game_key, "character", char, source="markdown")
-                )
-        for loc in md.get("locations", []):
-            if loc.lower() not in _names(self.contexts[game_key]["location"]):
-                self.contexts[game_key]["location"].append(
-                    ContextItem(game_key, "location", loc, source="markdown")
-                )
-        for term in md.get("key_terms", []):
-            if term.lower() not in _names(self.contexts[game_key]["term"]):
-                self.contexts[game_key]["term"].append(
-                    ContextItem(game_key, "term", term, source="markdown")
-                )
-
-        existing_rel_keys = set()
-        for item in self.contexts[game_key]["relationship"]:
-            meta = item.metadata or {}
-            k = (meta.get("from", "").lower(), meta.get("to", "").lower())
-            if k[0] and k[1]:
-                existing_rel_keys.add(k)
-
-        for rel in md.get("relationships", []):
-            if not isinstance(rel, dict):
-                continue
-            from_n = (rel.get("from") or "").strip()
-            to_n = (rel.get("to") or "").strip()
-            if not from_n or not to_n or from_n.lower() == to_n.lower():
-                continue
-            key = (from_n.lower(), to_n.lower())
-            if key in existing_rel_keys:
-                continue
-            existing_rel_keys.add(key)
-            rel_type = (rel.get("relationship") or "related").strip()
-            self.contexts[game_key]["relationship"].append(
-                ContextItem(
-                    game_key,
-                    "relationship",
-                    f"{from_n} ↔ {to_n}",
-                    category=rel_type,
-                    source="markdown",
-                    metadata={"from": from_n, "to": to_n, "relationship": rel_type},
-                )
-            )
-    
     def get_games(self) -> List[str]:
         """Get list of all game keys."""
         return list(self.contexts.keys())

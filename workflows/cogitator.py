@@ -11,6 +11,13 @@ _workspace = os.path.dirname(_workflow_dir)
 if _workspace not in sys.path:
     sys.path.insert(0, _workspace)
 from workflows.context_utils import _cs_load_context
+from workflows.title_variety import (
+    build_title_guidance,
+    enforce_title_variety,
+    format_recent_for_prompt,
+    load_historical_titles,
+    normalize_title,
+)
 
 from update_manager import (
     get_local_version,
@@ -243,12 +250,41 @@ def _correct_transcript_asr_errors(json_path):
         import json, re
         with open(json_path, "r") as f:
             data = json.load(f)
+
+        corrections = dict(_ASR_CORRECTIONS)
+        # Inject verified entity names as preferred spellings (glossary)
+        try:
+            from workflows.context_manager_v2 import load_verified_context
+            verified = load_verified_context(env("GAME_TITLE", ""))
+            for key in ("characters", "locations", "key_terms"):
+                for item in (verified or {}).get(key, []) or []:
+                    name = item.get("name") or item.get("term") if isinstance(item, dict) else str(item)
+                    if not name or len(name) < 3:
+                        continue
+                    # Prefer canonical casing when ASR produces lowercase/spaced variants
+                    spaced = " ".join(list(name.replace(" ", "")))  # letter-spaced e.g. N C P D
+                    if len(name.replace(" ", "")) <= 6 and name.isupper():
+                        corrections.setdefault(spaced.lower(), name)
+                    corrections.setdefault(name.lower(), name)
+            aliases = {}
+            # character_aliases from raw file via _cs_load_context
+            ctx = _cs_load_context()
+            for variant, canonical in (ctx.get("character_aliases") or {}).items():
+                if variant and canonical:
+                    corrections[str(variant).lower()] = canonical
+            for variant, canonical in (ctx.get("location_aliases") or {}).items():
+                if variant and canonical:
+                    corrections[str(variant).lower()] = canonical
+        except Exception:
+            pass
         
         corrections_made = 0
+        # Apply longer keys first to avoid partial replacements
+        ordered = sorted(corrections.items(), key=lambda kv: len(kv[0]), reverse=True)
         for seg in data.get("segments", []):
             original = seg.get("text", "")
             corrected = original
-            for wrong, right in _ASR_CORRECTIONS.items():
+            for wrong, right in ordered:
                 corrected = re.sub(rf'\b{re.escape(wrong)}\b', right, corrected, flags=re.IGNORECASE)
             
             if corrected != original:
@@ -1037,20 +1073,13 @@ def _show_context_view():
     return msg
 
 def _reload_context_from_obsidian():
-    """Reload context from Obsidian markdown files and save as verified."""
-    from workflows.context_manager_v2 import save_verified_context
-    
+    """Deprecated: Obsidian vault removed. Reloads verified JSON context."""
     ctx = _cs_load_context()
     game = env("GAME_TITLE", "Unknown")
-    
-    # Save as verified context
-    save_verified_context(game, ctx)
-    
     chars = len(ctx.get("characters", []))
     locs = len(ctx.get("locations", []))
     rels = len(ctx.get("relationships", []))
-    
-    return f"✅ Reloaded from Obsidian and saved as verified!\n\n📝 {chars} chars\n📍 {locs} locs\n👥 {rels} rels"
+    return f"Verified context for {game}: {chars} chars, {locs} locs, {rels} rels"
 
 
 # ─── Content Studio Functions ─────────────────────────────────────────────────
@@ -1966,514 +1995,43 @@ def _cs_generate_tts_only():
 
 
 def _cs_save_context(ctx):
-    """Save context to centralized Context directory (smart save - preserves manual edits)."""
-    game = env("GAME_TITLE", "default").lower().replace(" ", "_")
-    ctx_dir = os.path.join(CONTEXT_DIR, game)
-    os.makedirs(ctx_dir, exist_ok=True)
-    # Save alias maps to verified_context.json for persistence between runs
+    """Persist context to verified_context.json only (no Obsidian markdown vault)."""
+    game_title = env("GAME_TITLE", "default")
     try:
-        alias_data = {}
-        if ctx.get("character_aliases"):
-            alias_data["character_aliases"] = ctx["character_aliases"]
-        if ctx.get("location_aliases"):
-            alias_data["location_aliases"] = ctx["location_aliases"]
-        if alias_data:
-            game_title = env("GAME_TITLE", "default")
-            from workflows.context_manager_v2 import load_verified_context, save_verified_context
-            verified = load_verified_context(game_title)
-            if isinstance(verified, dict):
-                verified.update(alias_data)
-                save_verified_context(game_title, verified)
-    except Exception:
-        pass
-    
-    def wiki(name):
-        return f"[[{name}]]"
-    
-    def smart_save_list_items(file_path, new_items, item_type):
-        """Save list items while preserving existing manual content."""
-        if not os.path.exists(file_path):
-            # File doesn't exist - create with full format
-            return _create_full_format_file(file_path, new_items, item_type)
-        
-        # File exists - read and preserve manual content
-        with open(file_path, 'r') as f:
-            content = f.read()
-        
-        # Extract existing items from file (both plain and wiki-link format)
-        existing_items = _extract_items_from_markdown(content)
-        
-        # Merge: existing + new (avoid duplicates)
-        merged_items = list(existing_items)
-        for item in new_items:
-            if item not in merged_items:
-                merged_items.append(item)
-        
-        # Rebuild file preserving everything except the item list
-        return _rebuild_file_preserving_content(file_path, content, merged_items, item_type)
-    
-    # Save each category with smart save
-    smart_save_list_items(os.path.join(ctx_dir, "characters.md"), ctx.get("characters", []), "characters")
-    smart_save_list_items(os.path.join(ctx_dir, "locations.md"), ctx.get("locations", []), "locations")
-    smart_save_list_items(os.path.join(ctx_dir, "key_terms.md"), ctx.get("key_terms", []), "key_terms")
-    
-    # For relationships, handle differently since format is more complex
-    rels_file = os.path.join(ctx_dir, "relationships.md")
-    if os.path.exists(rels_file):
-        with open(rels_file, 'r') as f:
-            content = f.read()
-        existing_rels = _extract_relationships_from_markdown(content)
-    else:
-        existing_rels = []
-    
-    # Merge relationships with fuzzy dedup
-    merged_rels = list(existing_rels)
-    for rel in ctx.get("relationships", []):
-        if isinstance(rel, dict):
-            rel_text = f"{rel.get('from', '')}-{rel.get('to', '')}-{rel.get('relationship', '')}"
-        else:
-            rel_text = str(rel)
-        is_dup = False
-        for existing_rel in merged_rels:
-            if isinstance(existing_rel, dict):
-                existing_text = f"{existing_rel.get('from', '')}-{existing_rel.get('to', '')}-{existing_rel.get('relationship', '')}"
-            else:
-                existing_text = str(existing_rel)
-            ratio = _fuzz.token_sort_ratio(rel_text.lower(), existing_text.lower()) if _fuzz else 0
-            if rel_text.lower() == existing_text.lower() or ratio >= 75:
-                is_dup = True
-                break
-        if not is_dup:
-            merged_rels.append(rel)
-    
-    # Rebuild relationships file preserving content
-    _rebuild_relationships_preserving_content(rels_file, merged_rels, ctx.get("characters", []))
-
-
-def _extract_items_from_markdown(content):
-    """Extract list items from markdown, handling both table and list format."""
-    items = []
-    
-    # First try table format
-    if '|' in content and '---' in content:
-        for line in content.split('\n'):
-            line = line.strip()
-            if not line.startswith('|') or '---' in line:
-                continue
-            parts = [p.strip() for p in line.split('|')[1:-1]]
-            if not parts or not parts[0]:
-                continue
-            name = parts[0].strip()
-            if name.startswith('[[') and name.endswith(']]'):
-                name = name[2:-2]
-            # Skip header rows
-            if name.lower() in ['name', 'character', 'location', 'term', 'character a']:
-                continue
-            if name:
-                items.append(name)
-        return items
-    
-    # Fall back to list format
-    for line in content.split('\n'):
-        line = line.strip()
-        if line.startswith('- '):
-            item = line[2:].strip()
-            if item.startswith('[[') and item.endswith(']]'):
-                item = item[2:-2]
-            if item:
-                items.append(item)
-    return items
-
-
-def _extract_relationships_from_markdown(content):
-    """Extract relationship lines from markdown, handling table and list format."""
-    rels = []
-    
-    # First try table format
-    if '|' in content and '---' in content:
-        for line in content.split('\n'):
-            line = line.strip()
-            if not line.startswith('|') or '---' in line:
-                continue
-            parts = [p.strip() for p in line.split('|')[1:-1]]
-            if len(parts) < 3:
-                continue
-            # Skip header
-            if 'Character' in parts[0]:
-                continue
-            
-            char_a = parts[0]
-            if char_a.startswith('[['):
-                char_a = char_a[2:-2]
-            if not char_a or char_a == '-':
-                continue
-            
-            connection = parts[1]
-            char_b = parts[2]
-            if char_b.startswith('[['):
-                char_b = char_b[2:-2]
-            
-            if char_b and char_b != '-':
-                rel = f"{char_a} and {char_b} are {connection}"
-            else:
-                rel = f"{char_a} is {connection}"
-            
-            if rel:
-                rels.append(rel)
-        return rels
-    
-    # Fall back to list format
-    for line in content.split('\n'):
-        line = line.strip()
-        if line.startswith('- '):
-            rel = line[2:].strip()
-            if rel and not rel.startswith('[[') and not rel.startswith('#'):
-                rels.append(rel)
-    return rels
-
-
-def _create_full_format_file(file_path, items, item_type):
-    """Create a new file with full beautiful format."""
-    def wiki(name):
-        return f"[[{name}]]"
-    
-    game = env("GAME_TITLE", "default")
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Get appropriate data based on type
-    ctx = _cs_load_context()
-    
-    with open(file_path, 'w') as f:
-        # Frontmatter
-        f.write(f"""---
-game: {game}
-game_developer: 
-created: {today}
-updated: {today}
-type: {item_type}
-tags: [context, {item_type}]
----
-
-# {item_type.title().replace('_', ' ')}
-
-> [!NOTE]
-> Verified {item_type} extracted from game transcripts.
-
-## {item_type.title().replace('_', ' ')} List
-
-""")
-        
-        # Table header
-        f.write(f"| Name | Status | Notes |\n")
-        f.write(f"|------|--------|-------|\n")
-        
-        for item in items:
-            f.write(f"| {wiki(item)} | ✅ Verified | |\n")
-        
-        # Mermaid with proper unique nodes
-        unique_items = list(dict.fromkeys(items))[:10]
-        
-        mermaid_header = f"""
-## {item_type.title().replace('_', ' ')} Graph
-
-```mermaid
-graph TD
-"""
-        f.write(mermaid_header)
-        
-        for i, item in enumerate(unique_items):
-            safe_id = f"{item_type[0].upper()}{i}"
-            f.write(f"    {safe_id}[{item}]\n")
-        
-        if len(unique_items) > 1:
-            for i in range(min(3, len(unique_items) - 1)):
-                safe_id1 = f"{item_type[0].upper()}{i}"
-                safe_id2 = f"{item_type[0].upper()}{i+1}"
-                f.write(f"    {safe_id1} --> {safe_id2}\n")
-        
-        f.write("```\n")
-        
-        footer = f"""
-
----
-
-### 🔍 Sources
-- 
-
-### ✅ Last Verified
-{today}
-
-### 📝 Notes
-- 
-
----
-
-**Tags:** #{item_type}
-"""
-        f.write(footer)
-    
-    return True
-
-
-def _rebuild_file_preserving_content(file_path, content, items, item_type):
-    """Rebuild markdown file preserving manual edits."""
-    def wiki(name):
-        return f"[[{name}]]"
-    
-    game = env("GAME_TITLE", "default")
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Extract frontmatter and sections that shouldn't be regenerated
-    sections = {}
-    
-    # Find frontmatter
-    if content.startswith('---'):
-        parts = content.split('---', 2)
-        if len(parts) >= 3:
-            sections['frontmatter'] = parts[1]
-            content = parts[2]
-    
-    # Extract existing manual sections (Notes, Sources, etc.)
-    manual_sections = []
-    in_notes = False
-    notes_content = []
-    
-    for line in content.split('\n'):
-        if '### 📝 Notes' in line or '### Notes' in line:
-            in_notes = True
-            continue
-        if in_notes:
-            if line.startswith('---') or line.startswith('**Tags'):
-                in_notes = False
-                if notes_content:
-                    manual_sections = notes_content
-                notes_content = []
-            else:
-                notes_content.append(line)
-    
-    # Build new content
-    new_content = []
-    
-    # Keep frontmatter if exists
-    if 'frontmatter' in sections:
-        new_content.append(f"---\n{sections['frontmatter']}\n---")
-    else:
-        new_content.append(f"""---
-game: {game}
-game_developer: 
-created: {today}
-updated: {today}
-type: {item_type}
-tags: [context, {item_type}]
----""")
-    
-    new_content.append(f"""
-# {item_type.title().replace('_', ' ')}
-
-> [!NOTE]
-> Verified {item_type} extracted from game transcripts.
-
-## {item_type.title().replace('_', ' ')} List
-
-| Name | Status | Notes |
-|------|--------|-------|
-""")
-    
-    for item in items:
-        new_content.append(f"| {wiki(item)} | ✅ Verified | |")
-    
-    # Add Mermaid with proper unique nodes
-    unique_items = list(dict.fromkeys(items))  # Remove duplicates while preserving order
-    
-    new_content.append(f"""
-## {item_type.title().replace('_', ' ')} Graph
-
-```mermaid
-graph TD
-""")
-    
-    # Create unique nodes for each item with proper Mermaid syntax
-    for i, item in enumerate(unique_items[:10]):  # Limit to 10 items
-        safe_id = f"{item_type[0].upper()}{i}"  # e.g., C0, L0, K0
-        new_content.append(f"    {safe_id}[{item}]")
-    
-    # Create proper connections between items
-    if len(unique_items) > 1:
-        for i in range(min(3, len(unique_items) - 1)):
-            safe_id1 = f"{item_type[0].upper()}{i}"
-            safe_id2 = f"{item_type[0].upper()}{i+1}"
-            new_content.append(f"    {safe_id1} --> {safe_id2}")
-    
-    new_content.append("```")
-    
-    # Add sections
-    new_content.append(f"""
----
-
-### 🔍 Sources
-- 
-
-### ✅ Last Verified
-{today}
-
-### 📝 Notes
-{chr(10).join(manual_sections) if manual_sections else '-'}
-
----
-
-**Tags:** #{item_type}
-""")
-    
-    with open(file_path.replace('\\', '/'), 'w') as f:
-        f.write('\n'.join(new_content))
-    
-    return True
-
-
-def _rebuild_relationships_preserving_content(file_path, relationships, characters):
-    """Rebuild relationships file preserving manual edits."""
-    def wiki(name):
-        return f"[[{name}]]"
-    
-    game = env("GAME_TITLE", "default")
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Read existing file
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
-            existing_content = f.read()
-    else:
-        existing_content = ""
-    
-    # Extract manual sections
-    manual_notes = ""
-    if '### 📝 Notes' in existing_content:
-        start = existing_content.find('### 📝 Notes')
-        end = existing_content.find('---', start + 10)
-        if end > start:
-            manual_notes = existing_content[start:end]
-    
-    # Build proper relationship entries (handle both dict and string formats)
-    parsed_rels = []
-    for rel in relationships:
-        if isinstance(rel, dict):
-            from_char = rel.get("from", "").strip()
-            to_char = rel.get("to", "").strip()
-            conn = rel.get("relationship", "related").strip()
-            if from_char and to_char and from_char.lower() != to_char.lower():
-                parsed_rels.append({"char_a": from_char, "char_b": to_char, "connection": conn})
-            elif from_char and conn:
-                parsed_rels.append({"char_a": from_char, "char_b": "", "connection": conn})
-            continue
-        rel_str = str(rel)
-        if ' and ' in rel_str and ' are ' in rel_str:
-            left = rel.split(' are ')[0].strip()
-            connection = rel.split(' are ')[1].strip() if ' are ' in rel else rel
-            
-            chars_in_rel = left.split(' and ')
-            char_a = chars_in_rel[0].strip() if len(chars_in_rel) > 0 else ""
-            char_b = chars_in_rel[1].strip() if len(chars_in_rel) > 1 else ""
-            
-            # Skip self-referential relationships (broken AI output)
-            if not char_a or not char_b or char_a.lower() == char_b.lower():
-                continue
-            
-            parsed_rels.append({
-                "char_a": char_a,
-                "char_b": char_b,
-                "connection": connection
-            })
-        elif ' is ' in rel_str:
-            # Handle single character: "Allison is daughter"
-            left = rel_str.split(' is ')[0].strip()
-            connection = rel_str.split(' is ')[1].strip() if ' is ' in rel_str else ""
-            
-            if left and connection:
-                parsed_rels.append({
-                    "char_a": left,
-                    "char_b": "",
-                    "connection": connection
-                })
-    
-    with open(file_path.replace('\\', '/'), 'w') as f:
-        f.write(f"""---
-game: {game}
-game_developer: 
-created: {today}
-updated: {today}
-type: relationships
-tags: [context, relationships]
----
-
-# Relationships
-
-> [!NOTE]
-> Verified character relationships from game transcripts.
-
-## Relationship List
-
-| Character A | Connection | Character B | Status | Notes |
-|------------|------------|-------------|--------|-------|
-""")
-        
-        # Write parsed relationships to table
-        for rel in parsed_rels:
-            char_a_wiki = wiki(rel["char_a"]) if rel["char_a"] else "-"
-            char_b_wiki = wiki(rel["char_b"]) if rel["char_b"] else "-"
-            connection = rel["connection"] if rel["connection"] else "-"
-            
-            f.write(f"| {char_a_wiki} | {connection} | {char_b_wiki} | ✅ Verified | |\n")
-        
-        # Add Mermaid diagram with proper connections
-        f.write(f"""
-## Relationship Diagram
-
-```mermaid
-graph TD
-""")
-        
-        # Create unique relationships for Mermaid with unique IDs
-        used_ids = set()
-        for i, rel in enumerate(parsed_rels):
-            if rel["char_a"]:
-                # Create unique ID
-                safe_a = rel["char_a"].replace(" ", "_")[:8]
-                if safe_a in used_ids:
-                    safe_a = f"{safe_a}_{i}"
-                used_ids.add(safe_a)
-                
-                if rel["char_b"]:
-                    # Two-way relationship
-                    safe_b = rel["char_b"].replace(" ", "_")[:8]
-                    if safe_b in used_ids:
-                        safe_b = f"{safe_b}_{i}"
-                    used_ids.add(safe_b)
-                    
-                    conn = rel["connection"].replace(" ", "_")[:10] if rel["connection"] else "related"
-                    f.write(f"    {safe_a}[{rel['char_a']}] -->|{conn}| {safe_b}[{rel['char_b']}]\n")
-                else:
-                    # Single character - show as standalone node
-                    conn = rel["connection"].replace(" ", "_")[:10] if rel["connection"] else "related"
-                    f.write(f"    {safe_a}[{rel['char_a']}] -->|{conn}| R{i}[Relationship]\n")
-        
-        f.write("```\n")
-        
-        f.write(f"""
-
----
-
-### 🔍 Sources
-- 
-
-### ✅ Last Verified
-{today}
-
-{manual_notes}
-
----
-
-**Tags:** #relationships
-""")
+        from workflows.context_manager_v2 import load_verified_context, save_verified_context
+        existing = load_verified_context(game_title) or {}
+        # Normalize list fields to simple names / structured relationships
+        payload = {
+            "characters": list(ctx.get("characters", []) or []),
+            "locations": list(ctx.get("locations", []) or []),
+            "key_terms": list(ctx.get("key_terms", []) or []),
+            "relationships": [],
+            "processed_transcripts": list(ctx.get("processed_transcripts", []) or []),
+            "previous_scripts": list(ctx.get("previous_scripts", []) or []),
+            "character_aliases": dict(ctx.get("character_aliases", {}) or {}),
+            "location_aliases": dict(ctx.get("location_aliases", {}) or {}),
+            "title": ctx.get("title", "") or "",
+        }
+        if ctx.get("lore"):
+            payload["lore"] = ctx["lore"]
+        for rel in ctx.get("relationships", []) or []:
+            if isinstance(rel, dict):
+                a = (rel.get("from") or "").strip()
+                b = (rel.get("to") or "").strip()
+                if a and b and a.lower() != b.lower():
+                    payload["relationships"].append({
+                        "from": a,
+                        "to": b,
+                        "relationship": rel.get("relationship") or rel.get("category") or "related",
+                    })
+            elif isinstance(rel, str) and rel.strip():
+                payload["relationships"].append(rel.strip())
+        # Preserve lore from existing if not in ctx
+        if not payload.get("lore") and isinstance(existing, dict) and existing.get("lore"):
+            payload["lore"] = existing["lore"]
+        save_verified_context(game_title, payload, merge=True)
+    except Exception as e:
+        log(f"[CONTEXT] Failed to save verified context: {e}")
 
 
 def _detect_corrections(old_ctx, new_ctx):
@@ -2742,10 +2300,12 @@ def _extract_relationships(transcript_text, game_title, constraints_text):
     prompt = f"""Analyze this transcript from "{game_title}" and extract RELATIONSHIPS between characters.
 
 For every pair of characters that interact or are connected, provide:
-- The two characters involved
+- The two characters involved (MUST be two DIFFERENT characters — never the same name twice)
 - The type of relationship (allies, enemies, family, mentor, rival, friends, associates)
 - A confidence score from 0.0 to 1.0 (how certain you are based on the transcript)
 - A brief piece of evidence text from the transcript supporting this relationship
+
+Never output self-referential relationships (from == to). Skip uncertain pairs.
 
 {constraints_text}
 
@@ -2967,13 +2527,22 @@ def _cs_update_context(extracted, transcript_name, script_summary=None):
         if term not in ctx["key_terms"]:
             ctx["key_terms"].append(term)
 
-    # Merge relationships (avoid duplicates by fuzzy matching on text)
+    # Merge relationships (avoid duplicates by fuzzy matching on text; skip self-refs)
     for rel in extracted.get("relationships", []):
-        is_dup = False
         if isinstance(rel, dict):
+            a = (rel.get("from") or "").strip().lower()
+            b = (rel.get("to") or "").strip().lower()
+            if not a or not b or a == b:
+                continue
             rel_text = f"{rel.get('from', '')}-{rel.get('to', '')}-{rel.get('relationship', '')}"
         else:
             rel_text = str(rel)
+            if " and " in rel_text:
+                # crude self-ref: "X and X are"
+                parts = rel_text.split(" and ", 1)
+                if len(parts) == 2 and parts[0].strip().lower() == parts[1].split(" are ")[0].strip().lower():
+                    continue
+        is_dup = False
         for existing_rel in ctx["relationships"]:
             if isinstance(existing_rel, dict):
                 existing_text = f"{existing_rel.get('from', '')}-{existing_rel.get('to', '')}-{existing_rel.get('relationship', '')}"
@@ -4197,7 +3766,9 @@ def _extract_hour(json_file, start, end):
     return "\n".join(parts)
 
 def phase_scripts(json_file, duration, selected, video=None):
-    _RECENT_TITLES = []
+    _RECENT_TITLES = load_historical_titles(limit=30)
+    _USED_TITLE_STRUCTURES = []
+    _TITLE_GUIDANCE = build_title_guidance(_RECENT_TITLES, _USED_TITLE_STRUCTURES, historical=_RECENT_TITLES)
     video_basename = os.path.splitext(os.path.basename(video))[0] if video else "script"
     if not json_file or not os.path.exists(json_file):
         log_error("Phase 4 Failed: Transcript file not found")
@@ -4334,8 +3905,13 @@ def phase_scripts(json_file, duration, selected, video=None):
             best_script = None
             best_metadata = None
             candidates = []
+            fact_check = {"score": 1.0, "issues": []}
 
-            prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx, recent_titles=_RECENT_TITLES)
+            title_prompt_lines = []
+            if _TITLE_GUIDANCE:
+                title_prompt_lines.extend(_TITLE_GUIDANCE.splitlines())
+            title_prompt_lines.extend(_RECENT_TITLES[-20:])
+            prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx, recent_titles=title_prompt_lines)
 
             # Primary: Groq multi-variant (1 call, 2 variants)
             multi_prompt = prompt + """
@@ -4433,6 +4009,16 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                 best_script = cleaned
                 log(f"   Script post-processed ({len(best_script.split())} words)")
 
+            # Title variety enforcement
+            best_script, _tv_title, _tv_struct = enforce_title_variety(
+                best_script, _RECENT_TITLES, _USED_TITLE_STRUCTURES
+            )
+            if _tv_title:
+                log(f"   Title structure: {_tv_struct} → {_tv_title}")
+            _TITLE_GUIDANCE = build_title_guidance(
+                _RECENT_TITLES, _USED_TITLE_STRUCTURES, historical=_RECENT_TITLES
+            )
+
             # Word count enforcement — preserve TITLE/DESCRIPTION/TAGS, trim body at sentence boundary
             wc = len(best_script.split())
             if wc > 300:
@@ -4481,15 +4067,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
             else:
                 script_title = title_match.group(1)
                 log(f"   Script title: {script_title}")
-                # Title diversity tracking
-                normalized = script_title.lower().strip()
-                for prev_title in _RECENT_TITLES:
-                    prev_words = set(prev_title.split())
-                    curr_words = set(normalized.split())
-                    overlap = len(prev_words & curr_words)
-                    if overlap > 0 and overlap / max(len(prev_words), len(curr_words)) > 0.7:
-                        log(f"   WARNING: Title '{script_title}' overlaps heavily with recent '{prev_title}'")
-                        break
+                normalized = normalize_title(script_title)
                 _RECENT_TITLES.append(normalized)
 
             # ── Metadata extraction (title, description, hashtags, tags) ──
@@ -4528,6 +4106,20 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                     _sf_val = script_summary.get(_sf_key)
                     if _sf_val:
                         script_metadata[_sf_key] = _sf_val
+            # Factuality gate — quarantine low-quality scripts before TTS/assemble
+            try:
+                _fact_score = fact_check.get("score", 1.0) if isinstance(fact_check, dict) else 1.0
+            except NameError:
+                _fact_score = 1.0
+            if _fact_score < 0.4:
+                script_metadata["quarantined"] = True
+                script_metadata["skip_tts"] = True
+                script_metadata["review_status"] = "quarantined"
+                script_metadata["factuality_score"] = _fact_score
+                log(f"   QUARANTINED script {i}: factuality={_fact_score} < 0.4 (skip TTS/assemble)")
+            else:
+                script_metadata.setdefault("review_status", "pending")
+                script_metadata["factuality_score"] = _fact_score
             # Save .meta.json alongside script
             meta_path = out.replace(".txt", ".meta.json")
             try:
@@ -5074,137 +4666,10 @@ def run_local_recordings(recording_path):
 
 # ─── Pipeline orchestrator ────────────────────────────────────────────────────
 def run_pipeline(skip=None):
-    global PIPELINE_STOP_REQUESTED
-    set_pipeline_stop_requested(False)
+    """Delegate to the canonical orchestrator (checkpoints + YouTube sync)."""
+    from workflows.pipeline.pipeline_runner import run_pipeline as _run
+    return _run(skip=skip)
 
-    def check_stop():
-        if get_pipeline_stop_requested():
-            log("Pipeline stopped by user")
-            set_status("Pipeline Stopped")
-            notify("Pipeline stopped by user.")
-            return True
-        return False
-
-    for d in (MEDIA_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, OUTPUT_DIR):
-        os.makedirs(d, exist_ok=True)
-
-    _refresh_learning_state()
-
-    skip = skip or set()
-
-    if 1 not in skip:
-        phase_download()
-        if check_stop(): return
-
-    video = find_video()
-    if not video:
-        log_error("No video found in media/")
-        return
-    duration = video_info(video)
-    log(f"Target: {os.path.basename(video)} ({duration}s)")
-
-    if 2 not in skip:
-        json_file = phase_transcribe(video)
-        if check_stop(): return
-    else:
-        video_name = os.path.splitext(os.path.basename(video))[0]
-        json_file = os.path.join(TRANSCRIPTS_DIR, f"{video_name}.json")
-        if not os.path.exists(json_file):
-            existing = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.json"))
-            json_file = sorted(existing, key=os.path.getmtime, reverse=True)[0] if existing else None
-
-    if 3 not in skip:
-        phase_context()
-        if check_stop(): return
-    elif 2 in skip and json_file:
-        log("Phase 2 and 3 skipped, extracting context for scripts...")
-        try:
-            import json
-            with open(json_file) as f:
-                data = json.load(f)
-            transcript_text = ""
-            for seg in data.get("segments", []):
-                text = re.sub(r"<[^>]*>", "", seg.get("text", ""))
-                if text.strip():
-                    transcript_text += text + " "
-            if transcript_text:
-                game_title = env("GAME_TITLE", "Unknown Game")
-                extracted = _cs_extract_context_from_transcript(transcript_text[:10000], game_title)
-                if extracted:
-                    ctx = _cs_update_context(extracted, os.path.basename(json_file))
-                    verified = load_verified_context(game_title)
-                    final = merge_context_dicts(verified.get("context", {}) if verified else {}, ctx)
-                    save_verified_context(game_title, final)
-                    compute_and_save_implicit_relationships(game_title, transcript_text)
-                    log(f"Context extracted: {len(final.get('characters', []))} chars, {len(final.get('relationships', []))} rels")
-        except Exception as e:
-            log(f"Warning: Could not extract context: {e}")
-
-    interval = 1800
-    max_shorts = max(1, duration // interval + (1 if duration % interval > interval // 2 else 0))
-    num_shorts = int(env("NUM_SHORTS", "0"))
-    if num_shorts <= 0:
-        num_shorts = max_shorts
-    num_shorts = min(num_shorts, max_shorts)
-
-    selected = []
-    if json_file:
-        selected = _select_best_intervals(json_file, duration, num_shorts)
-        log(f"Selected {len(selected)} intervals from {max_shorts} possible")
-        for s in selected:
-            log(f"  Interval {s['index']+1}: {s['start']//60}-{s['end']//60}min (score: {s['score']:.1f})")
-    else:
-        selected = [{"index": i, "start": i * interval, "end": min((i+1) * interval, duration), "score": 0}
-                    for i in range(num_shorts)]
-
-    log(f"Video: {duration}s = {max_shorts} interval(s), generating {len(selected)} short(s)")
-
-    if 4 not in skip and json_file:
-        phase_scripts(json_file, duration, selected, video=video)
-        if check_stop(): return
-    elif 4 not in skip:
-        log_error("No transcript for script generation")
-
-    if 5 not in skip and json_file:
-        phase_clips(video, json_file, duration, selected, script_id_map=get_script_id_map())
-        if check_stop(): return
-    elif 5 not in skip:
-        log_error("No transcript for clip generation")
-
-    if 6 not in skip:
-        from workflows.pipeline.phase_tts import phase_tts
-        phase_tts(duration, len(selected), video=video)
-        if check_stop(): return
-
-    if 7 not in skip:
-        from workflows.pipeline.phase_assemble import phase_assemble
-        phase_assemble(duration, len(selected), video=video)
-        if check_stop(): return
-
-    log("Pipeline Complete!")
-    set_status("Pipeline Complete")
-
-    sc = count_files(os.path.join(SCRIPTS_DIR, "*.txt"))
-    cc = count_files(os.path.join(SHORTS_DIR, "*.mp4"))
-    tw = count_files(os.path.join(TTS_DIR, "*.wav"))
-    ts = count_files(os.path.join(TTS_DIR, "*.srt"))
-    tc = count_files(os.path.join(TRANSCRIPTS_DIR, "*.json"))
-    ac = count_files(os.path.join(OUTPUT_DIR, "*.mp4"))
-
-    notify(f"""Pipeline Complete!
-
-Video: {os.path.basename(video) if video else "Unknown"}
-Duration: {fmt_dur(duration)}
-
-Created Files:
-Scripts: {sc}
-Clips: {cc}
-TTS WAVs: {tw}
-TTS SRTs: {ts}
-Transcripts: {tc}
-Assembled: {ac}
-
-Total output files: {sc + cc + tw + ts + ac}""")
 
 # ─── Onboard ──────────────────────────────────────────────────────────────────
 def onboard():
@@ -5536,9 +5001,11 @@ def main():
     p_run.add_argument("-index", type=int, help="Playlist index to download (default: 1)")
     p_run.add_argument("-skip-phase-1", action="store_true")
     p_run.add_argument("-skip-phase-2", action="store_true")
+    p_run.add_argument("-skip-phase-3", action="store_true")
     p_run.add_argument("-skip-phase-4", action="store_true")
     p_run.add_argument("-skip-phase-5", action="store_true")
     p_run.add_argument("-skip-phase-6", action="store_true")
+    p_run.add_argument("-skip-phase-7", action="store_true")
     p_run.add_argument("-skip-all", action="store_true")
 
     p_local = sub.add_parser("run_local", help="Run pipeline on local recordings")
@@ -5563,18 +5030,25 @@ def main():
 
         skip = set()
         if args.skip_all:
-            skip = {1,2,3,4,5,6}
+            skip = {1, 2, 3, 4, 5, 6, 7}
         else:
-            if args.skip_phase_1: skip.add(1)
-            if args.skip_phase_2: skip.add(2)
-            if args.skip_phase_4: skip.add(4)
-            if args.skip_phase_5: skip.add(5)
-            if args.skip_phase_6: skip.add(6)
+            if getattr(args, "skip_phase_1", False): skip.add(1)
+            if getattr(args, "skip_phase_2", False): skip.add(2)
+            if getattr(args, "skip_phase_3", False): skip.add(3)
+            if getattr(args, "skip_phase_4", False): skip.add(4)
+            if getattr(args, "skip_phase_5", False): skip.add(5)
+            if getattr(args, "skip_phase_6", False): skip.add(6)
+            if getattr(args, "skip_phase_7", False): skip.add(7)
 
-        playlist_index = None
+        # -phase N,M runs ONLY those phases (skip everything else)
+        if getattr(args, "phase", None):
+            wanted = {int(p) for p in str(args.phase).split(",") if p.strip().isdigit()}
+            wanted = {p for p in wanted if 1 <= p <= 7}
+            if wanted:
+                skip = set(range(1, 8)) - wanted
+
         if args.index:
-            playlist_index = str(args.index)
-            update_env_var("PLAYLIST_INDEX", playlist_index)
+            update_env_var("PLAYLIST_INDEX", str(args.index))
 
         run_pipeline(skip=skip)
 

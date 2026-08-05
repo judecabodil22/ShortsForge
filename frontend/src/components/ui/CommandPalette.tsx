@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, FileText, Network, BarChart3, Database, Settings, FileEdit, Zap, X, Brain } from 'lucide-react'
+import { Search, FileText, Network, BarChart3, Database, Settings, FileEdit, Zap, X, Brain, Castle } from 'lucide-react'
 import clsx from 'clsx'
 
 interface Command {
@@ -26,6 +26,7 @@ export default function CommandPalette() {
     { id: 'learning', label: 'Go to Learning Dashboard', icon: <Brain className="w-4 h-4" />, action: () => navigate('/learning'), category: 'Navigation' },
     { id: 'metrics', label: 'Go to Performance', icon: <BarChart3 className="w-4 h-4" />, action: () => navigate('/metrics'), category: 'Navigation' },
     { id: 'context', label: 'Go to Context', icon: <Database className="w-4 h-4" />, action: () => navigate('/context'), category: 'Navigation' },
+    { id: 'mempalace', label: 'Go to MemPalace', icon: <Castle className="w-4 h-4" />, action: () => navigate('/mempalace'), category: 'Navigation' },
     { id: 'settings', label: 'Go to Settings', icon: <Settings className="w-4 h-4" />, action: () => navigate('/settings'), category: 'Navigation' },
     { id: 'prompts', label: 'Go to Prompts', icon: <FileEdit className="w-4 h-4" />, action: () => navigate('/prompts'), category: 'Navigation' },
   ]

@@ -39,6 +39,7 @@ from workflows.context_manager_v2 import ContextManagerV2, get_context_manager
 from workflows.mempalace_integration import get_full_series_mapping, add_to_franchise
 from workflows.constants import TTS_VOICES
 from workflows.ws_manager import ConnectionManager, manager as ws_manager, pipeline_status, update_pipeline_status, get_pipeline_status
+from backend.routers import create_routers
 
 # ============================================================================
 # SECURITY CONFIGURATION
@@ -175,6 +176,10 @@ def save_pipeline_settings(settings):
 # ============================================================================
 # API ENDPOINTS
 # ============================================================================
+
+# Mount extracted routers (thumbnails, mempalace, publish, review, tiktok auto-import)
+for _router in create_routers(verify_api_key, limiter):
+    app.include_router(_router)
 
 @app.get("/api/health")
 async def health_check():
@@ -317,17 +322,23 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
         pass
     
     # Write pending download URL if provided
+    phase_args = []
+    if phases:
+        phase_str = ",".join(str(int(p)) for p in phases if str(p).isdigit() or isinstance(p, int))
+        if phase_str:
+            phase_args = ["-phase", phase_str]
+
     if video_url:
         with open(PENDING_DOWNLOAD_FILE, "w") as f:
             f.write(video_url.strip())
-        cmd = [sys.executable, "workflows/cogitator.py", "run"]
+        cmd = [sys.executable, "workflows/cogitator.py", "run"] + phase_args
         update_pipeline_status(message="Downloading from URL...")
     elif source == "local":
         cmd = [sys.executable, "workflows/cogitator.py", "run_local", "media"]
         update_pipeline_status(message="Processing local media...")
     else:
-        cmd = [sys.executable, "workflows/cogitator.py", "run"]
-        update_pipeline_status(message="Downloading from YouTube...")
+        cmd = [sys.executable, "workflows/cogitator.py", "run"] + phase_args
+        update_pipeline_status(message="Downloading from YouTube..." if not phase_args else f"Running phases {phase_args[1]}...")
     
     update_pipeline_status(running=True, current_phase="Starting", progress=0, logs=[], error=None)
 
@@ -450,19 +461,23 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
 @app.post("/api/pipeline/run")
 @limiter.limit("5/minute")
 async def run_pipeline(request: Request, _: bool = Depends(verify_api_key)):
-    """Trigger pipeline run - accepts JSON body with optional video_url"""
+    """Trigger pipeline run - accepts JSON body with optional video_url and phases"""
     if get_pipeline_status()["running"]:
         return {"status": "already_running", "message": "Pipeline is already running"}
     
-    body = await request.json()
-    video_url = body.get("video_url", "").strip()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    video_url = (body.get("video_url") or "").strip()
     source = body.get("source", "youtube" if not video_url else "url")
+    phases = body.get("phases")  # e.g. [4] or [3,4]
     
-    thread = threading.Thread(target=run_pipeline_async, args=(source, video_url))
+    thread = threading.Thread(target=run_pipeline_async, args=(source, video_url, phases))
     thread.daemon = True
     thread.start()
     
-    return {"status": "started", "source": source, "video_url": video_url}
+    return {"status": "started", "source": source, "video_url": video_url, "phases": phases}
 
 
 @app.post("/api/pipeline/stop")
@@ -744,20 +759,59 @@ async def get_script(script_id: str, _: bool = Depends(verify_api_key)):
 
 @app.get("/api/scripts/{script_id}/metadata")
 async def get_script_metadata(script_id: str, _: bool = Depends(verify_api_key)):
-    """Get script metadata (description, hashtags, tags)"""
+    """Get script metadata (description, hashtags, tags, review status)"""
     from workflows.performance_database import get_script_by_id
 
     script = get_script_by_id(script_id)
-    if not script:
-        return {"error": "Script not found"}
-
-    return {
-        "title": script.get("title", ""),
-        "description": script.get("description", ""),
-        "hashtags": script.get("hashtags", ""),
-        "tags": script.get("tags", ""),
-        "content_type": script.get("content_type", ""),
+    result = {
+        "title": "",
+        "description": "",
+        "hashtags": "",
+        "tags": "",
+        "content_type": "",
+        "review_status": "pending",
+        "quarantined": False,
     }
+    if script:
+        result.update({
+            "title": script.get("title", ""),
+            "description": script.get("description", ""),
+            "hashtags": script.get("hashtags", ""),
+            "tags": script.get("tags", ""),
+            "content_type": script.get("content_type", ""),
+        })
+
+    # Overlay .meta.json review / quarantine flags when present
+    try:
+        scripts_dir = os.path.join(WORKSPACE, "scripts")
+        meta_candidates = []
+        video = (script or {}).get("video_name") or ""
+        if video:
+            meta_candidates.extend(
+                [os.path.join(scripts_dir, f) for f in os.listdir(scripts_dir)
+                 if f.startswith(video) and f.endswith(".meta.json")]
+            )
+        safe_id = os.path.basename(script_id)
+        meta_candidates.append(os.path.join(scripts_dir, f"{safe_id}.meta.json"))
+        for path in meta_candidates:
+            if os.path.exists(path):
+                with open(path) as f:
+                    meta = json.load(f)
+                for k in ("title", "description", "hashtags", "tags", "review_status",
+                          "quarantined", "skip_tts", "factuality_score"):
+                    if k in meta and meta[k] not in (None, ""):
+                        result[k] = meta[k]
+                if isinstance(meta.get("hashtags"), list):
+                    result["hashtags"] = ",".join(meta["hashtags"])
+                if isinstance(meta.get("tags"), list):
+                    result["tags"] = ",".join(meta["tags"])
+                break
+    except Exception:
+        pass
+
+    if not script and not result.get("title"):
+        return {"error": "Script not found"}
+    return result
 
 
 @app.post("/api/scripts/{script_id}/analyze")
@@ -1641,73 +1695,52 @@ async def cleanup_files(request: Request, _: bool = Depends(verify_api_key)):
                 except OSError: pass
     return {"status": "cleaned"}
 
-class ImportRequest(BaseModel):
-    game: str
-
 @app.post("/api/context/import")
 @limiter.limit("3/minute")
-async def import_context(request: Request, req: ImportRequest, _: bool = Depends(verify_api_key)):
-    """Import context - requires API key"""
-    # Sanitize game name
-    game_title = sanitize_input(req.game, max_length=100)
+async def import_context(request: Request, _: bool = Depends(verify_api_key)):
+    """Import verified context from JSON body (Obsidian markdown import removed)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "JSON body required"}
+    game_title = sanitize_input(str(body.get("game") or body.get("game_title") or ""), max_length=100)
+    if not game_title:
+        return {"error": "game required"}
     game_key = game_title.lower().replace(" ", "_").strip()
-    ctx_dir = os.path.join(WORKSPACE, "Context", game_key)
-    if not os.path.exists(ctx_dir):
-        return {"error": "Game folder not found"}
-        
-    context = {"characters": [], "locations": [], "key_terms": [], "relationships": []}
-    md_files = ["characters.md", "locations.md", "key_terms.md", "relationships.md"]
-    
-    for md_file in md_files:
-        md_path = os.path.join(ctx_dir, md_file)
-        if not os.path.exists(md_path): continue
-        with open(md_path, "r") as f:
-            content = f.read()
-        items = []
-        for line in content.split("\n"):
-            line = line.strip()
-            if line.startswith("|") and "--" not in line and "|" in line[1:]:
-                parts = line.split("|")
-                if len(parts) >= 2:
-                    name = parts[1].strip()
-                    if name and not name.startswith("-") and name != "Name":
-                        name = name.replace("[[", "").replace("]]", "")
-                        if name: items.append(name)
-        
-        key = md_file.replace(".md", "")
-        if key == "characters": context["characters"] = [{"name": i, "status": "imported"} for i in items]
-        elif key == "locations": context["locations"] = [{"name": i, "status": "imported"} for i in items]
-        elif key == "key_terms": context["key_terms"] = [{"term": i} for i in items]
-        elif key == "relationships":
-            for i in items:
-                # Try to parse "From → To (label)" or "From - To" format
-                parts = re.split(r' *[→\-] *', i, maxsplit=1)
-                if len(parts) == 2:
-                    relation_parts = parts[1].rsplit('(', 1)
-                    to_name = relation_parts[0].strip()
-                    rel_label = relation_parts[1].rstrip(')').strip() if len(relation_parts) > 1 else ""
-                    context["relationships"].append({"from": parts[0].strip(), "to": to_name, "relationship": rel_label})
-                else:
-                    context["relationships"].append({"from": i.strip(), "to": "unknown", "relationship": "related"})
-        
-    if context["characters"] or context["locations"]:
-        try:
-            from workflows.context_manager_v2 import save_verified_context
-            save_verified_context(game_key, context)
-            
-            # Update memory
-            cm = get_context_manager()
-            if game_key in cm.contexts:
-                # This ensures the new context items are loaded from file the next time
-                del cm.contexts[game_key]
-                
-            return {"status": "imported", "stats": {k: len(v) for k,v in context.items()}}
-        except Exception as e:
-            return {"error": str(e)}
-    return {"status": "no data"}
+    context = body.get("context") or body
+    payload = {
+        "characters": context.get("characters", []) or [],
+        "locations": context.get("locations", []) or [],
+        "key_terms": context.get("key_terms", []) or [],
+        "relationships": context.get("relationships", []) or [],
+    }
+    # Drop self-referential relationships
+    cleaned_rels = []
+    for rel in payload["relationships"]:
+        if isinstance(rel, dict):
+            a = (rel.get("from") or "").strip().lower()
+            b = (rel.get("to") or "").strip().lower()
+            if a and b and a != b:
+                cleaned_rels.append(rel)
+        elif isinstance(rel, str) and rel.strip():
+            cleaned_rels.append(rel.strip())
+    payload["relationships"] = cleaned_rels
+    if not (payload["characters"] or payload["locations"] or payload["key_terms"]):
+        return {"status": "no data"}
+    try:
+        from workflows.context_manager_v2 import save_verified_context
+        save_verified_context(game_key, payload, merge=True)
+        cm = get_context_manager()
+        if game_key in cm.contexts:
+            del cm.contexts[game_key]
+        return {"status": "imported", "stats": {k: len(v) for k, v in payload.items()}}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 class CreateGameRequest(BaseModel):
     game: str
+
 
 @app.post("/api/context/create_game")
 @limiter.limit("3/minute")
@@ -1779,7 +1812,7 @@ async def merge_context(request: Request, req: MergeContextRequest, _: bool = De
 
 @app.post("/api/context/clear")
 @limiter.limit("2/minute")
-async def clear_context(request: Request, req: ImportRequest, _: bool = Depends(verify_api_key)):
+async def clear_context(request: Request, req: CreateGameRequest, _: bool = Depends(verify_api_key)):
     """Clear context - requires API key"""
     # Sanitize game name
     game_title = sanitize_input(req.game, max_length=100)

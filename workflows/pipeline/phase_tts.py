@@ -231,6 +231,17 @@ def phase_tts(duration, num_hours, video=None):
         wav = os.path.join(c['TTS_DIR'], f"{video_basename}-TTS{padded}.wav")
         srt = os.path.join(c['TTS_DIR'], f"{video_basename}-TTS{padded}.srt")
         script_file = os.path.join(c['SCRIPTS_DIR'], f"{video_basename}-Script{padded}.txt")
+        meta_file = script_file.replace('.txt', '.meta.json')
+        if os.path.exists(meta_file):
+            try:
+                import json as _json
+                with open(meta_file) as _mf:
+                    _meta = _json.load(_mf)
+                if _meta.get('skip_tts') or _meta.get('quarantined'):
+                    c['log'](f"   Skipping TTS {i}: script quarantined / skip_tts")
+                    continue
+            except Exception:
+                pass
 
         if os.path.exists(wav) and os.path.getsize(wav) > 0:
             c['log'](f"   TTS {i} WAV exists, skipping")

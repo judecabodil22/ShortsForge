@@ -512,7 +512,7 @@ def _get_graph_cache_key() -> str:
     mtimes = []
     for root, dirs, files in os.walk(context_dir):
         for f in files:
-            if f.endswith(('.json', '.md')):
+            if f.endswith('.json'):
                 mtimes.append(str(os.path.getmtime(os.path.join(root, f))))
     return "|".join(sorted(mtimes))
 

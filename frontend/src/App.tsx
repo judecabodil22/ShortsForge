@@ -14,6 +14,7 @@ import Context from '@/pages/Context'
 import Settings from '@/pages/Settings'
 import PromptEditor from '@/pages/PromptEditor'
 import LearningDashboard from '@/pages/LearningDashboard'
+import MemPalacePage from '@/pages/MemPalace'
 import { pageVariants, pageTransition } from '@/lib/animations'
 
 const queryClient = new QueryClient({
@@ -69,6 +70,7 @@ function AppRoutes() {
         <Route path="/settings" element={<AnimatedPage><Settings /></AnimatedPage>} />
         <Route path="/prompts" element={<AnimatedPage><PromptEditor /></AnimatedPage>} />
         <Route path="/learning" element={<AnimatedPage><LearningDashboard /></AnimatedPage>} />
+        <Route path="/mempalace" element={<AnimatedPage><MemPalacePage /></AnimatedPage>} />
         <Route path="*" element={<AnimatedPage><NotFound /></AnimatedPage>} />
       </Routes>
     </AnimatePresence>

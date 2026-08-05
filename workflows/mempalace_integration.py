@@ -676,7 +676,28 @@ def get_all_mempalace_context(game_title: str, transcript_segment: str = "") -> 
         memory_context = get_context_aware_memory(game_title, transcript_segment)
         if memory_context:
             parts.append(memory_context)
-    
+
+    # Closed-loop quality: inject best-performing prompt patterns
+    try:
+        from game_data.mempalace import get_mempalace_manager
+
+        mgr = get_mempalace_manager()
+        if mgr and hasattr(mgr, "get_best_prompts"):
+            best = mgr.get_best_prompts(game_title) or []
+            if best:
+                lines = ["[TOP QUALITY PATTERNS FROM PAST SCRIPTS]"]
+                for item in best[:5]:
+                    if isinstance(item, dict):
+                        variant = item.get("variant") or item.get("source") or "unknown"
+                        fact = item.get("factuality", item.get("score", ""))
+                        eng = item.get("engagement", "")
+                        lines.append(f"- variant={variant} factuality={fact} engagement={eng}")
+                    else:
+                        lines.append(f"- {item}")
+                parts.append("\n".join(lines))
+    except Exception:
+        pass
+
     if not parts:
         return ""
     

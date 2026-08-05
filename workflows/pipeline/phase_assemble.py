@@ -377,6 +377,17 @@ def phase_assemble(duration, num_hours, video=None):
         tts_srt = os.path.join(c['TTS_DIR'], f"{video_basename}-TTS{padded}.srt")
 
         script_path = os.path.join(c['SCRIPTS_DIR'], f"{video_basename}-Script{padded}.txt")
+        _meta_p = script_path.replace('.txt', '.meta.json')
+        if os.path.exists(_meta_p):
+            try:
+                import json as _json
+                with open(_meta_p) as _mf:
+                    _md = _json.load(_mf)
+                if _md.get('quarantined') or _md.get('skip_tts'):
+                    c['log'](f'   Skipping assemble {i}: quarantined script')
+                    continue
+            except Exception:
+                pass
 
         title = _extract_title(script_path)
         out_name = _sanitize_filename(title) if title else None

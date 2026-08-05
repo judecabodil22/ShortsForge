@@ -1,5 +1,7 @@
 import os
 import re
+from typing import Any, Dict, List
+
 from workflows.constants import WORKSPACE, CONTEXT_DIR
 
 try:
@@ -7,172 +9,127 @@ try:
 except ImportError:
     _fuzz = None
 
+
+def _game_title_from_env() -> str:
+    game_title = "default"
+    env_path = os.path.join(WORKSPACE, ".env")
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            for line in f:
+                if line.strip().startswith("GAME_TITLE="):
+                    game_title = line.strip().split("=", 1)[1].strip().strip('"')
+                    break
+    return game_title or "default"
+
+
+def _item_name(item: Any) -> str:
+    if isinstance(item, dict):
+        return (
+            item.get("name")
+            or item.get("term")
+            or item.get("from")
+            or str(item.get("id", ""))
+        ).strip()
+    return str(item).strip()
+
+
+def _relationship_text(rel: Any) -> Any:
+    if isinstance(rel, dict):
+        # Prefer structured form for downstream consumers
+        if rel.get("from") and rel.get("to"):
+            return {
+                "from": rel.get("from"),
+                "to": rel.get("to"),
+                "relationship": rel.get("relationship")
+                or rel.get("category")
+                or "related",
+            }
+        name = rel.get("name") or ""
+        if name:
+            return name
+    return rel
+
+
 def _cs_load_context():
-    """Load context from centralized Context directory (handles both list and table format)."""
+    """Load context from verified_context.json only (no Obsidian markdown)."""
     ctx = {
         "characters": [],
         "locations": [],
         "key_terms": [],
         "relationships": [],
         "processed_transcripts": [],
-        "previous_scripts": []
+        "previous_scripts": [],
+        "character_aliases": {},
+        "location_aliases": {},
+        "lore": {},
+        "title": "",
     }
-    
-    # Read GAME_TITLE from .env
-    game_title = "default"
-    env_path = os.path.join(WORKSPACE, ".env")
-    if os.path.exists(env_path):
-        with open(env_path, 'r') as f:
-            for line in f:
-                if line.strip().startswith("GAME_TITLE="):
-                    game_title = line.strip().split("=", 1)[1].strip().strip('"')
-                    break
 
-    game = game_title.lower().replace(" ", "_")
-    ctx_dir = os.path.join(CONTEXT_DIR, game)
-    os.makedirs(ctx_dir, exist_ok=True)
-    
-    def extract_from_list(line):
-        """Extract name from list item or table cell."""
-        name = line.strip()
-        if name.startswith('[[') and name.endswith(']]'):
-            name = name[2:-2]
-        return name
-    
-    # Helper to extract items from table
-    def extract_items_from_table(content, category):
-        items = []
-        for line in content.split('\n'):
-            line = line.strip()
-            if line.startswith('|') and '---' not in line:
-                parts = [p.strip() for p in line.split('|')[1:-1]]
-                if parts and parts[0]:
-                    item = extract_from_table_cell(parts[0])
-                    # Skip header rows
-                    if item and item.lower() not in ['name', 'character', 'location', 'term', 'character a'] and item not in items:
-                        items.append(item)
-        return items
-    
-    # Load alias maps from verified_context.json for cross-run persistence
+    game_title = _game_title_from_env()
     try:
-        if game_title:
-            from workflows.context_manager_v2 import load_verified_context
-            verified = load_verified_context(game_title)
-            if isinstance(verified, dict):
-                if verified.get("character_aliases"):
-                    ctx["character_aliases"] = verified["character_aliases"]
-                if verified.get("location_aliases"):
-                    ctx["location_aliases"] = verified["location_aliases"]
+        from workflows.context_manager_v2 import load_verified_context
+
+        verified = load_verified_context(game_title)
+        if not isinstance(verified, dict):
+            return ctx
+
+        # load_verified_context returns item dicts; also accept nested "context"
+        source = verified.get("context") if isinstance(verified.get("context"), dict) else verified
+
+        for key in ("characters", "locations", "key_terms"):
+            names = []
+            for item in source.get(key, []) or []:
+                name = _item_name(item)
+                if name and name not in names:
+                    names.append(name)
+            ctx[key] = names
+
+        rels = []
+        for rel in source.get("relationships", []) or []:
+            parsed = _relationship_text(rel)
+            if parsed and parsed not in rels:
+                # Skip self-referential relationships
+                if isinstance(parsed, dict):
+                    a = (parsed.get("from") or "").strip().lower()
+                    b = (parsed.get("to") or "").strip().lower()
+                    if a and b and a == b:
+                        continue
+                rels.append(parsed)
+        ctx["relationships"] = rels
+
+        # Aliases / lore may live on the raw verified file
+        try:
+            import json
+
+            path = os.path.join(CONTEXT_DIR, "verified_context.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    raw = json.load(f)
+                game_key = game_title.lower().replace(" ", "_").strip()
+                entry = raw.get(game_key, {}) if isinstance(raw, dict) else {}
+                if isinstance(entry, dict):
+                    ctx["character_aliases"] = entry.get("character_aliases", {}) or {}
+                    ctx["location_aliases"] = entry.get("location_aliases", {}) or {}
+                    ctx["lore"] = entry.get("lore", {}) or {}
+                    ctx["title"] = entry.get("title", "") or ""
+                    ctx["processed_transcripts"] = entry.get("processed_transcripts", []) or []
+                    ctx["previous_scripts"] = entry.get("previous_scripts", []) or []
+        except Exception:
+            pass
+
+        if verified.get("character_aliases"):
+            ctx["character_aliases"] = verified["character_aliases"]
+        if verified.get("location_aliases"):
+            ctx["location_aliases"] = verified["location_aliases"]
+        if verified.get("lore"):
+            ctx["lore"] = verified["lore"]
+
     except Exception:
         pass
 
-    def extract_from_table_cell(cell):
-        """Extract name from table cell."""
-        cell = cell.strip()
-        if cell.startswith('[[') and cell.endswith(']]'):
-            return cell[2:-2]
-        return cell
-    
-    def extract_from_table(line):
-        """Extract items from table row."""
-        if not line.startswith('|') or '---' in line:
-            return []
-        parts = [p.strip() for p in line.split('|')[1:-1]]
-        if not parts or not parts[0]:
-            return []
-        # First column contains the name (may have wiki-links)
-        name = parts[0].strip()
-        if name.startswith('[[') and name.endswith(']]'):
-            name = name[2:-2]
-        # Skip header rows
-        if name.lower() in ['name', 'character', 'location', 'term', 'character a']:
-            return []
-        return [name] if name else []
-    
-    # Load characters from markdown (table format)
-    chars_file = os.path.join(ctx_dir, "characters.md")
-    if os.path.exists(chars_file):
-        with open(chars_file, 'r') as f:
-            content = f.read()
-        for line in content.split('\n'):
-            items = extract_from_table(line)
-            for item in items:
-                if item and item not in ctx["characters"]:
-                    ctx["characters"].append(item)
-    
-    # Load locations from markdown (table format)
-    locs_file = os.path.join(ctx_dir, "locations.md")
-    if os.path.exists(locs_file):
-        with open(locs_file, 'r') as f:
-            content = f.read()
-        for line in content.split('\n'):
-            items = extract_from_table(line)
-            for item in items:
-                if item and item not in ctx["locations"]:
-                    ctx["locations"].append(item)
-    
-    # Load key_terms from markdown (table format)
-    terms_file = os.path.join(ctx_dir, "key_terms.md")
-    if os.path.exists(terms_file):
-        with open(terms_file, 'r') as f:
-            content = f.read()
-        for line in content.split('\n'):
-            items = extract_from_table(line)
-            for item in items:
-                if item and item not in ctx["key_terms"]:
-                    ctx["key_terms"].append(item)
-    
-    # Load relationships from markdown
-    rels_file = os.path.join(ctx_dir, "relationships.md")
-    if os.path.exists(rels_file):
-        with open(rels_file, 'r') as f:
-            content = f.read()
-        
-        # For relationships, handle table format: Character A | Connection | Character B
-        if '|' in content and '---' in content:
-            for line in content.split('\n'):
-                line = line.strip()
-                if line.startswith('|') and '---' not in line:
-                    # Skip header
-                    if 'Character A' in line or 'Character' in line:
-                        continue
-                    
-                    parts = [p.strip() for p in line.split('|')[1:-1]]
-                    if len(parts) >= 3:
-                        # Parse: Character A | Connection | Character B
-                        char_a = extract_from_table_cell(parts[0])
-                        connection = parts[1]
-                        char_b = extract_from_table_cell(parts[2])
-                        
-                        # Skip if Character A is empty or just "-"
-                        if not char_a or char_a == '-':
-                            continue
-                        
-                        # Build relationship string
-                        if char_b and char_b != '-':
-                            rel = f"{char_a} and {char_b} are {connection}"
-                        else:
-                            # Single character relationship
-                            rel = f"{char_a} is {connection}"
-                        
-                        if rel and rel not in ctx["relationships"]:
-                            ctx["relationships"].append(rel)
-        else:
-            # Fall back to list format
-            for line in content.split('\n'):
-                line = line.strip()
-                if not line or line.startswith('#') or not line.startswith('- '):
-                    continue
-                rel_line = line.lstrip('- ').strip()
-                rel = rel_line
-                rel = re.sub(r'\[\[([^\]]+)\]\]', r'\1', rel)
-                if rel and rel not in ctx["relationships"]:
-                    ctx["relationships"].append(rel)
-    
     return ctx
 
 
-from typing import Dict, Any, List
 def _relationship_key(rel: Any) -> tuple:
     if isinstance(rel, dict):
         return (rel.get("from", "").strip().lower(), rel.get("to", "").strip().lower())
@@ -206,7 +163,8 @@ def merge_context_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[s
         for item in list(base.get(key, []) or []) + list(overlay.get(key, []) or []):
             if not item:
                 continue
-            is_dup, _ = _fuzzy_in(str(item), merged)
+            name = _item_name(item) if not isinstance(item, str) else item
+            is_dup, _ = _fuzzy_in(str(name), [str(x) if isinstance(x, str) else _item_name(x) for x in merged])
             if not is_dup:
                 merged.append(item)
         out[key] = merged
@@ -214,11 +172,11 @@ def merge_context_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[s
     rel_map: Dict[tuple, Any] = {}
     for rel in list(base.get("relationships", []) or []):
         key = _relationship_key(rel)
-        if key[0] and key[1]:
+        if key[0] and key[1] and key[0] != key[1]:
             rel_map[key] = rel
     for rel in list(overlay.get("relationships", []) or []):
         key = _relationship_key(rel)
-        if key[0] and key[1]:
+        if key[0] and key[1] and key[0] != key[1]:
             rel_map[key] = rel
     out["relationships"] = list(rel_map.values())
 
@@ -227,5 +185,16 @@ def merge_context_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[s
         out["title"] = overlay_title
     elif base.get("title"):
         out["title"] = base.get("title")
-    return out
 
+    for alias_key in ("character_aliases", "location_aliases"):
+        merged_aliases = dict(base.get(alias_key) or {})
+        merged_aliases.update(overlay.get(alias_key) or {})
+        if merged_aliases:
+            out[alias_key] = merged_aliases
+
+    if overlay.get("lore"):
+        out["lore"] = overlay["lore"]
+    elif base.get("lore"):
+        out["lore"] = base["lore"]
+
+    return out

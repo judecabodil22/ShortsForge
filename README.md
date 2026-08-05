@@ -76,14 +76,17 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 
 | Phase | Name | Description | Output |
 |-------|------|-------------|--------|
-| **1** | Download | Downloads videos from YouTube playlist | `streams/` |
+| **1** | Download | Downloads videos from YouTube playlist / URL | `media/` |
 | **2** | Transcribe | Faster-Whisper word-level transcription with timestamps | `transcripts/` |
-| **3a** | Lore | Fetches game lore (plot, characters, factions, events) via parallel LLM | `Context/` |
-| **3b** | Context | Extracts characters, locations, relationships from transcript | `Context/` |
-| **4** | Scripts | Generates AI-powered narration scripts (includes `[GAME LORE]` block) | `scripts/` |
-| **5** | Clip | PySceneDetect scene detection, portrait 9:16 crop, caption burn-in, highlight ranking | `shorts/` |
+| **3** | Context | Extracts characters, locations, relationships from transcript via LLM → `verified_context.json` + MemPalace | `Context/` |
+| **4** | Scripts | Generates AI narration scripts (Groq primary / Gemini fallback) with title variety | `scripts/` |
+| **5** | Clip | Scene detection, portrait 9:16 crop, highlight ranking | `shorts/` |
 | **6** | TTS | Config-driven voice narration (Kokoro/Edge/Gemini) with subtitles + word-level timing | `tts/` |
-| **7** | Assemble | Hardware-accelerated video assembly with subtitle overlay, BGM ducking, smooth audio transitions | `assembly/` |
+| **7** | Assemble | Hardware-accelerated video assembly with subtitle overlay, BGM ducking | `assembly/` |
+
+Orchestration is centralized in `workflows/pipeline/pipeline_runner.py` (checkpoints, resume, post-run YouTube sync + TikTok auto-import). The CLI (`workflows/cogitator.py`) delegates to it. Use `-phase 3,4` to run selected phases only.
+
+Context is **JSON + MemPalace only** — the Obsidian markdown vault has been removed.
 
 ### Web Interface
 
@@ -123,11 +126,9 @@ Cogitator takes a YouTube playlist of game streams and automatically produces:
 - **Motion Scoring**: FFmpeg-derived action scores for ranking scenes
 - **Uniform Fallback**: Even segment distribution when detection fails
 
-### Game Lore Fetch
+### Game Lore
 
-- **Phase 3a — Lore Extraction**: Parallel dispatch to Gemini + Groq fetches plot summary, characters, factions, key events, lore terms
-- **`[GAME LORE]` Prompt Block**: Lore added to script generation prompts as PLOT SUMMARY, FACTIONS, KEY EVENTS, LORE TERMS
-- **Never Contradicts Transcript**: Lore enriches context but transcript takes precedence
+Optional lore may exist inside `verified_context.json` and is injected into script prompts when present. There is no separate live “Phase 3a lore fetch” — transcript extraction is the source of truth for Phase 3.
 
 ### Metrics System
 

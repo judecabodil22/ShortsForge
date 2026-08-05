@@ -68,10 +68,23 @@ export default function Dashboard() {
   })
 
   const runMutation = useMutation({
-    mutationFn: () => runPipeline(videoSource),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['status'] }),
-    onError: (error: Error) => toast('error', `Failed to run pipeline: ${error.message}`),
+    mutationFn: (phases?: number[]) => runPipeline(videoSource, '', phases),
+    onSuccess: () => {
+      toast('success', 'Pipeline started')
+      queryClient.invalidateQueries({ queryKey: ['status'] })
+    },
+    onError: (error: Error) => toast('error', `Failed to start: ${error.message}`),
   })
+
+  const PHASES = [
+    { n: 1, label: 'Download' },
+    { n: 2, label: 'Transcribe' },
+    { n: 3, label: 'Context' },
+    { n: 4, label: 'Scripts' },
+    { n: 5, label: 'Clips' },
+    { n: 6, label: 'TTS' },
+    { n: 7, label: 'Assemble' },
+  ] as const
 
   const stopMutation = useMutation({
     mutationFn: stopPipeline,
@@ -314,7 +327,7 @@ export default function Dashboard() {
                   whileHover={{ scale: 1.03, boxShadow: '0 0 20px rgb(var(--40k-gold-rgb) / 0.35)' }}
                   whileTap={{ scale: 0.97 }}
                   className="cyber-button-primary flex-1 flex items-center justify-center gap-2"
-                  onClick={() => runMutation.mutate()}
+                  onClick={() => runMutation.mutate(undefined)}
                   disabled={runMutation.isPending || status?.pipeline?.running}
                 >
                   <Play className="w-4 h-4" />
@@ -330,6 +343,24 @@ export default function Dashboard() {
                   <Square className="w-4 h-4" />
                   {stopMutation.isPending ? 'Stopping...' : 'Stop'}
                 </motion.button>
+              </div>
+
+              <div className="mt-3 p-3 bg-40k-dark rounded-lg">
+                <p className="text-xs text-gray-400 mb-2">Run single phase</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {PHASES.map((p) => (
+                    <button
+                      key={p.n}
+                      type="button"
+                      disabled={runMutation.isPending || status?.pipeline?.running}
+                      onClick={() => runMutation.mutate([p.n])}
+                      className="px-2 py-1 text-[10px] rounded border border-40k-border text-gray-300 hover:border-40k-gold/50 hover:text-40k-gold disabled:opacity-40"
+                      title={`Run phase ${p.n}`}
+                    >
+                      {p.n}. {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </Card>

@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Search, FileText, BarChart2, Sparkles, Tag, Hash, Copy, Check, ImageOff } from 'lucide-react'
+import { Search, FileText, BarChart2, Sparkles, Tag, Hash, Copy, Check, ImageOff, CheckCircle, Ban } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
-import { getScripts, getScriptMetadata, analyzeScript, API_BASE } from '@/lib/api'
+import { getScripts, getScriptMetadata, analyzeScript, reviewScript, API_BASE } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useToast } from '@/contexts/ToastContext'
 
 export default function Scripts() {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [selectedScript, setSelectedScript] = useState<string | null>(null)
   const [analyzedScript, setAnalyzedScript] = useState<any>(null)
@@ -16,6 +19,17 @@ export default function Scripts() {
   const { data, isLoading } = useQuery({
     queryKey: ['scripts'],
     queryFn: getScripts,
+  })
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: 'approved' | 'quarantined' | 'pending' }) =>
+      reviewScript(id, status),
+    onSuccess: () => {
+      toast('success', 'Review updated')
+      queryClient.invalidateQueries({ queryKey: ['script-metadata'] })
+      queryClient.invalidateQueries({ queryKey: ['scripts'] })
+    },
+    onError: (e: Error) => toast('error', e.message),
   })
 
   const { data: metadata } = useQuery({
@@ -170,15 +184,43 @@ export default function Scripts() {
                   <FileText className="w-5 h-5 text-40k-gold" />
                   {metadata.title || 'Script Details'}
                 </h3>
-                <button
-                  onClick={() => {
-                    const script = scripts.find((s: any) => s.id === selectedScript)
-                    if (script) handleAnalyze(script.id)
-                  }}
-                  className="px-3 py-1 text-xs bg-40k-crimson-bright/20 text-40k-crimson-bright rounded hover:bg-40k-crimson-bright/30 transition-colors"
-                >
-                  Analyze
-                </button>
+                <div className="flex items-center gap-2">
+                  {(metadata.review_status || metadata.quarantined) && (
+                    <span className={cn(
+                      'px-2 py-0.5 text-[10px] rounded uppercase',
+                      metadata.quarantined || metadata.review_status === 'quarantined'
+                        ? 'bg-red-500/20 text-red-300'
+                        : metadata.review_status === 'approved'
+                          ? 'bg-green-500/20 text-green-300'
+                          : 'bg-gray-500/20 text-gray-300'
+                    )}>
+                      {metadata.quarantined ? 'quarantined' : metadata.review_status}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => selectedScript && reviewMutation.mutate({ id: selectedScript, status: 'approved' })}
+                    className="px-2 py-1 text-xs bg-green-500/20 text-green-300 rounded flex items-center gap-1"
+                    title="Approve for TTS"
+                  >
+                    <CheckCircle className="w-3 h-3" /> Approve
+                  </button>
+                  <button
+                    onClick={() => selectedScript && reviewMutation.mutate({ id: selectedScript, status: 'quarantined' })}
+                    className="px-2 py-1 text-xs bg-red-500/20 text-red-300 rounded flex items-center gap-1"
+                    title="Quarantine (skip TTS)"
+                  >
+                    <Ban className="w-3 h-3" /> Quarantine
+                  </button>
+                  <button
+                    onClick={() => {
+                      const script = scripts.find((s: any) => s.id === selectedScript)
+                      if (script) handleAnalyze(script.id)
+                    }}
+                    className="px-3 py-1 text-xs bg-40k-crimson-bright/20 text-40k-crimson-bright rounded hover:bg-40k-crimson-bright/30 transition-colors"
+                  >
+                    Analyze
+                  </button>
+                </div>
               </div>
 
               {/* Description */}

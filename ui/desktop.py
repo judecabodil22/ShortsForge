@@ -110,13 +110,13 @@ class CogitatorDesktop(QMainWindow):
         phases_layout.setSpacing(5)
         
         for label, phase in [
-            ("Phase 1 (YT-DLP)", "1"), 
-            ("Phase 1 (Local)", "1"), 
-            ("Phase 2 (Transcribe)", "2"), 
-            ("Phase 2.5 (Context)", "2.5"), 
-            ("Phase 3 (Scripts)", "3"), 
-            ("Phase 4 (Clips)", "4"), 
-            ("Phase 5 (TTS)", "5")
+            ("Phase 1 Download", "1"),
+            ("Phase 2 Transcribe", "2"),
+            ("Phase 3 Context", "3"),
+            ("Phase 4 Scripts", "4"),
+            ("Phase 5 Clips", "5"),
+            ("Phase 6 TTS", "6"),
+            ("Phase 7 Assemble", "7"),
         ]:
             btn = QPushButton(label)
             btn.clicked.connect(lambda _, p=phase: self.run_phase(p))

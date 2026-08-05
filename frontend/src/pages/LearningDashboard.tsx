@@ -1,11 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Brain, TrendingUp, BarChart3, TestTube, CheckCircle, Clock, PieChart as PieChartIcon, Video } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
 import { SectionHeader } from '@/components/ui/SectionHeader'
-import { getLearningDashboard, getActiveABTests, getTikTokLearningSignals, getCurrentABTest } from '@/lib/api'
+import { getLearningDashboard, getActiveABTests, getTikTokLearningSignals, getCurrentABTest, createABTest } from '@/lib/api'
 import { stagger, slideLeft } from '@/lib/animations'
 import { formatNumber } from '@/lib/utils'
+import { useToast } from '@/contexts/ToastContext'
 import {
   ResponsiveContainer,
   PieChart,
@@ -22,9 +24,29 @@ function formatContentType(name: string): string {
 }
 
 export default function LearningDashboard() {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const [abName, setAbName] = useState('Hook Style Test')
+  const [abType, setAbType] = useState('hook')
+
   const { data: dashboard } = useQuery({
     queryKey: ['learning-dashboard'],
     queryFn: getLearningDashboard,
+  })
+
+  const createAbMutation = useMutation({
+    mutationFn: () => createABTest({
+      test_name: abName,
+      test_type: abType,
+      variant_a: { label: 'Control' },
+      variant_b: { label: 'Challenger' },
+    }),
+    onSuccess: () => {
+      toast('success', 'A/B test created')
+      queryClient.invalidateQueries({ queryKey: ['ab-tests'] })
+      queryClient.invalidateQueries({ queryKey: ['current-ab-test'] })
+    },
+    onError: (e: Error) => toast('error', e.message),
   })
 
   const { data: abTests } = useQuery({
@@ -113,6 +135,37 @@ export default function LearningDashboard() {
       </motion.div>
 
       {/* Current A/B Test */}
+      <motion.div variants={{ ...slideLeft, show: { opacity: 1 } }} className="mb-6">
+        <Card>
+          <SectionHeader title="Create A/B Test" icon={<TestTube className="w-4 h-4" />} terminal />
+          <div className="mt-3 flex flex-wrap gap-2 items-end">
+            <div>
+              <label className="text-xs text-gray-400">Name</label>
+              <input
+                value={abName}
+                onChange={(e) => setAbName(e.target.value)}
+                className="block mt-1 bg-40k-dark border border-40k-border rounded px-2 py-1 text-sm text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400">Type</label>
+              <input
+                value={abType}
+                onChange={(e) => setAbType(e.target.value)}
+                className="block mt-1 bg-40k-dark border border-40k-border rounded px-2 py-1 text-sm text-white"
+              />
+            </div>
+            <button
+              className="cyber-button px-3 py-1.5 text-xs"
+              disabled={createAbMutation.isPending || !abName.trim()}
+              onClick={() => createAbMutation.mutate()}
+            >
+              Create
+            </button>
+          </div>
+        </Card>
+      </motion.div>
+
       {currentTest && currentTest.id && (
         <motion.div
           variants={{ ...slideLeft, show: { opacity: 1 } }}

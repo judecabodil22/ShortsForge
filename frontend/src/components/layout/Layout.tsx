@@ -12,6 +12,7 @@ import {
   Wrench,
   FileEdit,
   Brain,
+  Castle,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useTheme } from '@/contexts/ThemeContext'
@@ -26,6 +27,7 @@ const navItems = [
   { path: '/learning', label: 'Learning', icon: Brain },
   { path: '/metrics', label: 'Performance', icon: BarChart3 },
   { path: '/context', label: 'Context', icon: Database },
+  { path: '/mempalace', label: 'MemPalace', icon: Castle },
   { path: '/settings', label: 'Settings', icon: Wrench },
   { path: '/prompts', label: 'Prompts', icon: FileEdit },
 ]
