@@ -5040,10 +5040,13 @@ def run_local_recordings(recording_path):
                 json_file = None
 
             if json_file:
-                phase_scripts(json_file, duration, num_hours, video=video_file)
+                interval = 1800
+                selected = [{"index": i, "start": i * interval, "end": min((i+1) * interval, duration), "score": 0}
+                            for i in range(num_hours)]
+                phase_scripts(json_file, duration, selected, video=video_file)
                 if check_stop(): return
 
-                phase_clips(video_file, json_file, duration, num_hours, script_id_map=get_script_id_map())
+                phase_clips(video_file, json_file, duration, selected, script_id_map=get_script_id_map())
                 if check_stop(): return
 
                 from workflows.pipeline.phase_tts import phase_tts
