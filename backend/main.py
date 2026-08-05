@@ -10,14 +10,15 @@ import time
 import secrets
 import re
 import asyncio
+import tempfile
 from datetime import datetime
-from typing import Optional, Any, Tuple
+from typing import Optional, Any, Tuple, List
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from workflows.constants import WORKSPACE
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Body, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -650,17 +651,48 @@ async def get_cross_platform_stats(_: bool = Depends(verify_api_key)):
         return {"error": str(e), "youtube": {}, "tiktok": {}, "tiktok_games": []}
 
 
+EXPECTED_TIKTOK_FILES = {'Content.csv', 'Overview.csv', 'Viewers.csv', 'FollowerHistory.csv'}
+
+
 @app.post("/api/metrics/tiktok/import")
-@limiter.limit("1/minute")
-async def import_tiktok_data(request: Request, _: bool = Depends(verify_api_key)):
-    """Import TikTok CSV files from Tiktok Analytics/ folder"""
+async def import_tiktok_data(
+    request: Request,
+    _: bool = Depends(verify_api_key),
+    files: List[UploadFile] = File(...),
+):
+    """Import TikTok CSV files uploaded by the user."""
     from workflows.tiktok_analytics import import_tiktok_data as _import
+
+    if not files:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "No files uploaded"})
+
+    seen = set()
+    for f in files:
+        if not f.filename or not f.filename.endswith('.csv'):
+            return JSONResponse(status_code=400, content={"status": "error", "message": f"Invalid file: {f.filename} — must be .csv"})
+        if f.filename not in EXPECTED_TIKTOK_FILES:
+            return JSONResponse(status_code=400, content={"status": "error", "message": f"Unexpected file: {f.filename} — expected one of: {', '.join(sorted(EXPECTED_TIKTOK_FILES))}"})
+        if f.filename in seen:
+            return JSONResponse(status_code=400, content={"status": "error", "message": f"Duplicate file: {f.filename}"})
+        seen.add(f.filename)
+
+    temp_dir = tempfile.mkdtemp()
     try:
-        result = _import()
+        for f in files:
+            content = await f.read()
+            if len(content) > 10 * 1024 * 1024:
+                return JSONResponse(status_code=400, content={"status": "error", "message": f"File too large: {f.filename} — max 10MB"})
+            with open(os.path.join(temp_dir, f.filename), 'wb') as out:
+                out.write(content)
+
+        result = _import(csv_dir=temp_dir)
         await ws_manager.broadcast({"type": "tiktok:updated", "data": result})
         return {"status": "imported", "result": result}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+    finally:
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @app.post("/api/metrics/tiktok/match")

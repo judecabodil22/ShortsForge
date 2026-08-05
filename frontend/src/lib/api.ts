@@ -129,7 +129,34 @@ export const getTikTokVideos = () => fetchAPI<any>('/api/metrics/tiktok/videos')
 export const getTikTokDaily = (days: number = 30) => fetchAPI<any>(`/api/metrics/tiktok/daily?days=${days}`)
 export const getTikTokGames = () => fetchAPI<any>('/api/metrics/tiktok/games')
 export const getCrossPlatformStats = () => fetchAPI<any>('/api/metrics/cross-platform')
-export const importTikTokData = () => fetchAPI<any>('/api/metrics/tiktok/import', { method: 'POST' })
+export const importTikTokCSV = async (files: File[]): Promise<any> => {
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append('files', file)
+  }
+
+  const headers: Record<string, string> = {}
+  let apiKey = getStoredApiKey()
+  if (!apiKey) {
+    apiKey = await fetchApiKey()
+  }
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey
+  }
+
+  const response = await fetch(`${API_BASE}/api/metrics/tiktok/import`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`API Error: ${response.status} - ${errorText}`)
+  }
+
+  return response.json()
+}
 export const matchTikTokToLocal = () => fetchAPI<any>('/api/metrics/tiktok/match', { method: 'POST' })
 
 // ─── TTS ─────────────────────────────────────────────────────────────────────

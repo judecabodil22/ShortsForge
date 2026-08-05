@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
@@ -10,7 +10,7 @@ import { SectionHeader } from '@/components/ui/SectionHeader'
 import {
   getMetricsSummary, getVideoMetrics, getContentPerformance,
   getTikTokSummary, getTikTokVideos, getTikTokDaily, getTikTokGames,
-  getCrossPlatformStats, importTikTokData, matchTikTokToLocal,
+  getCrossPlatformStats, importTikTokCSV, matchTikTokToLocal,
 } from '@/lib/api'
 import { formatNumber } from '@/lib/utils'
 import { AnimatedCounter } from '@/components/ui/AnimatedCounter'
@@ -27,6 +27,8 @@ const GAME_COLORS: Record<string, string> = {
   unknown: '#8884d8',
 }
 
+const VALID_TIKTOK_FILES = new Set(['Content.csv', 'Overview.csv', 'Viewers.csv', 'FollowerHistory.csv'])
+
 function formatGameName(game: string): string {
   return game.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
@@ -36,6 +38,7 @@ type Tab = 'youtube' | 'tiktok' | 'comparison'
 export default function Performance() {
   const [activeTab, setActiveTab] = useState<Tab>('youtube')
   const [dailyDays, setDailyDays] = useState(30)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
@@ -79,7 +82,7 @@ export default function Performance() {
 
   // Mutations
   const importMutation = useMutation({
-    mutationFn: importTikTokData,
+    mutationFn: (files: File[]) => importTikTokCSV(files),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tiktok-summary'] })
       queryClient.invalidateQueries({ queryKey: ['tiktok-videos'] })
@@ -187,12 +190,36 @@ export default function Performance() {
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 className="cyber-button flex items-center gap-2"
-                onClick={() => importMutation.mutate()}
+                onClick={() => fileInputRef.current?.click()}
                 disabled={importMutation.isPending}
               >
                 <Download className="w-4 h-4" />
                 {importMutation.isPending ? 'Importing...' : 'Import CSV'}
               </motion.button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".csv"
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || [])
+                  if (!files.length) return
+
+                  for (const file of files) {
+                    if (!VALID_TIKTOK_FILES.has(file.name)) {
+                      toast('error', `Invalid file: ${file.name} — expected Content.csv, Overview.csv, Viewers.csv, or FollowerHistory.csv`)
+                      return
+                    }
+                  }
+                  if (files.length !== new Set(files.map(f => f.name)).size) {
+                    toast('error', 'Duplicate files selected')
+                    return
+                  }
+                  importMutation.mutate(files)
+                  e.target.value = ''
+                }}
+              />
             </>
           )}
           <motion.button
