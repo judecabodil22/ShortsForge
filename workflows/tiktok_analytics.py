@@ -17,7 +17,8 @@ DB_PATH = os.path.join(DB_DIR, "performance.db")
 TIKTOK_CSV_DIR = os.path.join(WORKSPACE, "Tiktok Analytics")
 
 # Game keyword mapping for title-based extraction
-GAME_KEYWORDS = {
+# Hardcoded base keywords + dynamically loaded from context system
+BASE_GAME_KEYWORDS = {
     'atomic_heart': [
         'atomic heart', 'petrov', 'sechenov', 'facility 3826',
         'granny zina', 'soviet', 'robot uprising', 'major seeks',
@@ -32,6 +33,21 @@ GAME_KEYWORDS = {
         'genshinimpact'
     ],
 }
+
+def _build_game_keywords() -> Dict[str, List[str]]:
+    """Build game keywords from context system + hardcoded base."""
+    keywords = dict(BASE_GAME_KEYWORDS)
+    try:
+        from workflows.context_manager_v2 import list_games
+        for game_key in list_games():
+            if game_key not in keywords:
+                # Convert game_key to human-readable form for matching
+                # e.g. "star_wars_jedi_survivor" -> "star wars jedi survivor"
+                readable = game_key.replace('_', ' ')
+                keywords[game_key] = [readable]
+    except Exception:
+        pass
+    return keywords
 
 
 def _get_db():
@@ -94,8 +110,9 @@ def init_tiktok_tables():
 def _extract_game_from_title(title: str) -> str:
     """Extract game name from hashtags/title text."""
     title_lower = title.lower()
-    for game, keywords in GAME_KEYWORDS.items():
-        if any(kw in title_lower for kw in keywords):
+    keywords = _build_game_keywords()
+    for game, kws in keywords.items():
+        if any(kw in title_lower for kw in kws):
             return game
     return 'unknown'
 
@@ -570,11 +587,20 @@ def match_tiktok_to_clips() -> Dict[str, Any]:
             matched_clip_id = best_match['id'] if best_match['type'] == 'clip' else None
             matched_youtube_id = best_match['id'] if best_match['type'] == 'script' else None
 
+            # Try to determine game from matched script's video_name
+            new_game = tt_game
+            if best_match['type'] == 'script' and tt_game == 'unknown':
+                # Look up the script to get its video_name, then try to extract game
+                cursor.execute("SELECT video_name FROM scripts WHERE id = ?", (best_match['id'],))
+                row = cursor.fetchone()
+                if row and row['video_name']:
+                    new_game = _extract_game_from_title(row['video_name'])
+
             cursor.execute("""
                 UPDATE tiktok_videos
-                SET matched_clip_id = ?, matched_youtube_id = ?, match_confidence = ?
+                SET matched_clip_id = ?, matched_youtube_id = ?, match_confidence = ?, game = ?
                 WHERE id = ?
-            """, (matched_clip_id, matched_youtube_id, best_score, tt['id']))
+            """, (matched_clip_id, matched_youtube_id, best_score, new_game, tt['id']))
             matched_count += 1
 
         matches.append({
