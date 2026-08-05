@@ -22,6 +22,7 @@ export const PHASES = [
   'scripts',
   'clips',
   'tts',
+  'assemble',
 ] as const
 
 export type Phase = (typeof PHASES)[number]
@@ -33,6 +34,7 @@ export const PHASE_LABELS: Record<Phase, string> = {
   scripts: 'Scripts',
   clips: 'Clips',
   tts: 'TTS',
+  assemble: 'Assemble',
 }
 
 export function getPhaseIndex(current_phase: string | null): number {

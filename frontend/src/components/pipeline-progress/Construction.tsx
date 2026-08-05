@@ -19,6 +19,7 @@ const STAGES: StageDef[] = [
   { label: 'Roof', height: 16, color: 'from-40k-gold-bright/30 to-40k-gold-bright/10', borderColor: 'border-40k-gold-bright' },
   { label: 'Spire', height: 14, color: 'from-40k-crimson/30 to-40k-crimson/10', borderColor: 'border-40k-crimson' },
   { label: 'Aura', height: 18, color: 'from-40k-crimson-bright/20 to-transparent', borderColor: 'border-40k-crimson-bright' },
+  { label: 'Crown', height: 16, color: 'from-40k-gold-bright/30 to-40k-crimson-bright/10', borderColor: 'border-40k-gold-bright' },
 ]
 
 const PHASE_ICONS: Record<string, string> = {
@@ -28,6 +29,7 @@ const PHASE_ICONS: Record<string, string> = {
   scripts: '📄',
   clips: '✂',
   tts: '🎤',
+  assemble: '🏗',
 }
 
 export default function Construction({ status }: Props) {

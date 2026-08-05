@@ -177,13 +177,13 @@ def _safe_shifted_path(padded):
 
 def _get_cogitator():
     from workflows.cogitator import (
-        log, log_error, set_status, notify, env, run,
+        log, log_error, set_status, set_progress, notify, env, run,
         MEDIA_DIR, TRANSCRIPTS_DIR, SCRIPTS_DIR, TTS_DIR, SHORTS_DIR, OUTPUT_DIR,
         PIPELINE_STOP_REQUESTED,
     )
     return {
         'log': log, 'log_error': log_error,
-        'set_status': set_status, 'notify': notify, 'env': env, 'run': run,
+        'set_status': set_status, 'set_progress': set_progress, 'notify': notify, 'env': env, 'run': run,
         'MEDIA_DIR': MEDIA_DIR, 'TRANSCRIPTS_DIR': TRANSCRIPTS_DIR,
         'SCRIPTS_DIR': SCRIPTS_DIR, 'TTS_DIR': TTS_DIR,
         'SHORTS_DIR': SHORTS_DIR, 'OUTPUT_DIR': OUTPUT_DIR,
@@ -365,6 +365,8 @@ def phase_assemble(duration, num_hours, video=None):
 
     assembled = 0
     for i in range(1, num_hours + 1):
+        pct = int(((i - 1) / max(num_hours, 1)) * 100)
+        c['set_progress'](7, pct, f"Assembling shorts ({i}/{num_hours})")
         # Read directly from cogitator module to get the current value
         from workflows.cogitator import PIPELINE_STOP_REQUESTED as _stop_requested
         if _stop_requested:

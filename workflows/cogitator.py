@@ -583,7 +583,7 @@ def handle_context_callback(callback_data, game_title, cb_id):
         # Get extracted context from current run
         extracted = _cs_load_context()
         verified = load_verified_context(game_title)
-        comparison = compare_context_with_history(extracted, verified)
+        comparison = compare_context_with_history(game_title, extracted)
         
         # Get resolved context (from comparison or extracted)
         resolved = comparison.get("resolved_context", extracted)
@@ -3501,7 +3501,7 @@ def phase_context():
     if not verified:
         log(f"First run for {game_title} - context auto-saved")
     else:
-        comparison = compare_context_with_history(extracted, verified)
+        comparison = compare_context_with_history(game_title, extracted)
         if comparison.get("needs_confirmation"):
             log(f"Context changes detected for {game_title} - merged and saved")
         else:
@@ -4253,7 +4253,7 @@ def phase_scripts(json_file, duration, num_hours, video=None):
     scripts_generated = 0
     for i in range(1, num_hours + 1):
         pct = int(((i - 1) / num_hours) * 100)
-        set_progress(3, pct, f"Generating scripts ({i}/{num_hours})")
+        set_progress(4, pct, f"Generating scripts ({i}/{num_hours})")
         
         padded = f"{i:03d}"
         h_start = (i - 1) * 3600
@@ -4741,7 +4741,7 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
         for idx, sc in enumerate(scenes, 1):
             clip_counter += 1
             pct = int(((clip_counter - 1) / max(total_clips_estimate, 1)) * 100) if total_clips_estimate > 0 else 0
-            set_progress(4, pct, f"Generating clips ({clip_counter}/{total_clips_estimate})")
+            set_progress(5, pct, f"Generating clips ({clip_counter}/{total_clips_estimate})")
             
             name = f"{video_basename}-Short{padded}_{idx}.mp4"
             out  = os.path.join(SHORTS_DIR, name)
@@ -5075,6 +5075,11 @@ def run_pipeline(skip=None):
         phase_tts(duration, num_hours, video=video)
         if check_stop(): return
 
+    if 7 not in skip:
+        from workflows.pipeline.phase_assemble import phase_assemble
+        phase_assemble(duration, num_hours, video=video)
+        if check_stop(): return
+
     log("Pipeline Complete!")
     set_status("Pipeline Complete")
 
@@ -5083,6 +5088,7 @@ def run_pipeline(skip=None):
     tw = count_files(os.path.join(TTS_DIR, "*.wav"))
     ts = count_files(os.path.join(TTS_DIR, "*.srt"))
     tc = count_files(os.path.join(TRANSCRIPTS_DIR, "*.json"))
+    ac = count_files(os.path.join(OUTPUT_DIR, "*.mp4"))
 
     notify(f"""Pipeline Complete!
 
@@ -5095,8 +5101,9 @@ Clips: {cc}
 TTS WAVs: {tw}
 TTS SRTs: {ts}
 Transcripts: {tc}
+Assembled: {ac}
 
-Total output files: {sc + cc + tw + ts}""")
+Total output files: {sc + cc + tw + ts + ac}""")
 
 # ─── Onboard ──────────────────────────────────────────────────────────────────
 def onboard():

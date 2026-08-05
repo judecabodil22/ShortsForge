@@ -152,9 +152,11 @@ def load_pipeline_settings():
         "phases": [
             {"id": "p1", "name": "Download", "enabled": True, "video_source": "youtube"},
             {"id": "p2", "name": "Transcribe", "enabled": True},
-            {"id": "p3", "name": "Scripts", "enabled": True},
-            {"id": "p4", "name": "Clip", "enabled": True},
-            {"id": "p5", "name": "TTS", "enabled": True},
+            {"id": "p3", "name": "Context", "enabled": True},
+            {"id": "p4", "name": "Scripts", "enabled": True},
+            {"id": "p5", "name": "Clips", "enabled": True},
+            {"id": "p6", "name": "TTS", "enabled": True},
+            {"id": "p7", "name": "Assemble", "enabled": True},
         ]
     }
 
@@ -511,7 +513,7 @@ async def get_pipeline_logs(_: bool = Depends(verify_api_key)):
             return {"logs": logs, "exists": True}
         return {"logs": "", "exists": False}
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +562,7 @@ async def sync_youtube_metrics(request: Request, _: bool = Depends(verify_api_ke
         
         return {"status": "synced", "result": result}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +660,7 @@ async def import_tiktok_data(request: Request, _: bool = Depends(verify_api_key)
         await ws_manager.broadcast({"type": "tiktok:updated", "data": result})
         return {"status": "imported", "result": result}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 @app.post("/api/metrics/tiktok/match")
@@ -670,7 +672,7 @@ async def match_tiktok_to_local(request: Request, _: bool = Depends(verify_api_k
         result = match_tiktok_to_clips()
         return {"status": "matched", "result": result}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -1119,7 +1121,7 @@ async def get_segment_references(game: str, _: bool = Depends(verify_api_key)):
             return {"references": refs.get(game_key, {})}
         return {"references": {}}
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -1140,7 +1142,7 @@ async def get_script_prompt(_: bool = Depends(verify_api_key)):
             return {"content": content}
         return {"content": "", "error": "Prompt file not found"}
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.put("/api/prompts/script")
@@ -1151,7 +1153,7 @@ async def save_script_prompt(request: Request, _: bool = Depends(verify_api_key)
         content = body.get("content", "")
 
         if not content.strip():
-            return {"error": "Content cannot be empty"}, 400
+            return JSONResponse(status_code=400, content={"error": "Content cannot be empty"})
 
         # Validate Jinja2 syntax
         try:
@@ -1159,7 +1161,7 @@ async def save_script_prompt(request: Request, _: bool = Depends(verify_api_key)
             env = Environment()
             env.parse(content)
         except Exception as e:
-            return {"error": f"Jinja2 syntax error: {str(e)}"}, 400
+            return JSONResponse(status_code=400, content={"error": f"Jinja2 syntax error: {str(e)}"})
 
         # Backup existing file
         if os.path.exists(PROMPT_FILE):
@@ -1173,7 +1175,7 @@ async def save_script_prompt(request: Request, _: bool = Depends(verify_api_key)
 
         return {"status": "saved"}
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.put("/api/context/{game}/{item_type}/{item_id}")
@@ -1193,7 +1195,7 @@ async def update_context_item(request: Request, game: str, item_type: str, item_
                 break
     if result:
         return {"status": "updated", "item": result.to_dict()}
-    return {"error": "Item not found"}, 404
+    return JSONResponse(status_code=404, content={"error": "Item not found"})
 
 
 @app.delete("/api/context/{game}/{item_type}/{item_id}")
@@ -1213,7 +1215,7 @@ async def delete_context_item(request: Request, game: str, item_type: str, item_
                 break
     if result:
         return {"status": "deleted"}
-    return {"error": "Item not found"}, 404
+    return JSONResponse(status_code=404, content={"error": "Item not found"})
 
 
 # ---------------------------------------------------------------------------
@@ -1331,7 +1333,7 @@ async def get_ab_test_result_endpoint(test_id: str, _: bool = Depends(verify_api
     from workflows.performance_database import get_ab_test_results
     result = get_ab_test_results(test_id)
     if result is None:
-        return {"error": "Test not found"}, 404
+        return JSONResponse(status_code=404, content={"error": "Test not found"})
     return result
 
 
@@ -1484,7 +1486,7 @@ async def update_config(request: Request, updates: ConfigUpdate, _: bool = Depen
                 errors.append(f"{k} must be a number")
     
     if errors:
-        return {"status": "error", "errors": errors}
+        return JSONResponse(status_code=400, content={"status": "error", "errors": errors})
     
     for k, v in update_dict.items():
         if k in ('SRT_FONT_COLOR', 'SRT_OUTLINE_COLOR') and isinstance(v, str):
@@ -1796,7 +1798,11 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            message = json.loads(data)
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                continue
             
             if message.get("type") == "ping":
                 await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})

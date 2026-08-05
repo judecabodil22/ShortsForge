@@ -87,9 +87,6 @@ def load_markdown_context(game_key: str) -> Dict[str, Any]:
                     result["relationships"].append(rel)
     return result
 
-# Thread lock for verified context updates
-_context_file_lock = threading.Lock()
-
 VERIFIED_CONTEXT_FILE = os.path.join(CONTEXT_DIR, "verified_context.json")
 HISTORY_DIR = os.path.join(CONTEXT_DIR, "history")
 SCHEMA_FILE = os.path.join(CONTEXT_DIR, "schema.json")
@@ -108,10 +105,19 @@ def _load_deleted_entities() -> Dict[str, List[str]]:
 
 
 def _save_deleted_entities(data: Dict[str, List[str]]) -> None:
-    """Save the list of deleted entities per game."""
+    """Save the list of deleted entities per game (atomic write)."""
     os.makedirs(CONTEXT_DIR, exist_ok=True)
-    with open(DELETED_ENTITIES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=CONTEXT_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, DELETED_ENTITIES_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _add_deleted_entity(game_key: str, item_id: str, item_name: str) -> None:
@@ -447,15 +453,18 @@ class ContextManagerV2:
         return list(self.contexts.keys())
     
     def get_context_items(self, game_key: str, item_type: str = None) -> List[ContextItem]:
-        """Get all context items for a game, optionally filtered by type."""
+        """Get all context items for a game, optionally filtered by type.
+        
+        Excludes items that have been manually deleted.
+        """
         if game_key not in self.contexts:
             return []
         if item_type:
-            return self.contexts.get(game_key, {}).get(item_type, [])
+            return _filter_deleted_items(game_key, self.contexts.get(game_key, {}).get(item_type, []))
         all_items = []
         for items in self.contexts.get(game_key, {}).values():
             all_items.extend(items)
-        return all_items
+        return _filter_deleted_items(game_key, all_items)
     
     def get_item(self, game_key: str, item_id: str) -> Optional[ContextItem]:
         """Get a single context item by ID."""
@@ -602,7 +611,7 @@ class ContextManagerV2:
         games = [game_key] if game_key else self.get_games()
         
         for gk in games:
-            game_stats = {"characters": 0, "locations": 0, "terms": 0, "relationships": 0}
+            game_stats = {"character": 0, "location": 0, "term": 0, "relationship": 0}
             
             for item_type, items in self.contexts.get(gk, {}).items():
                 count = len(items)
@@ -610,8 +619,9 @@ class ContextManagerV2:
                 analytics["total_items"] += count
                 analytics["by_type"][item_type] = analytics["by_type"].get(item_type, 0) + count
                 
-                source = item.metadata.get("source", "manual")
-                analytics["by_source"][source] = analytics["by_source"].get(source, 0) + 1
+                for item in items:
+                    source = getattr(item, "metadata", {}).get("source", "manual") if hasattr(item, "metadata") else "manual"
+                    analytics["by_source"][source] = analytics["by_source"].get(source, 0) + 1
             
             # Get recent history
             history = ContextHistory(gk)
@@ -882,7 +892,7 @@ def get_context_sources_summary(game_key: str) -> dict:
     import os
     
     verified = load_verified_context(game_key)
-    ctx = verified.get("context", {}) if verified else {}
+    ctx = verified if verified else {}
     mp_chunks = get_mempalace_text_chunks(game_key)
     
     transcripts_dir = os.path.join(WORKSPACE, "transcripts")

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Cog, Building2, Clock, Grid3x3, Shuffle } from 'lucide-react'
-import { type FullStatus } from './types'
+import { type FullStatus, PHASES } from './types'
 import CogitatorArray from './CogitatorArray'
 import Construction from './Construction'
 import PhaseTimeline from './PhaseTimeline'
@@ -61,7 +61,7 @@ export default function PipelineProgress({ status }: Props) {
         <div className="animate-pulse space-y-3">
           <div className="h-3 bg-40k-border/30 rounded w-24" />
           <div className="flex items-center justify-center gap-2 py-4">
-            {Array.from({ length: 6 }).map((_, i) => (
+            {Array.from({ length: PHASES.length }).map((_, i) => (
               <div key={i} className="w-10 h-10 bg-40k-border/20 rounded-full" />
             ))}
           </div>

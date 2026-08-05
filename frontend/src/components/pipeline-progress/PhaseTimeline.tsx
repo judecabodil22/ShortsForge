@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Download, FileText, Search, FileEdit, Scissors, Mic,
+  Download, FileText, Search, FileEdit, Scissors, Mic, Layers,
 } from 'lucide-react'
 import { getLogs } from '@/lib/api'
 import { PHASES, PHASE_LABELS, type PipelineStatus, getPhaseIndex } from './types'
@@ -11,7 +11,7 @@ interface Props {
   status: PipelineStatus
 }
 
-const PHASE_ICONS = [Download, FileText, Search, FileEdit, Scissors, Mic]
+const PHASE_ICONS = [Download, FileText, Search, FileEdit, Scissors, Mic, Layers]
 
 export default function PhaseTimeline({ status }: Props) {
   const currentIdx = getPhaseIndex(status.current_phase)

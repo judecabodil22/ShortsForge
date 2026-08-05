@@ -269,6 +269,7 @@ def _register_graph_node(item, nodes: list, node_id_map: dict, alias_map: dict) 
             "type": item.type,
             "description": item.description,
             "category": getattr(item, "category", "") or "",
+            "game_key": getattr(item, "game_key", "") or "",
         }
     })
     if norm not in node_id_map:
@@ -404,6 +405,7 @@ def _build_single_game_graph(
                         "type": "character",
                         "description": "",
                         "category": "",
+                        "game_key": current_game_key,
                     }
                 })
                 node_id_map[norm_from] = placeholder_id
@@ -420,6 +422,7 @@ def _build_single_game_graph(
                         "type": "character",
                         "description": "",
                         "category": "",
+                        "game_key": current_game_key,
                     }
                 })
                 node_id_map[norm_to] = placeholder_id
@@ -591,6 +594,7 @@ def build_all_games_graph() -> dict:
                 "label": display_name,
                 "type": "game",
                 "description": f"{len(game_nodes)} entities in {display_name}",
+                "game_key": game_key,
             }
         })
 

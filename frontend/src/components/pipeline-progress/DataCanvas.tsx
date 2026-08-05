@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { type PipelineStatus, type Phase, getPhaseIndex, PHASE_LABELS } from './types'
+import { type PipelineStatus, type Phase, getPhaseIndex, PHASE_LABELS, PHASES } from './types'
 
 interface Props {
   status: PipelineStatus
@@ -42,13 +42,14 @@ export default function DataCanvas({ status }: Props) {
 
   const cells = useMemo(() => {
     const partition: number[] = []
-    const perPhase = Math.floor(TOTAL / 6)
-    for (let p = 0; p < 6; p++) {
+    const numPhases = PHASES.length
+    const perPhase = Math.floor(TOTAL / numPhases)
+    for (let p = 0; p < numPhases; p++) {
       for (let i = 0; i < perPhase; i++) {
         partition.push(p)
       }
     }
-    while (partition.length < TOTAL) partition.push(5)
+    while (partition.length < TOTAL) partition.push(numPhases - 1)
     return partition
   }, [])
 
@@ -75,16 +76,16 @@ export default function DataCanvas({ status }: Props) {
           animate={{ scale: 1, opacity: 1 }}
           className="text-xs font-mono tabular-nums"
           style={{
-            color: currentIdx >= 6
+            color: currentIdx >= PHASES.length
               ? '#22c55e'
               : currentIdx < 0
                 ? '#6b7280'
                 : getPhaseColor(currentIdx),
           }}
         >
-          {currentIdx >= 0 && currentIdx < 6
+          {currentIdx >= 0 && currentIdx < PHASES.length
             ? `${PHASE_LABELS[Object.keys(PHASE_COLORS)[currentIdx] as Phase]} ${Math.round(progress * 100)}%`
-            : currentIdx >= 6
+            : currentIdx >= PHASES.length
               ? 'Complete'
               : 'Idle'}
         </motion.div>
@@ -142,9 +143,9 @@ export default function DataCanvas({ status }: Props) {
         <motion.div
           className="absolute inset-y-0 left-0 rounded-full"
           style={{
-            background: `linear-gradient(90deg, ${getPhaseColor(0)}, ${getPhaseColor(Math.max(0, Math.min(5, currentIdx)))})`,
+            background: `linear-gradient(90deg, ${getPhaseColor(0)}, ${getPhaseColor(Math.max(0, Math.min(PHASES.length - 1, currentIdx)))})`,
           }}
-          animate={{ width: `${Math.min(100, Math.max(0, currentIdx) / 5 * 100)}%` }}
+          animate={{ width: `${Math.min(100, Math.max(0, currentIdx) / (PHASES.length - 1) * 100)}%` }}
           transition={{ duration: 0.5, ease: 'easeOut' }}
         />
         <motion.div
@@ -157,7 +158,7 @@ export default function DataCanvas({ status }: Props) {
             opacity: 0.6,
           }}
           animate={{
-            left: `${Math.min(100, Math.max(0, currentIdx) / 5 * 100)}%`,
+            left: `${Math.min(100, Math.max(0, currentIdx) / (PHASES.length - 1) * 100)}%`,
           }}
           transition={{ duration: 0.3 }}
         />
