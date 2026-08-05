@@ -4677,22 +4677,11 @@ def _select_best_intervals(json_file, duration, num_shorts):
 def _extract_scenes(json_file, h_start, h_end):
     scenes = []
     try:
-        pacing = env("CLIP_PACING", "normal").lower()
-        if pacing == "fast":
-            max_clips = 7
-            min_dur, min_words = 20, 10
-            max_gap = 20
-            max_group_dur = 450
-        elif pacing == "slow":
-            max_clips = 3
-            min_dur, min_words = 40, 20
-            max_gap = 12
-            max_group_dur = 700
-        else:
-            max_clips = 5
-            min_dur, min_words = 30, 15
-            max_gap = 15
-            max_group_dur = 600
+        max_clips = int(env("CLIPS_PER_INTERVAL", "5"))
+        max_clips = max(1, min(10, max_clips))
+        min_dur, min_words = 30, 15
+        max_gap = 15
+        max_group_dur = 600
 
         with open(json_file) as f:
             data = json.load(f)
@@ -5041,8 +5030,17 @@ def run_local_recordings(recording_path):
 
             if json_file:
                 interval = 1800
-                selected = [{"index": i, "start": i * interval, "end": min((i+1) * interval, duration), "score": 0}
-                            for i in range(num_hours)]
+                num_shorts = int(env("NUM_SHORTS", "0"))
+                max_shorts = max(1, duration // interval + (1 if duration % interval > interval // 2 else 0))
+                if num_shorts <= 0:
+                    num_shorts = max_shorts
+                num_shorts = min(num_shorts, max_shorts)
+
+                selected = _select_best_intervals(json_file, duration, num_shorts)
+                log(f"Selected {len(selected)} intervals from {max_shorts} possible")
+                for s in selected:
+                    log(f"  Interval {s['index']+1}: {s['start']//60}-{s['end']//60}min (score: {s['score']:.1f})")
+
                 phase_scripts(json_file, duration, selected, video=video_file)
                 if check_stop(): return
 
@@ -5050,11 +5048,11 @@ def run_local_recordings(recording_path):
                 if check_stop(): return
 
                 from workflows.pipeline.phase_tts import phase_tts
-                phase_tts(duration, num_hours, video=video_file)
+                phase_tts(duration, len(selected), video=video_file)
                 if check_stop(): return
 
                 from workflows.pipeline.phase_assemble import phase_assemble
-                phase_assemble(duration, num_hours, video=video_file)
+                phase_assemble(duration, len(selected), video=video_file)
                 if check_stop(): return
 
             log(f"Video {i}/{len(video_files)} complete!")

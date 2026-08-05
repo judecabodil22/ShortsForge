@@ -28,6 +28,7 @@ export default function Settings() {
     GAME_TITLE: '',
     TTS_VOICE: '',
     NUM_SHORTS: '0',
+    CLIPS_PER_INTERVAL: '5',
     PARENT_FRANCHISE: '',
     SRT_MAX_WORDS: '5',
     SRT_FONT_SIZE: '22',
@@ -232,6 +233,20 @@ export default function Settings() {
                   />
                   <p className="text-[10px] text-stone-500 mt-1">
                     Set to 0 for maximum. System picks the most content-rich segments.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="terminal-label mb-1 block">Clips per Interval</label>
+                  <input
+                    type="text"
+                    value={formData.CLIPS_PER_INTERVAL}
+                    onChange={e => setFormData({ ...formData, CLIPS_PER_INTERVAL: e.target.value })}
+                    className="cyber-input"
+                    placeholder="5"
+                  />
+                  <p className="text-[10px] text-stone-500 mt-1">
+                    Number of clips to extract from each 30-min interval (1-10).
                   </p>
                 </div>
               </Card>

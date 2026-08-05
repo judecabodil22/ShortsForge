@@ -242,27 +242,45 @@ def run_pipeline(skip=None):
     num_hours = max(1, duration // 3600 + (1 if duration % 3600 > 1800 else 0))
     c['log'](f"Video: {duration}s = {num_hours} hour(s)")
 
+    interval = 1800
+    num_shorts = int(c['env']("NUM_SHORTS", "0"))
+    max_shorts = max(1, duration // interval + (1 if duration % interval > interval // 2 else 0))
+    if num_shorts <= 0:
+        num_shorts = max_shorts
+    num_shorts = min(num_shorts, max_shorts)
+
+    selected = []
+    if json_file:
+        from workflows.cogitator import _select_best_intervals
+        selected = _select_best_intervals(json_file, duration, num_shorts)
+        c['log'](f"Selected {len(selected)} intervals from {max_shorts} possible")
+        for s in selected:
+            c['log'](f"  Interval {s['index']+1}: {s['start']//60}-{s['end']//60}min (score: {s['score']:.1f})")
+    else:
+        selected = [{"index": i, "start": i * interval, "end": min((i+1) * interval, duration), "score": 0}
+                    for i in range(num_shorts)]
+
     if 4 not in skip and json_file:
-        c['phase_scripts'](json_file, duration, num_hours, video=video)
+        c['phase_scripts'](json_file, duration, selected, video=video)
         if check_stop(): return
         _save_checkpoint(video_basename, 4)
     elif 4 not in skip:
         c['log_error']("No transcript for script generation")
 
     if 5 not in skip and json_file:
-        c['phase_clips'](video, json_file, duration, num_hours, script_id_map=c['_SCRIPT_ID_MAP'])
+        c['phase_clips'](video, json_file, duration, selected, script_id_map=c['_SCRIPT_ID_MAP'])
         if check_stop(): return
         _save_checkpoint(video_basename, 5)
     elif 5 not in skip:
         c['log_error']("No transcript for clip generation")
 
     if 6 not in skip:
-        c['phase_tts'](duration, num_hours, video=video)
+        c['phase_tts'](duration, len(selected), video=video)
         if check_stop(): return
         _save_checkpoint(video_basename, 6)
 
     if 7 not in skip:
-        c['phase_assemble'](duration, num_hours, video=video)
+        c['phase_assemble'](duration, len(selected), video=video)
         if check_stop(): return
         _save_checkpoint(video_basename, 7)
 

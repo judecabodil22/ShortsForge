@@ -1396,7 +1396,7 @@ from pydantic import BaseModel
 @app.get("/api/config")
 async def get_config(_: bool = Depends(verify_api_key)):
     env_file = os.path.join(WORKSPACE, ".env")
-    config = {"GAME_TITLE": "", "TTS_VOICE": "", "NUM_SHORTS": "0", "PARENT_FRANCHISE": "", "SRT_MAX_WORDS": "5", "SRT_FONT_SIZE": "22", "SRT_FONT_COLOR": "", "SRT_MARGIN_V": "60", "SRT_FONT_NAME": "Open Sans", "SRT_FONT_OUTLINE": "2", "SRT_FONT_SHADOW": "1", "SRT_OUTLINE_COLOR": "", "SRT_SUB_GAP": "0.5", "SRT_MIN_DURATION": "1.0", "SRT_MAX_DURATION": "6.0", "SRT_BORDER_STYLE": "outline", "SRT_ALIGNMENT": "center", "CLIP_ORDER": "sequential", "VARIETY_SEED": "42", "TTS_EMOTION": "default", "TTS_SPEED": "1.0"}
+    config = {"GAME_TITLE": "", "TTS_VOICE": "", "NUM_SHORTS": "0", "CLIPS_PER_INTERVAL": "5", "PARENT_FRANCHISE": "", "SRT_MAX_WORDS": "5", "SRT_FONT_SIZE": "22", "SRT_FONT_COLOR": "", "SRT_MARGIN_V": "60", "SRT_FONT_NAME": "Open Sans", "SRT_FONT_OUTLINE": "2", "SRT_FONT_SHADOW": "1", "SRT_OUTLINE_COLOR": "", "SRT_SUB_GAP": "0.5", "SRT_MIN_DURATION": "1.0", "SRT_MAX_DURATION": "6.0", "SRT_BORDER_STYLE": "outline", "SRT_ALIGNMENT": "center", "CLIP_ORDER": "sequential", "VARIETY_SEED": "42", "TTS_EMOTION": "default", "TTS_SPEED": "1.0"}
     if os.path.exists(env_file):
         with open(env_file, "r") as f:
             for line in f:
@@ -1410,6 +1410,7 @@ class ConfigUpdate(BaseModel):
     GAME_TITLE: Optional[str] = None
     TTS_VOICE: Optional[str] = None
     NUM_SHORTS: Optional[str] = None
+    CLIPS_PER_INTERVAL: Optional[str] = None
     PARENT_FRANCHISE: Optional[str] = None
     SRT_MAX_WORDS: Optional[str] = None
     SRT_FONT_SIZE: Optional[str] = None
@@ -1449,6 +1450,13 @@ async def update_config(request: Request, updates: ConfigUpdate, _: bool = Depen
                 val = int(v)
                 if val < 0 or val > 20:
                     errors.append(f"{k} must be between 0 and 20 (0 = max possible)")
+            except ValueError:
+                errors.append(f"{k} must be a number")
+        elif k == 'CLIPS_PER_INTERVAL':
+            try:
+                val = int(v)
+                if val < 1 or val > 10:
+                    errors.append(f"{k} must be between 1 and 10")
             except ValueError:
                 errors.append(f"{k} must be a number")
         elif k == 'SRT_MAX_WORDS':
