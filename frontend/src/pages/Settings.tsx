@@ -27,7 +27,7 @@ export default function Settings() {
   const [formData, setFormData] = useState({
     GAME_TITLE: '',
     TTS_VOICE: '',
-    CLIPS_PER_HOUR: '4',
+    NUM_SHORTS: '0',
     PARENT_FRANCHISE: '',
     SRT_MAX_WORDS: '5',
     SRT_FONT_SIZE: '22',
@@ -72,7 +72,7 @@ export default function Settings() {
       setFormData({
         GAME_TITLE: config.GAME_TITLE || '',
         TTS_VOICE: config.TTS_VOICE || '',
-        CLIPS_PER_HOUR: config.CLIPS_PER_HOUR || '4',
+        NUM_SHORTS: config.NUM_SHORTS || '0',
         PARENT_FRANCHISE: config.PARENT_FRANCHISE || '',
         SRT_MAX_WORDS: config.SRT_MAX_WORDS || '5',
         SRT_FONT_SIZE: config.SRT_FONT_SIZE || '22',
@@ -215,21 +215,24 @@ export default function Settings() {
                     className="cyber-input"
                   >
                     <option value="">Let system handle (learning-weighted round-robin)</option>
-                    {(ttsVoicesData?.voices || ["Vindemiatrix", "Puck", "Aoede", "Charon", "Kore", "Fenrir", "Orus", "Enceladus", "Iapetus", "Nereus", "Zephyr", "Atlas", "Callirhoe", "Ceres"]).map((voice: string) => (
+                    {(ttsVoicesData?.voices || ["af_bella", "af_sarah", "am_adam", "am_puck", "bf_emma", "bm_george"]).map((voice: string) => (
                       <option key={voice} value={voice}>{voice}</option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="terminal-label mb-1 block">Target Clips Per Hour</label>
+                  <label className="terminal-label mb-1 block">Number of Shorts to Assemble</label>
                   <input
                     type="text"
-                    value={formData.CLIPS_PER_HOUR}
-                    onChange={e => setFormData({ ...formData, CLIPS_PER_HOUR: e.target.value })}
+                    value={formData.NUM_SHORTS}
+                    onChange={e => setFormData({ ...formData, NUM_SHORTS: e.target.value })}
                     className="cyber-input"
-                    placeholder="e.g. 1"
+                    placeholder="0 = max possible"
                   />
+                  <p className="text-[10px] text-stone-500 mt-1">
+                    Set to 0 for maximum. System picks the most content-rich segments.
+                  </p>
                 </div>
               </Card>
             )}

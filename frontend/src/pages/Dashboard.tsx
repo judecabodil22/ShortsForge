@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Square, RefreshCw, FileText, Video, Zap, Activity, FolderOpen, Settings, X, Download, ExternalLink, Wifi, WifiOff } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
-import { getMetricsSummary, getStatus, getLearningWeights, runPipeline, stopPipeline, syncMetrics, getLogs, downloadFromUrl, getStoredApiKey } from '@/lib/api'
+import { getCrossPlatformStats, getStatus, getLearningWeights, runPipeline, stopPipeline, syncMetrics, getLogs, downloadFromUrl, getStoredApiKey } from '@/lib/api'
 import { formatNumber } from '@/lib/utils'
 import { AnimatedCounter } from '@/components/ui/AnimatedCounter'
 import { useToast } from '@/contexts/ToastContext'
@@ -59,7 +59,7 @@ export default function Dashboard() {
 
   const { data: metrics } = useQuery({
     queryKey: ['metrics-summary'],
-    queryFn: getMetricsSummary,
+    queryFn: getCrossPlatformStats,
   })
 
   const { data: weights } = useQuery({
@@ -104,7 +104,13 @@ export default function Dashboard() {
     }
   }, [showLogs, logsData?.logs?.length])
 
-  const baseline = metrics?.baseline || {}
+  const combined = metrics?.combined || {}
+  const baseline = {
+    avg_views: combined.avg_views || 0,
+    avg_engagement: combined.avg_engagement || 0,
+    avg_score: 0,
+    sample_count: combined.sample_count || 0,
+  }
 
   return (
     <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
@@ -178,8 +184,8 @@ export default function Dashboard() {
 
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Videos" value={<AnimatedCounter value={metrics?.total_videos || 0} />} icon={<Video className="w-6 h-6" />} delay={0.05} />
-        <StatCard label="Total Scripts" value={<AnimatedCounter value={metrics?.total_scripts || 0} />} icon={<FileText className="w-6 h-6" />} delay={0.1} />
+        <StatCard label="Total Videos" value={<AnimatedCounter value={combined.total_videos || 0} />} icon={<Video className="w-6 h-6" />} delay={0.05} />
+        <StatCard label="Total Scripts" value={<AnimatedCounter value={combined.total_scripts || 0} />} icon={<FileText className="w-6 h-6" />} delay={0.1} />
         <StatCard label="Avg Views" value={<AnimatedCounter value={baseline.avg_views || 0} format={(v) => formatNumber(v)} />} icon={<Activity className="w-6 h-6" />} delay={0.15} />
         <StatCard label="Avg Engagement" value={<AnimatedCounter value={baseline.avg_engagement || 0} format={(v) => `${v.toFixed(2)}%`} />} icon={<Zap className="w-6 h-6" />} delay={0.2} />
       </div>
@@ -389,9 +395,9 @@ export default function Dashboard() {
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: 'Patterns Discovered', value: metrics?.learnings_count || 0, color: 'text-40k-gold' },
-              { label: 'Scripts Analyzed', value: metrics?.total_scripts || 0, color: 'text-40k-crimson-bright' },
-              { label: 'Data Points', value: baseline.sample_count || 0, color: 'text-40k-gold-bright' },
+              { label: 'Patterns Discovered', value: combined.learnings_count || 0, color: 'text-40k-gold' },
+              { label: 'Scripts Analyzed', value: combined.total_scripts || 0, color: 'text-40k-crimson-bright' },
+              { label: 'Data Points', value: combined.sample_count || 0, color: 'text-40k-gold-bright' },
               { label: 'Avg Score', value: baseline.avg_score || 0, color: 'text-40k-gold-dim' },
             ].map((item, idx) => (
               <motion.div

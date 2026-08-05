@@ -4196,7 +4196,7 @@ def _extract_hour(json_file, start, end):
                 parts.append(t)
     return "\n".join(parts)
 
-def phase_scripts(json_file, duration, num_hours, video=None):
+def phase_scripts(json_file, duration, selected, video=None):
     _RECENT_TITLES = []
     video_basename = os.path.splitext(os.path.basename(video))[0] if video else "script"
     if not json_file or not os.path.exists(json_file):
@@ -4212,6 +4212,7 @@ def phase_scripts(json_file, duration, num_hours, video=None):
         set_status("Phase 4 FAILED")
         raise RuntimeError("No API keys available")
 
+    num_hours = len(selected)
     _init_round_robin(num_hours)
     
     # Load and optimize context for script generation (Phase 4)
@@ -4251,13 +4252,14 @@ def phase_scripts(json_file, duration, num_hours, video=None):
     delay = int(env("SCRIPT_DELAY", "300"))
 
     scripts_generated = 0
-    for i in range(1, num_hours + 1):
-        pct = int(((i - 1) / num_hours) * 100)
-        set_progress(4, pct, f"Generating scripts ({i}/{num_hours})")
+    for slot, interval in enumerate(selected, 1):
+        i = interval['index'] + 1
+        pct = int(((slot - 1) / num_hours) * 100)
+        set_progress(4, pct, f"Generating scripts ({slot}/{num_hours})")
         
-        padded = f"{i:03d}"
-        h_start = (i - 1) * 3600
-        h_end   = min(i * 3600, duration)
+        padded = f"{slot:03d}"
+        h_start = interval['start']
+        h_end = interval['end']
         out     = os.path.join(SCRIPTS_DIR, f"{video_basename}-Script{padded}.txt")
 
         if os.path.exists(out):
@@ -4358,7 +4360,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
 
             # Fallback: Gemini (single script) if Groq produced nothing
             if not candidates:
-                gemini_script = _gemini_script(transcript_text, i, relevant_ctx, recent_titles=_RECENT_TITLES)
+                gemini_script = _gemini_script(transcript_text, slot, relevant_ctx, recent_titles=_RECENT_TITLES)
                 if gemini_script:
                     candidates.append((gemini_script, {"source": "gemini", "model": "gemini-2.5-flash-lite", "temperature": temperature}))
                     log(f"   Gemini script generated ({len(gemini_script.split())} words)")
@@ -4564,11 +4566,11 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                         log(f"Performance: Script stored (ID: {script_id[:8]}...) [A/B: variant {ab_variant.upper()}]")
                     else:
                         log(f"Performance: Script stored (ID: {script_id[:8]}...)")
-                    set_script_id(i, script_id)
+                    set_script_id(slot, script_id)
                 except Exception as perf_err:
                     log(f"Performance DB: Failed to store script - {perf_err}")
-            set_status(f"Phase 4: Script {i}/{num_hours} generated")
-            notify(f"Script {i}/{num_hours} generated ({wc} words)")
+            set_status(f"Phase 4: Script {slot}/{num_hours} generated")
+            notify(f"Script {slot}/{num_hours} generated ({wc} words)")
 
             # Update context with script summary (Phase 4)
             if best_script and wc > 50:
@@ -4578,7 +4580,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
             log_error(f"   Error generating script {i}: {e}")
             continue
 
-        if i < num_hours:
+        if slot < num_hours:
             log(f"   Waiting {delay}s")
             time.sleep(delay)
 
@@ -4592,6 +4594,85 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
     notify(f"Phase 4 Complete: {scripts_generated} scripts generated")
 
 # ─── Phase 5: Clips ──────────────────────────────────────────────────────────
+def _score_interval(json_file, start, end, verified_context=None):
+    """Score a transcript interval for content richness."""
+    score = 0.0
+    try:
+        with open(json_file) as f:
+            data = json.load(f)
+
+        words_total = 0
+        drama = 0
+        text_all = ""
+
+        for seg in data.get("segments", []):
+            if seg["start"] < start or seg["end"] > end:
+                continue
+            t = re.sub(r"<[^>]*>", "", seg.get("text", "")).strip()
+            if len(t.split()) < 3:
+                continue
+            words = len(t.split())
+            words_total += words
+            drama += t.count("?") * 2 + t.count("!") * 2
+            text_all += " " + t
+
+        if words_total == 0:
+            return 0.0
+
+        dur = max(end - start, 1)
+        density = words_total / dur
+
+        score = words_total + density * 10 + drama
+
+        if verified_context:
+            text_lower = text_all.lower()
+            chars = verified_context.get("characters", [])
+            for c in chars:
+                name = c.get("name", "").lower()
+                if name and name in text_lower:
+                    score += 5
+            terms = verified_context.get("key_terms", [])
+            for t in terms:
+                term = t.get("name", "").lower()
+                if term and term in text_lower:
+                    score += 3
+
+    except Exception as e:
+        log(f"Warning: interval scoring failed: {e}")
+    return score
+
+
+def _select_best_intervals(json_file, duration, num_shorts):
+    """Select the best N 30-min intervals from the transcript."""
+    interval = 1800
+    windows = []
+    i = 0
+    while i * interval < duration:
+        start = i * interval
+        end = min((i + 1) * interval, duration)
+        windows.append({"index": i, "start": start, "end": end})
+        i += 1
+
+    if not windows:
+        return [{"index": 0, "start": 0, "end": duration, "score": 0}]
+
+    game_title = env("GAME_TITLE", "")
+    verified = None
+    if game_title:
+        try:
+            verified = load_verified_context(game_title)
+        except Exception:
+            pass
+
+    for w in windows:
+        w["score"] = _score_interval(json_file, w["start"], w["end"], verified)
+
+    windows.sort(key=lambda x: x["score"], reverse=True)
+    selected = windows[:num_shorts]
+    selected.sort(key=lambda x: x["index"])
+    return selected
+
+
 def _extract_scenes(json_file, h_start, h_end):
     scenes = []
     try:
@@ -4670,7 +4751,7 @@ def _extract_scenes(json_file, h_start, h_end):
         log_error(f"Scene extraction: {e}")
     return scenes[:max_clips]
 
-def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
+def phase_clips(video, json_file, duration, selected, script_id_map=None):
     if not video or not os.path.exists(video):
         log_error("Phase 5 Failed: Video file not found")
         notify("Phase 5 Failed: Video file not found")
@@ -4683,6 +4764,7 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
         set_status("Phase 5 FAILED")
         raise RuntimeError("Transcript file not found")
 
+    num_hours = len(selected)
     set_status("Phase 5: Generating clips...")
     log("Phase 5: Generating clips (scene-based)...")
     notify("Phase 5 Started: Generating clips...")
@@ -4709,24 +4791,25 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
 
     clips_generated = 0
     total_clips_estimate = 0
-    for i in range(1, num_hours + 1):
-        h_start = (i - 1) * 3600
-        h_end   = min(i * 3600, duration)
-        padded  = f"{i:03d}"
+    for slot, interval in enumerate(selected, 1):
+        h_start = interval['start']
+        h_end = interval['end']
+        padded  = f"{slot:03d}"
 
         scenes = _extract_scenes(json_file, h_start, h_end)
         total_clips_estimate += len(scenes)
     
     clip_counter = 0
-    for i in range(1, num_hours + 1):
-        h_start = (i - 1) * 3600
-        h_end   = min(i * 3600, duration)
-        padded  = f"{i:03d}"
+    for slot, interval in enumerate(selected, 1):
+        i = interval['index'] + 1
+        h_start = interval['start']
+        h_end = interval['end']
+        padded  = f"{slot:03d}"
         video_basename = os.path.splitext(os.path.basename(video))[0]
 
         scenes = _extract_scenes(json_file, h_start, h_end)
         if not scenes:
-            log(f"   Hour {i}: No scenes found")
+            log(f"   Interval {i}: No scenes found")
             continue
         
         if AUDIO_ANALYSIS_AVAILABLE:
@@ -4756,7 +4839,7 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                 if dur <= 0:
                     log_error(f"   Skipping {name}: invalid duration ({dur}s)")
                     continue
-                log(f"   Hour {i}, scene {idx}: {s:0.1f}s-{e:0.1f}s ({dur:0.1f}s)")
+                log(f"   Interval {i}, scene {idx}: {s:0.1f}s-{e:0.1f}s ({dur:0.1f}s)")
 
                 portrait = env("PORTRAIT_CLIPS", "true").lower() == "true"
                 vf_parts = []
@@ -4839,7 +4922,7 @@ def phase_clips(video, json_file, duration, num_hours, script_id_map=None):
                             }
                             virality = calculate_virality_score(clip_features, learned_params=_LEARNING_OPTIMIZED_PARAMS)
                             if script_id_map:
-                                linked_script_id = script_id_map.get(i)
+                                linked_script_id = script_id_map.get(slot)
                             else:
                                 linked_script_id = None
 
@@ -5054,30 +5137,46 @@ def run_pipeline(skip=None):
                     log(f"Context extracted: {len(final.get('characters', []))} chars, {len(final.get('relationships', []))} rels")
         except Exception as e:
             log(f"Warning: Could not extract context: {e}")
-    
-    num_hours = max(1, duration // 3600 + (1 if duration % 3600 > 1800 else 0))
-    log(f"Video: {duration}s = {num_hours} hour(s)")
+
+    interval = 1800
+    max_shorts = max(1, duration // interval + (1 if duration % interval > interval // 2 else 0))
+    num_shorts = int(env("NUM_SHORTS", "0"))
+    if num_shorts <= 0:
+        num_shorts = max_shorts
+    num_shorts = min(num_shorts, max_shorts)
+
+    selected = []
+    if json_file:
+        selected = _select_best_intervals(json_file, duration, num_shorts)
+        log(f"Selected {len(selected)} intervals from {max_shorts} possible")
+        for s in selected:
+            log(f"  Interval {s['index']+1}: {s['start']//60}-{s['end']//60}min (score: {s['score']:.1f})")
+    else:
+        selected = [{"index": i, "start": i * interval, "end": min((i+1) * interval, duration), "score": 0}
+                    for i in range(num_shorts)]
+
+    log(f"Video: {duration}s = {max_shorts} interval(s), generating {len(selected)} short(s)")
 
     if 4 not in skip and json_file:
-        phase_scripts(json_file, duration, num_hours, video=video)
+        phase_scripts(json_file, duration, selected, video=video)
         if check_stop(): return
     elif 4 not in skip:
         log_error("No transcript for script generation")
 
     if 5 not in skip and json_file:
-        phase_clips(video, json_file, duration, num_hours, script_id_map=get_script_id_map())
+        phase_clips(video, json_file, duration, selected, script_id_map=get_script_id_map())
         if check_stop(): return
     elif 5 not in skip:
         log_error("No transcript for clip generation")
 
     if 6 not in skip:
         from workflows.pipeline.phase_tts import phase_tts
-        phase_tts(duration, num_hours, video=video)
+        phase_tts(duration, len(selected), video=video)
         if check_stop(): return
 
     if 7 not in skip:
         from workflows.pipeline.phase_assemble import phase_assemble
-        phase_assemble(duration, num_hours, video=video)
+        phase_assemble(duration, len(selected), video=video)
         if check_stop(): return
 
     log("Pipeline Complete!")

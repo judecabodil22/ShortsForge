@@ -602,18 +602,54 @@ def get_cross_platform_stats() -> Dict:
     except Exception:
         pass
     
+    # Get scripts count and learnings before closing connection
+    total_scripts = 0
+    try:
+        cursor.execute("SELECT COUNT(*) as total_scripts FROM scripts")
+        total_scripts = cursor.fetchone()['total_scripts']
+    except Exception:
+        pass
+    
+    learnings_count = 0
+    try:
+        learnings = get_learnings()
+        learnings_count = len(learnings) if learnings else 0
+    except Exception:
+        pass
+    
     conn.close()
+    
+    # Calculate combined totals
+    yt_total = yt_row['total_videos'] if yt_row else 0
+    tt_total = tt_stats.get('total_videos', 0)
+    combined_total_videos = yt_total + tt_total
+    
+    yt_avg_views = float(yt_row['avg_views'] or 0) if yt_row else 0
+    tt_avg_views = tt_stats.get('avg_views', 0)
+    combined_avg_views = round((yt_avg_views * yt_total + tt_avg_views * tt_total) / max(combined_total_videos, 1), 1)
+    
+    yt_avg_engagement = float(yt_row['avg_engagement'] or 0) if yt_row else 0
+    tt_avg_engagement = tt_stats.get('avg_engagement', 0)
+    combined_avg_engagement = round((yt_avg_engagement * yt_total + tt_avg_engagement * tt_total) / max(combined_total_videos, 1), 2)
     
     return {
         'youtube': {
-            'total_videos': yt_row['total_videos'] if yt_row else 0,
-            'avg_views': round(yt_row['avg_views'] or 0, 1),
-            'avg_engagement': round(yt_row['avg_engagement'] or 0, 2),
-            'avg_performance': round(yt_row['avg_performance'] or 0, 1),
+            'total_videos': yt_total,
+            'avg_views': round(yt_avg_views, 1),
+            'avg_engagement': round(yt_avg_engagement, 2),
+            'avg_performance': round(float(yt_row['avg_performance'] or 0) if yt_row else 0, 1),
             'content_types': yt_content,
         },
         'tiktok': tt_stats,
         'tiktok_games': tt_games,
+        'combined': {
+            'total_videos': combined_total_videos,
+            'total_scripts': total_scripts,
+            'avg_views': combined_avg_views,
+            'avg_engagement': combined_avg_engagement,
+            'sample_count': combined_total_videos,
+            'learnings_count': learnings_count,
+        },
     }
 
 

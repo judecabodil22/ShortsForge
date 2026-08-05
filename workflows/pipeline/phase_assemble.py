@@ -1,7 +1,6 @@
 import glob, json, os, re, tempfile
 from functools import partial
 from workflows.hardware_detect import get_ffmpeg_encoding_settings
-from workflows.performance_database import get_best_clips
 
 
 TEMPLATES = {
@@ -425,58 +424,26 @@ def phase_assemble(duration, num_hours, video=None):
                     c['log'](f"   Whisper SRT shift failed: {e}")
                     shifted_srt = None
 
-        clip_order = os.environ.get("CLIP_ORDER", "best")
         hour_clips = sorted(
             glob.glob(os.path.join(c['SHORTS_DIR'], f"{video_basename}-Short{padded}_*.mp4")),
             key=lambda x: int(re.search(r'_(\d+)\.mp4$', os.path.basename(x)).group(1))
             if re.search(r'_(\d+)\.mp4$', os.path.basename(x)) else 0,
         )
         if not hour_clips:
-            c['log_error'](f"   {padded}: no clips found for this hour, skipping")
+            c['log_error'](f"   {padded}: no clips found for this interval, skipping")
             continue
-        
-        # Select the best clip based on virality score
-        if clip_order == 'best':
-            try:
-                best_clips = get_best_clips(hour_clips, limit=1)
-                if best_clips:
-                    hour_clips = best_clips
-                    c['log'](f"   Selected best clip: {os.path.basename(hour_clips[0])}")
-                else:
-                    # Fallback to first clip if no scores found
-                    hour_clips = hour_clips[:1]
-                    c['log'](f"   No clip scores found, using first clip: {os.path.basename(hour_clips[0])}")
-            except Exception as e:
-                c['log'](f"   Clip score query failed: {e}, using first clip")
-                hour_clips = hour_clips[:1]
-        elif clip_order == 'shuffle':
-            import random
-            seed = hash(video_basename) + i
-            random.seed(seed)
-            random.shuffle(hour_clips)
-            c['log'](f"   Clips shuffled (seed={seed})")
 
         clips_dur = sum(_get_audio_duration(clip) for clip in hour_clips)
         if clips_dur <= 0:
             c['log_error'](f"   {padded}: could not determine clip durations, skipping")
             continue
 
-        # For best clip selection, use single clip (shorts are 1-2 min)
-        # For shuffle/all mode, repeat clips to fill target duration
+        # Use all clips in quality order (clips are already sorted by score from _extract_scenes)
         concat_lines = []
-        if clip_order == 'best':
-            # Single best clip - no looping needed
-            for clip in hour_clips:
-                escaped = clip.replace("'", "'\\''")
-                concat_lines.append(f"file '{escaped}'\n")
-            c['log'](f"   Using single best clip ({clips_dur:.1f}s)")
-        else:
-            # Loop clips to fill target duration
-            repeats = max(1, int(target / clips_dur) + 1)
-            for _ in range(repeats):
-                for clip in hour_clips:
-                    escaped = clip.replace("'", "'\\''")
-                    concat_lines.append(f"file '{escaped}'\n")
+        for clip in hour_clips:
+            escaped = clip.replace("'", "'\\''")
+            concat_lines.append(f"file '{escaped}'\n")
+        c['log'](f"   Using {len(hour_clips)} clips ({clips_dur:.1f}s total)")
 
         concat_txt = os.path.join(assembly_dir, f"concat_{padded}.txt")
         with open(concat_txt, 'w') as f:
