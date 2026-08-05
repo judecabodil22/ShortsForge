@@ -4558,6 +4558,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                         description=script_metadata.get("description", ""),
                         hashtags=",".join(script_metadata.get("hashtags", [])),
                         tags=",".join(script_metadata.get("tags", [])),
+                        game_key=env("GAME_TITLE", ""),
                         ab_test_id=ab_test_id,
                         ab_variant=ab_variant,
                     )

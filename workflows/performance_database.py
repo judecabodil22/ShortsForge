@@ -193,6 +193,10 @@ def init_db():
         cursor.execute("ALTER TABLE scripts ADD COLUMN ab_test_id TEXT")
     if 'ab_variant' not in columns:
         cursor.execute("ALTER TABLE scripts ADD COLUMN ab_variant TEXT")
+
+    # Migrate scripts table: add game_key column for game association
+    if 'game_key' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN game_key TEXT")
     
     conn.commit()
     conn.close()
@@ -217,6 +221,7 @@ def store_script(
     description: Optional[str] = None,
     hashtags: Optional[str] = None,
     tags: Optional[str] = None,
+    game_key: Optional[str] = None,
     ab_test_id: Optional[str] = None,
     ab_variant: Optional[str] = None,
 ) -> str:
@@ -231,8 +236,8 @@ def store_script(
     script_title = title or _extract_title_from_script(script_text)
 
     cursor.execute("""
-        INSERT INTO scripts (id, video_name, title, content_type, script_text, features, variants, selected_variant, created_at, description, hashtags, tags, ab_test_id, ab_variant)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO scripts (id, video_name, title, content_type, script_text, features, variants, selected_variant, created_at, description, hashtags, tags, game_key, ab_test_id, ab_variant)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         script_id,
         video_name,
@@ -246,6 +251,7 @@ def store_script(
         description,
         hashtags,
         tags,
+        game_key,
         ab_test_id,
         ab_variant,
     ))

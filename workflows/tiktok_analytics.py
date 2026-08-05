@@ -546,7 +546,7 @@ def match_tiktok_to_clips() -> Dict[str, Any]:
     local_clips = cursor.fetchall()
 
     # Also get scripts for title matching
-    cursor.execute("SELECT id, title, video_name FROM scripts WHERE title IS NOT NULL AND title != ''")
+    cursor.execute("SELECT id, title, video_name, game_key FROM scripts WHERE title IS NOT NULL AND title != ''")
     scripts = cursor.fetchall()
 
     matches = []
@@ -571,6 +571,7 @@ def match_tiktok_to_clips() -> Dict[str, Any]:
                     'id': script['id'],
                     'title': script_title,
                     'score': score,
+                    'game_key': script['game_key'] or '',
                 }
 
         # Try matching against clips (source_file contains filename)
@@ -595,10 +596,12 @@ def match_tiktok_to_clips() -> Dict[str, Any]:
             matched_clip_id = best_match['id'] if best_match['type'] == 'clip' else None
             matched_youtube_id = best_match['id'] if best_match['type'] == 'script' else None
 
-            # Try to determine game from matched script's video_name
+            # Use game_key from matched script if available
             new_game = tt_game
-            if best_match['type'] == 'script' and tt_game == 'unknown':
-                # Look up the script to get its video_name, then try to extract game
+            if best_match['type'] == 'script' and best_match.get('game_key'):
+                new_game = best_match['game_key']
+            elif best_match['type'] == 'script' and tt_game == 'unknown':
+                # Fallback: try to extract game from video_name
                 cursor.execute("SELECT video_name FROM scripts WHERE id = ?", (best_match['id'],))
                 row = cursor.fetchone()
                 if row and row['video_name']:
