@@ -74,6 +74,7 @@ export default function Settings() {
         GAME_TITLE: config.GAME_TITLE || '',
         TTS_VOICE: config.TTS_VOICE || '',
         NUM_SHORTS: config.NUM_SHORTS || '0',
+        CLIPS_PER_INTERVAL: config.CLIPS_PER_INTERVAL || '5',
         PARENT_FRANCHISE: config.PARENT_FRANCHISE || '',
         SRT_MAX_WORDS: config.SRT_MAX_WORDS || '5',
         SRT_FONT_SIZE: config.SRT_FONT_SIZE || '22',
