@@ -27,7 +27,7 @@ const GAME_COLORS: Record<string, string> = {
   unknown: '#8884d8',
 }
 
-const VALID_TIKTOK_FILES = new Set(['Content.csv', 'Overview.csv', 'Viewers.csv', 'FollowerHistory.csv'])
+const VALID_TIKTOK_FILES = new Set(['Content.csv', 'Overview.csv', 'Viewers.csv', 'FollowerHistory.csv', 'FollowerActivity.csv', 'FollowerGender.csv', 'FollowerTopTerritories.csv'])
 
 function formatGameName(game: string): string {
   return game.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -208,7 +208,7 @@ export default function Performance() {
 
                   for (const file of files) {
                     if (!VALID_TIKTOK_FILES.has(file.name)) {
-                      toast('error', `Invalid file: ${file.name} — expected Content.csv, Overview.csv, Viewers.csv, or FollowerHistory.csv`)
+                      toast('error', `Invalid file: ${file.name} — expected a TikTok analytics CSV (Content.csv, Overview.csv, Viewers.csv, FollowerHistory.csv, FollowerActivity.csv, FollowerGender.csv, or FollowerTopTerritories.csv)`)
                       return
                     }
                   }

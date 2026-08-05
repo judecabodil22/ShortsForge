@@ -651,7 +651,7 @@ async def get_cross_platform_stats(_: bool = Depends(verify_api_key)):
         return {"error": str(e), "youtube": {}, "tiktok": {}, "tiktok_games": []}
 
 
-EXPECTED_TIKTOK_FILES = {'Content.csv', 'Overview.csv', 'Viewers.csv', 'FollowerHistory.csv'}
+EXPECTED_TIKTOK_FILES = {'Content.csv', 'Overview.csv', 'Viewers.csv', 'FollowerHistory.csv', 'FollowerActivity.csv', 'FollowerGender.csv', 'FollowerTopTerritories.csv'}
 
 
 @app.post("/api/metrics/tiktok/import")
