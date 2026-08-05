@@ -6,6 +6,7 @@ import {
   Video, Users, Download, BarChart3,
 } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import {
   getMetricsSummary, getVideoMetrics, getContentPerformance,
@@ -15,17 +16,12 @@ import {
 import { formatNumber } from '@/lib/utils'
 import { AnimatedCounter } from '@/components/ui/AnimatedCounter'
 import { useToast } from '@/contexts/ToastContext'
+import { useThemeColors } from '@/hooks/useThemeColors'
+import { gameColor, withAlpha } from '@/lib/themeColors'
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts'
-
-const GAME_COLORS: Record<string, string> = {
-  atomic_heart: '#ff6b6b',
-  banishers: '#4ecdc4',
-  genshin_impact: '#45b7d1',
-  unknown: '#8884d8',
-}
 
 const VALID_TIKTOK_FILES = new Set(['Content.csv', 'Overview.csv', 'Viewers.csv', 'FollowerHistory.csv', 'FollowerActivity.csv', 'FollowerGender.csv', 'FollowerTopTerritories.csv'])
 
@@ -41,6 +37,12 @@ export default function Performance() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const colors = useThemeColors()
+  const chartTooltip = {
+    backgroundColor: colors.card,
+    border: `1px solid ${colors.border}`,
+    borderRadius: '4px',
+  }
 
   // YouTube queries
   const { data: summary } = useQuery({
@@ -143,7 +145,7 @@ export default function Performance() {
     name: formatGameName(game),
     views: stats.total_views,
     videos: stats.video_count,
-    color: GAME_COLORS[game] || '#8884d8',
+    color: gameColor(game, colors),
   }))
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
@@ -162,18 +164,13 @@ export default function Performance() {
       }}
       className="space-y-6"
     >
-      {/* Header */}
-      <motion.div
-        variants={{ hidden: { opacity: 0, y: -20 }, show: { opacity: 1, y: 0 } }}
-        className="flex items-center justify-between"
-      >
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">PERFORMANCE</span> DASHBOARD
-          </h1>
-          <p className="text-gray-400 mt-1">Track video performance across platforms</p>
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        accentWord="PERFORMANCE"
+        title="PERFORMANCE DASHBOARD"
+        subtitle="Track video performance across platforms"
+        actions={
+          <div className="flex gap-2">
+
           {activeTab === 'tiktok' && (
             <>
               <motion.button
@@ -240,8 +237,9 @@ export default function Performance() {
             <RefreshCw className="w-4 h-4" />
             Refresh
           </motion.button>
-        </div>
-      </motion.div>
+          </div>
+        }
+      />
 
       {/* Tabs */}
       <motion.div
@@ -312,17 +310,17 @@ export default function Performance() {
                       <AreaChart data={videoData}>
                         <defs>
                           <linearGradient id="viewsGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#ff6b6b" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="#ff6b6b" stopOpacity={0} />
+                            <stop offset="5%" stopColor={colors.chart2} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={colors.chart2} stopOpacity={0} />
                           </linearGradient>
                         </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3e" />
-                        <XAxis dataKey="name" stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
-                        <YAxis stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
+                        <CartesianGrid strokeDasharray="3 3" stroke={colors.chartGrid} />
+                        <XAxis dataKey="name" stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
+                        <YAxis stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
                         <Tooltip
-                          contentStyle={{ backgroundColor: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: '8px' }}
+                          contentStyle={chartTooltip}
                         />
-                        <Area type="monotone" dataKey="views" stroke="#ff6b6b" fillOpacity={1} fill="url(#viewsGrad)" />
+                        <Area type="monotone" dataKey="views" stroke={colors.chart2} fillOpacity={1} fill="url(#viewsGrad)" />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
@@ -333,13 +331,13 @@ export default function Performance() {
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={contentData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3e" />
-                        <XAxis dataKey="name" stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
-                        <YAxis stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
+                        <CartesianGrid strokeDasharray="3 3" stroke={colors.chartGrid} />
+                        <XAxis dataKey="name" stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
+                        <YAxis stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
                         <Tooltip
-                          contentStyle={{ backgroundColor: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: '8px' }}
+                          contentStyle={chartTooltip}
                         />
-                        <Bar dataKey="score" fill="#ff6b6b" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="score" fill={colors.chart2} radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -452,25 +450,25 @@ export default function Performance() {
                   <AreaChart data={tiktokDailyData}>
                     <defs>
                       <linearGradient id="ttViewsGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#ff6b6b" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#ff6b6b" stopOpacity={0} />
+                        <stop offset="5%" stopColor={colors.chart2} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={colors.chart2} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3e" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.chartGrid} />
                     <XAxis
                       dataKey="metric_date"
-                      stroke="#666"
-                      tick={{ fill: '#666', fontSize: 10 }}
+                      stroke={colors.goldDim}
+                      tick={{ fill: colors.goldDim, fontSize: 10 }}
                       tickFormatter={(v) => v?.slice(5) || v}
                     />
-                    <YAxis stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
+                    <YAxis stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: '8px' }}
+                      contentStyle={chartTooltip}
                     />
                     <Area
                       type="monotone"
                       dataKey="video_views"
-                      stroke="#ff6b6b"
+                      stroke={colors.chart2}
                       fillOpacity={1}
                       fill="url(#ttViewsGradient)"
                       name="Views"
@@ -485,13 +483,13 @@ export default function Performance() {
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={tiktokGameChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3e" />
-                    <XAxis dataKey="name" stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
-                    <YAxis stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.chartGrid} />
+                    <XAxis dataKey="name" stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
+                    <YAxis stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: '8px' }}
+                      contentStyle={chartTooltip}
                     />
-                    <Bar dataKey="views" fill="#ff6b6b" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="views" fill={colors.chart2} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -505,28 +503,28 @@ export default function Performance() {
                 <AreaChart data={tiktokDailyData}>
                   <defs>
                     <linearGradient id="newGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#4ecdc4" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#4ecdc4" stopOpacity={0} />
+                      <stop offset="5%" stopColor={colors.chart3} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={colors.chart3} stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="returningGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#45b7d1" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#45b7d1" stopOpacity={0} />
+                      <stop offset="5%" stopColor={colors.chart1} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={colors.chart1} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3e" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={colors.chartGrid} />
                   <XAxis
                     dataKey="metric_date"
-                    stroke="#666"
-                    tick={{ fill: '#666', fontSize: 10 }}
+                    stroke={colors.goldDim}
+                    tick={{ fill: colors.goldDim, fontSize: 10 }}
                     tickFormatter={(v) => v?.slice(5) || v}
                   />
-                  <YAxis stroke="#666" tick={{ fill: '#666', fontSize: 10 }} />
+                  <YAxis stroke={colors.goldDim} tick={{ fill: colors.goldDim, fontSize: 10 }} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: '8px' }}
+                    contentStyle={chartTooltip}
                   />
                   <Legend />
-                  <Area type="monotone" dataKey="new_viewers" stackId="1" stroke="#4ecdc4" fillOpacity={1} fill="url(#newGrad)" name="New Viewers" />
-                  <Area type="monotone" dataKey="returning_viewers" stackId="1" stroke="#45b7d1" fillOpacity={1} fill="url(#returningGrad)" name="Returning Viewers" />
+                  <Area type="monotone" dataKey="new_viewers" stackId="1" stroke={colors.chart3} fillOpacity={1} fill="url(#newGrad)" name="New Viewers" />
+                  <Area type="monotone" dataKey="returning_viewers" stackId="1" stroke={colors.chart1} fillOpacity={1} fill="url(#returningGrad)" name="Returning Viewers" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -575,8 +573,8 @@ export default function Performance() {
                           <span
                             className="px-2 py-1 rounded text-xs"
                             style={{
-                              backgroundColor: `${GAME_COLORS[video.game] || '#8884d8'}20`,
-                              color: GAME_COLORS[video.game] || '#8884d8',
+                              backgroundColor: withAlpha(gameColor(video.game, colors), 0.125),
+                              color: gameColor(video.game, colors),
                             }}
                           >
                             {formatGameName(video.game || 'unknown')}

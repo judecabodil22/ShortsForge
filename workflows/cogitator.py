@@ -1523,6 +1523,8 @@ CRITICAL RESTRICTIONS:
             learned_constraints=learned_constraints_text,
             perf_context="",
             recent_titles="",
+            title_guidance="",
+            recent_description_openers="",
             lore_info="",
             transcript=transcript_text,
         )
@@ -3100,52 +3102,52 @@ SCRIPT_VARIANTS = {
     "mystery_recap": {
         "style": "Mystery Recap",
         "voice_style": "Speak with intrigue and mystery. Drop hints naturally through sentences, not mysterious fragments. Build suspense through the story flow.",
-        "instruction": """Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity in the first sentence. Tell the story chronologically while hinting at secrets. Include a mid-way transition that moves the story forward — vary the phrasing each time, never repeat the same transition. End by looping back to your opening. Target 150-300 words.""",
+        "instruction": """Write a mystery recap in complete, natural sentences. Start with a hook that creates curiosity in the first sentence. Tell the story chronologically while hinting at secrets. Include a mid-way transition that moves the story forward — vary the phrasing each time, never repeat the same transition. End by looping back to your opening. Spoken body: 150-220 words.""",
     },
     "breakdown": {
         "style": "Breakdown",
         "voice_style": "Speak confidently and authoritatively. Explain causes and effects clearly, like an expert sharing knowledge.",
-        "instruction": """Write an analytical breakdown. Start with a hook that states a surprising insight in the first sentence. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Use varied mid-script pivots — never the same transition phrase twice. End with a takeaway. Target 150-300 words.""",
+        "instruction": """Write an analytical breakdown. Start with a hook that states a surprising insight in the first sentence. Explain WHY things happened, not just WHAT. Connect cause and effect in flowing paragraphs. Use varied mid-script pivots — never the same transition phrase twice. End with a takeaway. Spoken body: 150-220 words.""",
     },
     "timeline": {
         "style": "Timeline",
         "voice_style": "Speak with urgency and forward momentum. Keep the story moving, build to the climax naturally.",
-        "instruction": """Write a chronological timeline. Hook viewers immediately with a dramatic moment or outcome. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. Vary your transitional phrases across scripts — never repeat the same pivot. End with resolution. Target 150-300 words.""",
+        "instruction": """Write a chronological timeline. Hook viewers immediately with a dramatic moment or outcome. Tell events in order from beginning to climax. Each sentence should flow naturally into the next. Build momentum through time progression. Vary your transitional phrases across scripts — never repeat the same pivot. End with resolution. Spoken body: 150-220 words.""",
     },
     "lesson": {
         "style": "Moral/Lesson",
         "voice_style": "Speak thoughtfully and reflectively. Like sharing wisdom with a friend, measured and genuine.",
-        "instruction": """Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. Use complete sentences that flow naturally. Use unique phrasing for each insight pivot — no repeated transition patterns. End with a thought-provoking question. Target 150-300 words.""",
+        "instruction": """Write a reflective lesson. Hook with a bold statement about what was learned. Explain what happened and what could have been different. Use complete sentences that flow naturally. Use unique phrasing for each insight pivot — no repeated transition patterns. End with implication, not a rhetorical question mid-body. Spoken body: 150-220 words.""",
     },
     "narrative": {
         "style": "Narrative",
         "voice_style": "Speak naturally like telling a story to a friend. Conversational, engaging, keep the flow moving.",
-        "instruction": """Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid but natural descriptions. Flow from one moment to the next. Use fresh, varied pivot phrases — never the same one twice. Loop the ending back to the hook. Target 150-300 words.""",
+        "instruction": """Write a first-person narrative as if telling a friend what happened. Hook immediately with something surprising or emotional. Use vivid but natural descriptions. Flow from one moment to the next. Use fresh, varied pivot phrases — never the same one twice. Loop the ending back to the hook. Spoken body: 150-220 words.""",
     },
     "news_report": {
         "style": "News Report",
         "voice_style": "Speak like a professional news reporter. Clear, factual, objective. Present information in order of importance.",
-        "instruction": """Write a professional news report. Lead with the key fact or breaking news in the first sentence - no introductions. Add context in flowing paragraphs. Use objective, factual language. Vary your analytical pivot phrases across scripts. End with impact. Target 150-300 words.""",
+        "instruction": """Write a professional news report. Lead with the key fact or breaking news in the first sentence - no introductions. Add context in flowing paragraphs. Use objective, factual language. Vary your analytical pivot phrases across scripts. End with impact. Spoken body: 150-220 words.""",
     },
     "documentary": {
         "style": "Documentary",
         "voice_style": "Speak like a documentary host. Informed, warm, educational. Add context naturally.",
-        "instruction": """Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context naturally through flowing paragraphs. Use fresh narrative pivots each time — no repeated phrases. End with a lasting insight. Target 150-300 words.""",
+        "instruction": """Write a documentary-style narration. Start with a hook that reveals something fascinating. Add historical or psychological context naturally through flowing paragraphs. Use fresh narrative pivots each time — no repeated phrases. End with a lasting insight. Spoken body: 150-220 words.""",
     },
     "true_crime": {
         "style": "True Crime",
         "voice_style": "Speak with investigative intensity. Build tension through the story, pause for effect naturally.",
-        "instruction": """Write a true crime story. Hook with a shocking detail or question in the first sentence. Build investigation and tension through natural sentences. Vary your tension-building transitions — never repeat the same pivot. End with revelation. Target 150-300 words.""",
+        "instruction": """Write a true crime story. Hook with a shocking detail or question in the first sentence. Build investigation and tension through natural sentences. Vary your tension-building transitions — never repeat the same pivot. End with revelation. Spoken body: 150-220 words.""",
     },
     "character_pov": {
         "style": "Character POV",
         "voice_style": "Speak as if you ARE the character. Personal, emotional, raw. First person, genuine.",
-        "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Use unique emotional pivots each time — no repeated phrasing. End with emotional payoff. Target 150-300 words.""",
+        "instruction": """Write from the main character's perspective. Hook with an immediate emotional moment or realization. Show internal thoughts and feelings in first person. Make it personal and intimate. Use unique emotional pivots each time — no repeated phrasing. End with emotional payoff. Spoken body: 150-220 words.""",
     },
     "true_story": {
         "style": "True Story",
         "voice_style": "Speak like sharing an incredible true story. Authentic, amazed, grounded. Let the facts speak for themselves.",
-        "instruction": """Write a true story narration. Hook with the most unbelievable true detail from the transcript. Let the facts carry the drama — no embellishment needed. Present events as they happened, with natural amazement at what's real. Use varied transitions between story beats. End with the real outcome that makes it all stranger than fiction. Target 150-300 words.""",
+        "instruction": """Write a true story narration. Hook with the most unbelievable true detail from the transcript. Let the facts carry the drama — no embellishment needed. Present events as they happened, with natural amazement at what's real. Use varied transitions between story beats. End with the real outcome that makes it all stranger than fiction. Spoken body: 150-220 words.""",
     },
 }
 
@@ -3383,7 +3385,8 @@ def _postprocess_script(script):
     return result.strip()
 
 
-def _build_script_prompt(variant_key, perspective, game_title, transcript, context=None, recent_titles=None):
+def _build_script_prompt(variant_key, perspective, game_title, transcript, context=None,
+                         recent_titles=None, title_guidance=None, recent_description_openers=None):
     """Build script prompt using Jinja2 templates (Phase 1) with fallback to legacy."""
     variant = SCRIPT_VARIANTS[variant_key]
     env = _get_prompt_env()
@@ -3497,7 +3500,9 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
                 perf_context=perf_context,
                 mempalace_hints=mempalace_hints,
                 learned_hooks=learned_hooks_text,
+                title_guidance=(title_guidance or "").strip(),
                 recent_titles="\n".join(recent_titles) if recent_titles else "",
+                recent_description_openers="\n".join(recent_description_openers) if recent_description_openers else "",
             )
             return prompt
         except Exception as e:
@@ -3555,17 +3560,17 @@ Perspective: {perspective}
 
 {lore_info}
 
-Target 200-250 words for the spoken script. Maximum 300 words. Every word must earn its place.
+Target 150-220 words for the spoken script. Maximum 220 words. Every word must earn its place.
 
 STYLE:
 - Write in complete, natural sentences. No fragments.
-- Narrated speech is allowed: "She told him the truth", "He revealed his plan".
-- NO direct quotes with quotation marks.
+- Never wrap dialogue in quotation marks. Prefer narrated speech: He admitted the plan was flawed.
 - NO parentheses, stage directions, or audio annotations.
 - NO markdown formatting — plain text only.
 - NO creator intros: "Hey guys", "Welcome back", "Today we are looking at".
 - NO filler transitions: "In conclusion", "To summarize".
 - Prefer active voice over passive. Short sentences (10-15 words average).
+- Do not use "you" in the spoken body (TITLE/DESCRIPTION only).
 
 FACTUAL ACCURACY:
 - NEVER invent character names, stats, dates, or game mechanics.
@@ -3574,17 +3579,19 @@ FACTUAL ACCURACY:
 
 TITLES (6-10 words):
 - Must reference a specific detail from the transcript.
-- Question marks and exclamation points are allowed.
-- Vary title structure: question, statement, contrast, etc.
+- Structures: question, statement, contrast, number, reveal.
 - Avoid "The [Noun] of [Noun]" structure.
 - No all-caps words.
+{f"[TITLE GUIDANCE]\n{title_guidance}\n" if title_guidance else ""}
+{f"[RECENT TITLES — DO NOT REPEAT]\n{chr(10).join(recent_titles)}\n" if recent_titles else ""}
+{f"[RECENT DESCRIPTION OPENERS — use a different opening verb]\n{chr(10).join(recent_description_openers)}\n" if recent_description_openers else ""}
 
 OUTPUT FORMAT:
 TITLE: [Your title]
 DESCRIPTION: [2-3 sentences summarizing hook, with hashtags at end]
 TAGS: [comma-separated keywords]
 
-[Script body starting with the hook. 200-250 words.]
+[Script body starting with the hook. 150-220 words.]
 
 Transcript:
 {transcript}"""
@@ -3708,7 +3715,8 @@ def _groq_generate(prompt, max_tokens=500, model=None, temperature=0.7, top_p=No
     
     raise RuntimeError("All Groq API keys failed")
 
-def _gemini_script(text, script_num, context=None, recent_titles=None):
+def _gemini_script(text, script_num, context=None, recent_titles=None,
+                   title_guidance=None, recent_description_openers=None):
     """Generate script using Gemini API with key rotation, context, and validation (Phase 1-2)."""
     keys = get_gemini_keys()
     if not keys:
@@ -3718,7 +3726,16 @@ def _gemini_script(text, script_num, context=None, recent_titles=None):
     game_title = env("GAME_TITLE", "")
     temperature = _get_temperature(variant_key)
     llm_params = _get_llm_params(variant_key)
-    prompt = _build_script_prompt(variant_key, perspective, game_title, text[:3000], context, recent_titles=recent_titles)
+    prompt = _build_script_prompt(
+        variant_key,
+        perspective,
+        game_title,
+        text[:3000],
+        context,
+        recent_titles=recent_titles,
+        title_guidance=title_guidance,
+        recent_description_openers=recent_description_openers,
+    )
     log(f"   Variant: {SCRIPT_VARIANTS[variant_key]['style']}, Perspective: {perspective[:50]}...")
     log(f"   Temperature: {temperature}, top_p: {llm_params['top_p']}, Context entities: {len(context.get('characters', [])) if context else 0} characters")
     body = json.dumps({
@@ -3768,6 +3785,7 @@ def _extract_hour(json_file, start, end):
 def phase_scripts(json_file, duration, selected, video=None):
     _RECENT_TITLES = load_historical_titles(limit=30)
     _USED_TITLE_STRUCTURES = []
+    _RECENT_DESC_OPENERS = []
     _TITLE_GUIDANCE = build_title_guidance(_RECENT_TITLES, _USED_TITLE_STRUCTURES, historical=_RECENT_TITLES)
     video_basename = os.path.splitext(os.path.basename(video))[0] if video else "script"
     if not json_file or not os.path.exists(json_file):
@@ -3907,11 +3925,16 @@ def phase_scripts(json_file, duration, selected, video=None):
             candidates = []
             fact_check = {"score": 1.0, "issues": []}
 
-            title_prompt_lines = []
-            if _TITLE_GUIDANCE:
-                title_prompt_lines.extend(_TITLE_GUIDANCE.splitlines())
-            title_prompt_lines.extend(_RECENT_TITLES[-20:])
-            prompt = _build_script_prompt(variant_key, perspective, env("GAME_TITLE", ""), transcript_text, relevant_ctx, recent_titles=title_prompt_lines)
+            prompt = _build_script_prompt(
+                variant_key,
+                perspective,
+                env("GAME_TITLE", ""),
+                transcript_text,
+                relevant_ctx,
+                recent_titles=_RECENT_TITLES[-20:],
+                title_guidance=_TITLE_GUIDANCE,
+                recent_description_openers=_RECENT_DESC_OPENERS[-10:],
+            )
 
             # Primary: Groq multi-variant (1 call, 2 variants)
             multi_prompt = prompt + """
@@ -3919,9 +3942,10 @@ def phase_scripts(json_file, duration, selected, video=None):
 Generate TWO complete variants of this script separated by the exact delimiter:
 =====VARIANT BREAK=====
 
-Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the same format."""
+Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the same format.
+The second variant MUST use a different title structure than the first and a different opening sentence."""
             try:
-                groq_response = _groq_generate(multi_prompt, max_tokens=1500, model=groq_model, temperature=temperature, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
+                groq_response = _groq_generate(multi_prompt, max_tokens=2500, model=groq_model, temperature=temperature, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
                 if groq_response:
                     variants = _parse_multi_variant_response(groq_response)
                     if variants:
@@ -3936,7 +3960,14 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
 
             # Fallback: Gemini (single script) if Groq produced nothing
             if not candidates:
-                gemini_script = _gemini_script(transcript_text, slot, relevant_ctx, recent_titles=_RECENT_TITLES)
+                gemini_script = _gemini_script(
+                    transcript_text,
+                    slot,
+                    relevant_ctx,
+                    recent_titles=_RECENT_TITLES[-20:],
+                    title_guidance=_TITLE_GUIDANCE,
+                    recent_description_openers=_RECENT_DESC_OPENERS[-10:],
+                )
                 if gemini_script:
                     candidates.append((gemini_script, {"source": "gemini", "model": "gemini-2.5-flash-lite", "temperature": temperature}))
                     log(f"   Gemini script generated ({len(gemini_script.split())} words)")
@@ -3967,7 +3998,7 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                     flagged_str = ", ".join(str(e) for e in flagged[:10]) if flagged else "unknown entities"
                     retry_prompt = prompt + f"\n\nCRITICAL: The previous script contained factual errors. The following were NOT found in the transcript and must NOT appear: {flagged_str}. ONLY use information from the transcript above."
                     try:
-                        retry_script = _groq_generate(retry_prompt, max_tokens=500, model=groq_model, temperature=temperature * 0.8, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
+                        retry_script = _groq_generate(retry_prompt, max_tokens=900, model=groq_model, temperature=temperature * 0.8, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
                         if retry_script:
                             retry_fact = validate_script_factuality(retry_script, validation_ctx)
                             if retry_fact["score"] > fact_check["score"]:
@@ -4019,35 +4050,34 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                 _RECENT_TITLES, _USED_TITLE_STRUCTURES, historical=_RECENT_TITLES
             )
 
-            # Word count enforcement — preserve TITLE/DESCRIPTION/TAGS, trim body at sentence boundary
-            wc = len(best_script.split())
-            if wc > 300:
-                log(f"   Script {i} exceeds 300 words ({wc}), trimming...")
-                header_end = 0
-                for prefix in ('TITLE:', 'DESCRIPTION:', 'TAGS:'):
-                    m = re.search(rf'^{prefix}.*$', best_script, re.MULTILINE)
-                    if m:
-                        header_end = max(header_end, m.end())
-                header = best_script[:header_end].strip()
-                body = best_script[header_end:].strip()
-                if body:
-                    body_words = body.split()
-                    max_words = 280
-                    if len(body_words) > max_words:
-                        trimmed = ' '.join(body_words[:max_words])
-                        # Find last sentence boundary before max_words
-                        for sep in ('. ', '? ', '! ', '.\n', '?\n', '!\n'):
-                            idx = trimmed.rfind(sep, 0, len(trimmed))
-                            if idx > max_words * 4:
-                                trimmed = trimmed[:idx + len(sep.rstrip())]
-                                break
-                        best_script = header + '\n\n' + trimmed
-                    log(f"   Trimmed to {len(best_script.split())} words")
+            # Word count enforcement — spoken BODY only (TITLE/DESCRIPTION/TAGS excluded)
+            header_end = 0
+            for prefix in ('TITLE:', 'DESCRIPTION:', 'TAGS:'):
+                m = re.search(rf'^{prefix}.*$', best_script, re.MULTILINE)
+                if m:
+                    header_end = max(header_end, m.end())
+            header = best_script[:header_end].strip()
+            body = best_script[header_end:].strip()
+            body_wc = len(body.split()) if body else 0
+            if body_wc > 220:
+                log(f"   Script {i} body exceeds 220 words ({body_wc}), trimming...")
+                max_words = 210
+                body_words = body.split()
+                if len(body_words) > max_words:
+                    trimmed = ' '.join(body_words[:max_words])
+                    for sep in ('. ', '? ', '! ', '.\n', '?\n', '!\n'):
+                        idx = trimmed.rfind(sep, 0, len(trimmed))
+                        if idx > max_words * 4:
+                            trimmed = trimmed[:idx + len(sep.rstrip())]
+                            break
+                    body = trimmed
+                    best_script = header + '\n\n' + body
+                log(f"   Trimmed body to {len(body.split())} words")
 
             with open(out, "w") as f:
                 f.write(best_script)
-            wc = len(best_script.split())
-            log(f"   Script {i}: {wc} words (source: {best_metadata.get('source', 'unknown')})")
+            body_wc = len((best_script[header_end:].strip() if header_end else best_script).split())
+            log(f"   Script {i}: ~{body_wc} body words (source: {best_metadata.get('source', 'unknown')})")
             scripts_generated += 1
             
             # Extract title for DB storage and validation
@@ -4064,11 +4094,12 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                         with open(out, "w") as f:
                             f.write(best_script)
                         break
-            else:
-                script_title = title_match.group(1)
+            # Re-parse title after possible recovery and track for variety
+            title_match = re.search(r'^TITLE:\s*(.+)$', best_script, re.MULTILINE)
+            if title_match:
+                script_title = title_match.group(1).strip()
                 log(f"   Script title: {script_title}")
-                normalized = normalize_title(script_title)
-                _RECENT_TITLES.append(normalized)
+                _RECENT_TITLES.append(normalize_title(script_title))
 
             # ── Metadata extraction (title, description, hashtags, tags) ──
             script_metadata = {"title": "", "description": "", "hashtags": [], "tags": [], "variant": variant_key}
@@ -4081,6 +4112,11 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                 clean_desc = re.sub(r'#\w+\s*', '', desc_text).strip()
                 script_metadata["description"] = clean_desc
                 script_metadata["hashtags"] = hashtags
+                # Track opening verb/phrase for description variety
+                opener = clean_desc.split()[:3]
+                if opener:
+                    _RECENT_DESC_OPENERS.append(" ".join(opener).lower())
+                    _RECENT_DESC_OPENERS[:] = _RECENT_DESC_OPENERS[-20:]
             tags_match = re.search(r'^TAGS:\s*(.+)$', best_script, re.MULTILINE)
             if tags_match:
                 raw_tags = tags_match.group(1).strip()
@@ -4163,10 +4199,10 @@ Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the 
                 except Exception as perf_err:
                     log(f"Performance DB: Failed to store script - {perf_err}")
             set_status(f"Phase 4: Script {slot}/{num_hours} generated")
-            notify(f"Script {slot}/{num_hours} generated ({wc} words)")
+            notify(f"Script {slot}/{num_hours} generated ({body_wc} body words)")
 
             # Update context with script summary (Phase 4)
-            if best_script and wc > 50:
+            if best_script and body_wc > 50:
                 summary = f"Script {i}: {best_script[:100]}..."
                 _cs_update_context({"characters": [], "locations": [], "key_terms": [], "relationships": []}, f"script_{padded}", summary)
         except Exception as e:

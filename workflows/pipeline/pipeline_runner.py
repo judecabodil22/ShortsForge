@@ -273,8 +273,10 @@ def run_pipeline(skip=None):
                 f"resuming from phase {max(completed) + 1 if completed else 1}"
             )
         else:
-            skip = skip | completed
-            c["log"](f"Checkpoint merged: skipping phases {sorted(skip)}")
+            # Explicit -phase request: never skip those phases even if checkpointed
+            requested = set(range(1, 8)) - skip
+            skip = (skip | completed) - requested
+            c["log"](f"Checkpoint merged: skipping phases {sorted(skip)} (requested {sorted(requested)} kept)")
 
     json_file = None
     if 2 not in skip:

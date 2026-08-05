@@ -28,3 +28,49 @@ export const stagger = {
     show: { opacity: 1, y: 0 },
   } as Variants,
 }
+
+export const staggerFast = {
+  container: {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: { staggerChildren: 0.04, delayChildren: 0.05 },
+    },
+  } as Variants,
+  item: {
+    hidden: { opacity: 0, y: 10 },
+    show: { opacity: 1, y: 0 },
+  } as Variants,
+}
+
+export const fadeUp: Variants = {
+  hidden: { opacity: 0, y: 14 },
+  show: { opacity: 1, y: 0 },
+}
+
+/** Theme-aware gold glow (uses CSS vars so Chaos/Ork/Eldar glow in-faction). */
+export const hoverGlow = {
+  scale: 1.03,
+  boxShadow: '0 0 20px rgb(var(--40k-gold-rgb) / 0.35)',
+}
+
+export const pressScale = { scale: 0.97 }
+
+const reducedOpacityOnly: Variants = {
+  hidden: { opacity: 0 },
+  show: { opacity: 1 },
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+}
+
+/** Collapse motion to opacity-only when prefers-reduced-motion is on. */
+export function motionSafe(variants: Variants, reduced: boolean | null): Variants {
+  if (reduced) return reducedOpacityOnly
+  return variants
+}
+
+export function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}

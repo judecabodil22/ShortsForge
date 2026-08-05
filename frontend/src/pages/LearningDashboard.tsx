@@ -3,11 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Brain, TrendingUp, BarChart3, TestTube, CheckCircle, Clock, PieChart as PieChartIcon, Video } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { getLearningDashboard, getActiveABTests, getTikTokLearningSignals, getCurrentABTest, createABTest } from '@/lib/api'
 import { stagger, slideLeft } from '@/lib/animations'
 import { formatNumber } from '@/lib/utils'
 import { useToast } from '@/contexts/ToastContext'
+import { useThemeColors } from '@/hooks/useThemeColors'
 import {
   ResponsiveContainer,
   PieChart,
@@ -17,8 +19,6 @@ import {
   Tooltip,
 } from 'recharts'
 
-const EMOTION_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE']
-
 function formatContentType(name: string): string {
   return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
@@ -26,6 +26,8 @@ function formatContentType(name: string): string {
 export default function LearningDashboard() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const colors = useThemeColors()
+  const chartPalette = [colors.chart1, colors.chart2, colors.chart3, colors.goldBright, colors.goldDim, colors.bronze, colors.crimsonBright]
   const [abName, setAbName] = useState('Hook Style Test')
   const [abType, setAbType] = useState('hook')
 
@@ -76,12 +78,11 @@ export default function LearningDashboard() {
         show: { opacity: 1, transition: { staggerChildren: 0.1 } }
       }}
     >
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-display font-bold text-white">Learning Dashboard</h1>
-        <div className="text-sm text-gray-400">
-          Self-learning from your own YouTube Shorts performance
-        </div>
-      </div>
+      <PageHeader
+        accentWord="LEARNING"
+        title="LEARNING DASHBOARD"
+        subtitle="Self-learning from your own YouTube Shorts performance"
+      />
 
       {/* Stats Overview */}
       <motion.div
@@ -329,12 +330,12 @@ export default function LearningDashboard() {
                     cx="50%"
                     cy="50%"
                     outerRadius={80}
-                    fill="#8884d8"
+                    fill={colors.chart1}
                     dataKey="value"
                     label={({ name, percent }: any) => `${formatContentType(name)}: ${(percent * 100).toFixed(0)}%`}
                   >
                     {Object.entries(dashboard.content_effectiveness).map(([_, __], i) => (
-                      <Cell key={`cell-${i}`} fill={EMOTION_COLORS[i % EMOTION_COLORS.length]} />
+                      <Cell key={`cell-${i}`} fill={chartPalette[i % chartPalette.length]} />
                     ))}
                   </Pie>
                   <Tooltip />

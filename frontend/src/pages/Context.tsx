@@ -3,8 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Search, Users, MapPin, BookOpen, Link2, Pencil, Trash2, X, Save, Gamepad2, Database, Layers, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { getGames, getGameContext, updateContextItem, deleteContextItem, clearContext, createGameContext, getStatus } from '@/lib/api'
-import { stagger, slideLeft } from '@/lib/animations'
+import { stagger, pressScale } from '@/lib/animations'
 import { useToast } from '@/contexts/ToastContext'
 
 const TYPE_CONFIG = {
@@ -242,19 +243,17 @@ export default function Context() {
 
   return (
     <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
-      <motion.div variants={slideLeft} className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">CONTEXT</span> EDITOR
-          </h1>
-          <p className="text-gray-400 mt-1">
-            {selectedFranchiseInfo?.is_series 
-              ? `Franchise context for ${selectedFranchiseInfo.display_name}`
-              : 'Manage game context entities'}
-          </p>
-        </div>
+      <PageHeader
+        accentWord="CONTEXT"
+        title="CONTEXT EDITOR"
+        subtitle={
+          selectedFranchiseInfo?.is_series
+            ? `Franchise context for ${selectedFranchiseInfo.display_name}`
+            : 'Manage game context entities'
+        }
+        actions={
+          <div className="flex gap-3">
 
-        <div className="flex gap-3">
           <select
             value={selectedFranchise}
             onChange={(e) => setSelectedFranchise(e.target.value)}
@@ -272,8 +271,8 @@ export default function Context() {
           
           {selectedFranchise && (
             <motion.button 
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+              whileHover={{ scale: 1.03 }}
+              whileTap={pressScale}
               className="cyber-button flex items-center gap-2 text-40k-red-bright border-40k-red-bright/50"
               disabled={clearMutation.isPending}
               onClick={() => {
@@ -289,16 +288,17 @@ export default function Context() {
           )}
           
           <motion.button 
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            whileHover={{ scale: 1.03 }}
+            whileTap={pressScale}
             className="cyber-button flex items-center gap-2"
             onClick={() => setShowCreateModal(true)}
           >
             <Plus className="w-4 h-4" />
             New Franchise
           </motion.button>
-        </div>
-      </motion.div>
+          </div>
+        }
+      />
 
       {/* Franchise Info Banner */}
       {selectedFranchiseInfo?.is_series && selectedFranchiseInfo.children?.length > 0 && (
@@ -385,8 +385,9 @@ export default function Context() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.02 }}
+                  whileTap={pressScale}
                 >
-                  <Card className="hover:border-40k-gold/30 transition-all cursor-pointer">
+                  <Card notch hoverable className="hover:border-40k-gold/30 transition-all cursor-pointer">
                     <div className="flex items-start gap-3">
                       <div className={`w-10 h-10 rounded-lg ${config.bg} flex items-center justify-center ${config.color}`}>
                         <Icon className="w-5 h-5" />
@@ -395,9 +396,9 @@ export default function Context() {
                         <h4 className="font-medium text-white truncate flex items-center gap-1.5">
                           {item.name}
                           {item.verified === true ? (
-                            <ShieldCheck className="w-3.5 h-3.5 text-green-400 shrink-0" aria-label="Verified" />
+                            <ShieldCheck className="w-3.5 h-3.5 text-40k-gold shrink-0" aria-label="Verified" />
                           ) : (
-                            <span className="inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-yellow-400 border border-yellow-400/30 rounded shrink-0">
+                            <span className="inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-40k-gold-dim border border-40k-gold/30 rounded shrink-0">
                               Unconfirmed
                             </span>
                           )}

@@ -70,7 +70,7 @@ export default function Construction({ status }: Props) {
                     className="absolute inset-0"
                     animate={{ opacity: [0, 1, 0] }}
                     transition={{ duration: 1.5, repeat: Infinity }}
-                    style={{ background: 'linear-gradient(to top, rgba(201,162,39,0.3), transparent)' }}
+                    style={{ background: 'linear-gradient(to top, rgb(var(--40k-gold-rgb) / 0.3), transparent)' }}
                   />
                 )}
                 {(isBuilt || isCurrent) && (

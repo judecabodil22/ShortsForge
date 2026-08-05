@@ -303,8 +303,8 @@ PIPELINE_LOG = os.path.join(_SF_DIR, "pipeline.log")
 STATUS_FILE = os.path.join(_SF_DIR, "pipeline_status")
 PENDING_DOWNLOAD_FILE = os.path.join(_SF_DIR, "pending_download.txt")
 
-def run_pipeline_async(source: str = "youtube", video_url: str = ""):
-    """Run pipeline in background thread"""
+def run_pipeline_async(source: str = "youtube", video_url: str = "", phases=None):
+    """Run pipeline in background thread. Optional phases e.g. [7] → -phase 7."""
     global pipeline_process
     
     # Clear previous log
@@ -321,7 +321,6 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
     except OSError:
         pass
     
-    # Write pending download URL if provided
     phase_args = []
     if phases:
         phase_str = ",".join(str(int(p)) for p in phases if str(p).isdigit() or isinstance(p, int))
@@ -332,10 +331,16 @@ def run_pipeline_async(source: str = "youtube", video_url: str = ""):
         with open(PENDING_DOWNLOAD_FILE, "w") as f:
             f.write(video_url.strip())
         cmd = [sys.executable, "workflows/cogitator.py", "run"] + phase_args
-        update_pipeline_status(message="Downloading from URL...")
-    elif source == "local":
+        update_pipeline_status(
+            message="Downloading from URL..." if not phase_args else f"Running phases {phase_args[1]}..."
+        )
+    elif source == "local" and not phase_args:
+        # Full local batch (multi-file); single-phase uses run -phase like YouTube
         cmd = [sys.executable, "workflows/cogitator.py", "run_local", "media"]
         update_pipeline_status(message="Processing local media...")
+    elif source == "local" and phase_args:
+        cmd = [sys.executable, "workflows/cogitator.py", "run"] + phase_args
+        update_pipeline_status(message=f"Running phases {phase_args[1]} (local media)...")
     else:
         cmd = [sys.executable, "workflows/cogitator.py", "run"] + phase_args
         update_pipeline_status(message="Downloading from YouTube..." if not phase_args else f"Running phases {phase_args[1]}...")

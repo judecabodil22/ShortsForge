@@ -1,13 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
-import { Brain, Trash2, RefreshCw } from 'lucide-react'
-import { Card } from '@/components/ui/Card'
+import { motion, useReducedMotion } from 'framer-motion'
+import { Brain, Trash2, RefreshCw, Database, Layers } from 'lucide-react'
+import { Card, StatCard } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
+import { SectionHeader } from '@/components/ui/SectionHeader'
 import { getMemPalaceStatus, clearMemPalace, getStatus } from '@/lib/api'
 import { useToast } from '@/contexts/ToastContext'
+import { stagger, motionSafe, fadeUp } from '@/lib/animations'
 
 export default function MemPalacePage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const reduced = useReducedMotion()
 
   const { data: status, isLoading, refetch } = useQuery({
     queryKey: ['mempalace-status'],
@@ -32,73 +36,91 @@ export default function MemPalacePage() {
   const gameEntries = Object.entries(games) as [string, any][]
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">MEM</span>PALACE
-          </h1>
-          <p className="text-gray-400 mt-1">Persistent game memory (ChromaDB)</p>
-        </div>
-        <button className="cyber-button flex items-center gap-2" onClick={() => refetch()}>
-          <RefreshCw className="w-4 h-4" /> Refresh
-        </button>
-      </div>
+    <motion.div
+      variants={motionSafe(stagger.container, reduced)}
+      initial="hidden"
+      animate="show"
+      className="space-y-6"
+    >
+      <PageHeader
+        accentWord="MEM"
+        title="MEMPALACE"
+        subtitle="Persistent game memory (ChromaDB)"
+        actions={
+          <button type="button" className="cyber-button flex items-center gap-2" onClick={() => refetch()}>
+            <RefreshCw className="w-4 h-4" /> Refresh
+          </button>
+        }
+      />
 
-      <Card>
-        <div className="flex items-center gap-3 mb-4">
-          <Brain className="w-5 h-5 text-40k-gold" />
-          <h2 className="text-lg font-display text-white">Status</h2>
-        </div>
-        {isLoading ? (
-          <p className="text-gray-400">Loading…</p>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <div className="p-3 bg-40k-dark rounded-lg">
-              <p className="text-xs text-gray-400 uppercase">Available</p>
-              <p className="text-40k-gold text-xl">{status?.available ? 'Yes' : 'No'}</p>
-            </div>
-            <div className="p-3 bg-40k-dark rounded-lg">
-              <p className="text-xs text-gray-400 uppercase">Total drawers</p>
-              <p className="text-white text-xl">{status?.total_drawers ?? 0}</p>
-            </div>
-            <div className="p-3 bg-40k-dark rounded-lg">
-              <p className="text-xs text-gray-400 uppercase">Active game</p>
-              <p className="text-white text-sm truncate">{appStatus?.game_title || '—'}</p>
-            </div>
-          </div>
-        )}
-        {status?.reason && <p className="text-red-400 text-sm mt-3">{status.reason}</p>}
-        {status?.error && <p className="text-red-400 text-sm mt-3">{status.error}</p>}
-      </Card>
+      <motion.div
+        variants={motionSafe(stagger.container, reduced)}
+        className="grid grid-cols-1 sm:grid-cols-3 gap-4"
+      >
+        <StatCard
+          label="Available"
+          value={isLoading ? '…' : status?.available ? 'Yes' : 'No'}
+          icon={<Brain className="w-5 h-5" />}
+          delay={0}
+        />
+        <StatCard
+          label="Total drawers"
+          value={isLoading ? '…' : status?.total_drawers ?? 0}
+          icon={<Layers className="w-5 h-5" />}
+          delay={0.05}
+        />
+        <StatCard
+          label="Active game"
+          value={appStatus?.game_title || '—'}
+          icon={<Database className="w-5 h-5" />}
+          delay={0.1}
+        />
+      </motion.div>
 
-      <Card>
-        <h2 className="text-lg font-display text-white mb-4">Game wings</h2>
-        {gameEntries.length === 0 ? (
-          <p className="text-gray-500 text-sm">No game memory recorded yet. Run Phase 2–4 to mine transcripts.</p>
-        ) : (
-          <div className="space-y-2">
-            {gameEntries.map(([game, info]) => (
-              <div key={game} className="flex items-center justify-between p-3 bg-40k-dark rounded-lg">
-                <div>
-                  <p className="text-white font-medium">{game}</p>
-                  <p className="text-xs text-gray-400">
-                    {typeof info === 'object' ? JSON.stringify(info) : String(info)}
-                  </p>
-                </div>
-                <button
-                  className="cyber-button px-3 py-1 text-xs flex items-center gap-1 text-red-300"
-                  onClick={() => {
-                    if (confirm(`Clear MemPalace memory for ${game}?`)) clearMutation.mutate(game)
-                  }}
+      {(status?.reason || status?.error) && (
+        <Card accent="crimson" notch>
+          {status?.reason && <p className="text-40k-crimson-bright text-sm">{status.reason}</p>}
+          {status?.error && <p className="text-40k-crimson-bright text-sm mt-1">{status.error}</p>}
+        </Card>
+      )}
+
+      <motion.div variants={motionSafe(fadeUp, reduced)}>
+        <Card accent notch>
+          <SectionHeader title="Game wings" subtitle="Memory partitioned by game" icon={<Brain className="w-4 h-4" />} terminal />
+          {gameEntries.length === 0 ? (
+            <p className="text-stone-500 text-sm">No game memory recorded yet. Run Phase 2–4 to mine transcripts.</p>
+          ) : (
+            <div className="space-y-2 mt-2">
+              {gameEntries.map(([game, info], i) => (
+                <motion.div
+                  key={game}
+                  variants={motionSafe(fadeUp, reduced)}
+                  initial="hidden"
+                  animate="show"
+                  transition={{ delay: i * 0.04 }}
+                  className="flex items-center justify-between p-3 bg-40k-dark border border-40k-border corner-notch hover:border-40k-gold/40 transition-colors"
                 >
-                  <Trash2 className="w-3 h-3" /> Clear
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
+                  <div>
+                    <p className="text-white font-medium font-display tracking-wide">{game}</p>
+                    <p className="text-xs text-stone-500 font-mono mt-0.5">
+                      {typeof info === 'object' ? JSON.stringify(info) : String(info)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="cyber-button px-3 py-1 text-xs flex items-center gap-1 text-40k-crimson-bright border-40k-crimson/40"
+                    onClick={() => {
+                      if (confirm(`Clear MemPalace memory for ${game}?`)) clearMutation.mutate(game)
+                    }}
+                  >
+                    <Trash2 className="w-3 h-3" /> Clear
+                  </button>
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </motion.div>
     </motion.div>
   )
 }

@@ -8,7 +8,7 @@ interface CardProps extends HTMLMotionProps<'div'> {
   notch?: boolean
 }
 
-export function Card({ className, variant = 'default', hoverable = false, accent, notch = false, children, ...props }: CardProps) {
+export function Card({ className, variant = 'default', hoverable = false, accent, notch = true, children, ...props }: CardProps) {
   const variantClasses = {
     default: '',
     'glow-gold':

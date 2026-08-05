@@ -50,11 +50,11 @@ export function saveGraphSettings(settings: GraphSettings): void {
   }
 }
 
-export const THEME_OPTIONS: { value: VisualTheme; label: string; icon: string }[] = [
-  { value: 'starchart', label: 'Star Chart', icon: '⭐' },
-  { value: 'brain', label: 'Brain Neurons', icon: '🧠' },
-  { value: 'circuit', label: 'Digital Circuits', icon: '⚡' },
-  { value: 'hologram', label: 'Hologram', icon: '🔮' },
-  { value: 'code', label: 'Code Matrix', icon: '💻' },
-  { value: 'world', label: 'World Map', icon: '🌍' },
+export const THEME_OPTIONS: { value: VisualTheme; label: string }[] = [
+  { value: 'starchart', label: 'Star Chart' },
+  { value: 'brain', label: 'Brain Neurons' },
+  { value: 'circuit', label: 'Digital Circuits' },
+  { value: 'hologram', label: 'Hologram' },
+  { value: 'code', label: 'Code Matrix' },
+  { value: 'world', label: 'World Map' },
 ]

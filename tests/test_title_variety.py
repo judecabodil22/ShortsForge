@@ -28,3 +28,18 @@ def test_structure_rotation():
     assert detect_structure("What Made Cal Impossible?") == "question"
     preferred = next_preferred_structure(["question", "question", "statement"])
     assert preferred in ("contrast", "number", "reveal", "statement")
+
+
+def test_title_guidance_is_structure_only():
+    from workflows.title_variety import build_title_guidance
+
+    text = build_title_guidance(
+        ["old title one", "old title two"],
+        ["question"],
+        historical=["hist title"],
+    )
+    assert "prefer a" in text.lower()
+    assert "question" in text or "statement" in text or "contrast" in text
+    # Ban list must not live in TITLE GUIDANCE (belongs in RECENT TITLES block)
+    assert "old title one" not in text
+    assert "DO NOT REPEAT" not in text

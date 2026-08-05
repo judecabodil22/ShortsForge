@@ -9,9 +9,9 @@ const iconMap = {
 }
 
 const styles = {
-  success: 'bg-green-900/80 border-green-700 text-green-200',
-  error: 'bg-red-900/80 border-red-700 text-red-200',
-  info: 'bg-blue-900/80 border-blue-700 text-blue-200',
+  success: 'bg-40k-gold/10 border-40k-gold/40 text-40k-gold-bright',
+  error: 'bg-40k-crimson/20 border-40k-crimson-bright/50 text-40k-crimson-bright',
+  info: 'bg-40k-card border-40k-border text-stone-200',
 }
 
 export default function ToastContainer() {
@@ -31,13 +31,15 @@ export default function ToastContainer() {
               transition={{ duration: 0.2 }}
               onMouseEnter={() => pauseToast(t.id)}
               onMouseLeave={() => resumeToast(t.id)}
-              className={`pointer-events-auto flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg min-w-[300px] max-w-[420px] ${styles[t.type]}`}
+              className={`pointer-events-auto flex items-start gap-3 px-4 py-3 corner-notch border shadow-[var(--40k-shadow-gold)] min-w-[300px] max-w-[420px] ${styles[t.type]}`}
             >
               <Icon className="w-5 h-5 mt-0.5 flex-shrink-0" />
               <p className="text-sm flex-1">{t.message}</p>
               <button
+                type="button"
+                aria-label="Dismiss notification"
                 onClick={() => removeToast(t.id)}
-                className="text-white/60 hover:text-white transition-colors flex-shrink-0"
+                className="text-stone-400 hover:text-40k-gold transition-colors flex-shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>

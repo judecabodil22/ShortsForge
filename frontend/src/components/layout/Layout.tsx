@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import {
   LayoutDashboard,
   Network,
@@ -13,12 +13,15 @@ import {
   FileEdit,
   Brain,
   Castle,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useTheme } from '@/contexts/ThemeContext'
 import { springGentle } from '@/lib/animations'
 import { APP_VERSION } from '@/lib/utils'
 import CommandPalette from '@/components/ui/CommandPalette'
+import { getStatus } from '@/lib/api'
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -50,7 +53,9 @@ export default function Layout({ children }: LayoutProps) {
     return (localStorage.getItem(DENSITY_STORAGE_KEY) as Density) || 'default'
   })
   const [scanlinePos, setScanlinePos] = useState(0)
-  const { currentTheme } = useTheme()
+  const [apiOnline, setApiOnline] = useState(false)
+  const { currentTheme, atmosphere } = useTheme()
+  const reduced = useReducedMotion()
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_STORAGE_KEY, JSON.stringify(sidebarCollapsed))
@@ -62,44 +67,65 @@ export default function Layout({ children }: LayoutProps) {
   }, [density])
 
   useEffect(() => {
+    if (!atmosphere || reduced) return
     const interval = setInterval(() => {
       setScanlinePos((prev) => (prev + 1) % 100)
     }, 80)
     return () => clearInterval(interval)
+  }, [atmosphere, reduced])
+
+  useEffect(() => {
+    let cancelled = false
+    const ping = async () => {
+      try {
+        await getStatus()
+        if (!cancelled) setApiOnline(true)
+      } catch {
+        if (!cancelled) setApiOnline(false)
+      }
+    }
+    ping()
+    const interval = setInterval(ping, 15000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
   }, [])
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Animated scanline overlay */}
-      <motion.div
-        className="scanline-overlay"
-        animate={{ opacity: [0.6, 1, 0.6] }}
-        transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-      >
-        <div
-          className="absolute left-0 right-0 h-px bg-40k-gold-dim/20"
-          style={{ top: `${scanlinePos}%` }}
-        />
-      </motion.div>
+      {atmosphere && (
+        <motion.div
+          className="scanline-overlay"
+          animate={reduced ? undefined : { opacity: [0.6, 1, 0.6] }}
+          transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+        >
+          {!reduced && (
+            <div
+              className="absolute left-0 right-0 h-px bg-40k-gold-dim/20"
+              style={{ top: `${scanlinePos}%` }}
+            />
+          )}
+        </motion.div>
+      )}
 
-      {/* Ambient data-stream background */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0 data-stream-bg" />
+      {atmosphere && (
+        <div className="fixed inset-0 pointer-events-none overflow-hidden z-0 data-stream-bg" />
+      )}
 
-      {/* Sidebar */}
       <motion.aside
         initial={false}
         animate={{ width: sidebarCollapsed ? 80 : 240 }}
         transition={springGentle}
         className="flex flex-col bg-40k-dark/95 border-r border-40k-border relative z-10 backdrop-blur-sm"
       >
-        {/* Logo */}
         <motion.div
           className="flex items-center gap-3 px-4 py-5 border-b border-40k-border"
-          whileHover={{ backgroundColor: 'rgba(var(--40k-gold-rgb), 0.05)' }}
+          whileHover={{ backgroundColor: 'rgb(var(--40k-gold-rgb) / 0.05)' }}
         >
           <motion.div
             className="w-10 h-10 rounded-lg bg-40k-crimson/30 border border-40k-gold/40 flex items-center justify-center"
-            animate={{ rotate: [0, 5, -5, 0] }}
+            animate={reduced || !atmosphere ? undefined : { rotate: [0, 5, -5, 0] }}
             transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
           >
             <Zap className="w-6 h-6 text-40k-gold-bright" />
@@ -116,7 +142,6 @@ export default function Layout({ children }: LayoutProps) {
           )}
         </motion.div>
 
-        {/* Navigation */}
         <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
           {navItems.map((item, idx) => (
             <motion.div
@@ -154,7 +179,6 @@ export default function Layout({ children }: LayoutProps) {
           ))}
         </nav>
 
-        {/* Collapse Button + Density Toggle */}
         <div className="border-t border-40k-border">
           {!sidebarCollapsed && (
             <div className="px-3 py-2 border-b border-40k-border/50">
@@ -162,6 +186,7 @@ export default function Layout({ children }: LayoutProps) {
                 {(['compact', 'default'] as const).map((d) => (
                   <button
                     key={d}
+                    type="button"
                     onClick={() => setDensity(d)}
                     className={`flex-1 text-xs py-1.5 rounded-md transition-all duration-200 ${
                       density === d
@@ -176,52 +201,39 @@ export default function Layout({ children }: LayoutProps) {
             </div>
           )}
           <motion.button
+            type="button"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className="w-full p-4 text-gray-500 hover:text-40k-gold transition-colors flex items-center justify-center"
-            whileHover={{ backgroundColor: 'rgba(var(--40k-gold-rgb), 0.08)' }}
+            whileHover={{ backgroundColor: 'rgb(var(--40k-gold-rgb) / 0.08)' }}
           >
-            {sidebarCollapsed ? '→' : '←'}
+            {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
           </motion.button>
         </div>
       </motion.aside>
 
-      {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden relative z-10">
-        {/* Header */}
         <header className="flex items-center justify-between px-6 py-4 border-b border-40k-border bg-40k-dark/50 backdrop-blur-sm">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <motion.div
-                className="pulse-glow"
-              >
-                <Activity className="w-4 h-4 text-40k-gold-dim" />
-              </motion.div>
-              <span className="text-sm text-gray-400">System Online</span>
+              <div className={apiOnline ? 'pulse-glow' : ''}>
+                <Activity className={`w-4 h-4 ${apiOnline ? 'text-40k-gold-dim' : 'text-stone-600'}`} />
+              </div>
+              <span className="text-sm text-gray-400">
+                {apiOnline ? 'System Online' : 'API Offline'}
+              </span>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
             <CommandPalette />
-            <motion.div
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-40k-card border border-40k-border"
-              whileHover={{ scale: 1.03, borderColor: 'rgb(var(--40k-gold-rgb) / 0.5)' }}
-            >
-              <motion.span
-                className="w-2 h-2 rounded-full bg-40k-gold-dim"
-                animate={{ scale: [1, 1.3, 1], opacity: [0.7, 1, 0.7] }}
-                transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
-              />
-              <span className="text-xs text-gray-400">Auto-sync: Active</span>
-            </motion.div>
           </div>
         </header>
 
-        {/* Page Content */}
         <div className="flex-1 flex flex-col overflow-hidden relative bg-40k-dark/30 grid-bg">
           {children}
         </div>
 
-        {/* Footer */}
         <motion.footer
           className="px-6 py-3 border-t border-40k-border bg-40k-dark/50 backdrop-blur-sm flex items-center justify-between text-xs text-gray-500"
           initial={{ opacity: 0 }}
@@ -229,7 +241,7 @@ export default function Layout({ children }: LayoutProps) {
           transition={{ delay: 0.5 }}
         >
           <span>Cogitator v{APP_VERSION} | {currentTheme.name} Edition</span>
-          <span>Workspace: Default</span>
+          <span className="terminal-label normal-case opacity-60">{currentTheme.description}</span>
         </motion.footer>
       </main>
     </div>

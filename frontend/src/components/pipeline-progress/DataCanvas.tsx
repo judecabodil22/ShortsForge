@@ -1,6 +1,8 @@
 import { useMemo, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { type PipelineStatus, type Phase, getPhaseIndex, PHASE_LABELS, PHASES } from './types'
+import { useThemeColors } from '@/hooks/useThemeColors'
+import { themeRgb } from '@/lib/themeColors'
 
 interface Props {
   status: PipelineStatus
@@ -9,20 +11,6 @@ interface Props {
 const COLS = 16
 const ROWS = 10
 const TOTAL = COLS * ROWS
-
-const PHASE_COLORS: Record<string, string> = {
-  download: '#84cc16',
-  transcribe: '#eab308',
-  context: '#c9a227',
-  scripts: '#cd7f32',
-  clips: '#dc2626',
-  tts: '#a855f7',
-}
-
-function getPhaseColor(idx: number): string {
-  const keys = Object.keys(PHASE_COLORS)
-  return PHASE_COLORS[keys[idx]] ?? '#c9a227'
-}
 
 const CELL = 12
 const GAP = 2
@@ -37,8 +25,24 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 export default function DataCanvas({ status }: Props) {
+  const colors = useThemeColors()
+  const phaseColors = useMemo(() => {
+    const palette = [colors.chart1, colors.chart3, colors.goldBright, colors.bronze, colors.chart2, colors.crimson, colors.goldDim]
+    const map: Record<string, string> = {}
+    PHASES.forEach((p, i) => {
+      map[p] = palette[i % palette.length]
+    })
+    return map
+  }, [colors])
+
+  const getPhaseColor = (idx: number): string => {
+    const keys = Object.keys(phaseColors)
+    return phaseColors[keys[idx]] ?? colors.chart1
+  }
+
   const currentIdx = getPhaseIndex(status.current_phase)
   const progress = status.progress / 100
+  const idleBg = themeRgb('dark')
 
   const cells = useMemo(() => {
     const partition: number[] = []
@@ -77,14 +81,14 @@ export default function DataCanvas({ status }: Props) {
           className="text-xs font-mono tabular-nums"
           style={{
             color: currentIdx >= PHASES.length
-              ? '#22c55e'
+              ? colors.goldBright
               : currentIdx < 0
-                ? '#6b7280'
+                ? colors.border
                 : getPhaseColor(currentIdx),
           }}
         >
           {currentIdx >= 0 && currentIdx < PHASES.length
-            ? `${PHASE_LABELS[Object.keys(PHASE_COLORS)[currentIdx] as Phase]} ${Math.round(progress * 100)}%`
+            ? `${PHASE_LABELS[Object.keys(phaseColors)[currentIdx] as Phase]} ${Math.round(progress * 100)}%`
             : currentIdx >= PHASES.length
               ? 'Complete'
               : 'Idle'}
@@ -110,7 +114,7 @@ export default function DataCanvas({ status }: Props) {
               style={{
                 width: CELL,
                 height: CELL,
-                backgroundColor: isFilled ? baseColor : 'rgb(20, 8, 8)',
+                backgroundColor: isFilled ? baseColor : idleBg,
                 borderRadius: Math.max(1, CELL / 6),
               }}
               animate={
@@ -165,7 +169,7 @@ export default function DataCanvas({ status }: Props) {
       </div>
 
       <div className="flex items-center justify-between gap-1 text-[9px]">
-        {Object.entries(PHASE_COLORS).map(([key, color], i) => {
+        {Object.entries(phaseColors).map(([key, color], i) => {
           const phaseLabel = PHASE_LABELS[key as Phase] ?? key
           const isActive = i === currentIdx
           const isPast = i < currentIdx

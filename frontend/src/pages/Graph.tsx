@@ -4,6 +4,7 @@ import ForceGraph2D from 'react-force-graph-2d'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Network, ZoomIn, ZoomOut, Maximize2, RefreshCw, Pencil, Trash2, X, Save, Settings } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { getGames, getGraphData, getSegmentRefs, updateContextItem, deleteContextItem, getAllGamesGraph } from '@/lib/api'
 import {
   DEFAULT_GRAPH_SETTINGS,
@@ -14,29 +15,19 @@ import {
   type GraphSettings,
   type VisualTheme,
 } from '@/lib/graphSettings'
-import { stagger, slideLeft } from '@/lib/animations'
+import { stagger } from '@/lib/animations'
 import { useToast } from '@/contexts/ToastContext'
+import { useGraphNodeColors } from '@/hooks/useThemeColors'
+import { toRgba, withAlpha } from '@/lib/themeColors'
 
-const NODE_COLORS = {
-  character: '#c9a227',
-  location: '#8b7312',
-  term: '#e8c547',
-  relationship: '#b71c3a',
-  game: '#7a1029',
-}
-
-const THEME_COLORS: Record<VisualTheme, Record<string, string>> = {
-  starchart: { character: '#c9a227', location: '#8b7312', term: '#e8c547', relationship: '#b71c3a', game: '#7a1029', background: '#0a0a0c' },
+/** Distinct skin palettes for non-starchart visual themes (layout skins, not faction). */
+const SKIN_THEME_COLORS: Record<Exclude<VisualTheme, 'starchart'>, Record<string, string>> = {
   brain: { character: '#9b59b6', location: '#8e44ad', term: '#a569bd', relationship: '#e74c8c', game: '#c0392b', background: '#0a0612' },
   circuit: { character: '#00ff41', location: '#00cc33', term: '#33ff66', relationship: '#ff6600', game: '#ffcc00', background: '#0a0f0a' },
   hologram: { character: '#00ffff', location: '#00cccc', term: '#66ffff', relationship: '#ff00ff', game: '#00ffaa', background: '#001a1a' },
   code: { character: '#00ff00', location: '#00cc00', term: '#33ff33', relationship: '#ff3333', game: '#ffff00', background: '#000800' },
   world: { character: '#4a90d9', location: '#6b5b95', term: '#d4a574', relationship: '#c94c4c', game: '#2ecc71', background: '#0d0d0d' },
 }
-
-const LINK_IMPLICIT = 'rgba(183, 28, 58, 0.55)'
-const LINK_HIGHLIGHT = '#e8c547'
-const LINK_DEFAULT = 'rgba(201, 162, 39, 0.25)'
 
 interface NodeData {
   id: string
@@ -58,6 +49,7 @@ export default function Graph() {
   const containerRef = useRef<HTMLDivElement>(null)
   const fgRef = useRef<any>(null)
   const { toast } = useToast()
+  const factionColors = useGraphNodeColors()
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [selectedGame, setSelectedGame] = useState<string>('')
   const [selectedNode, setSelectedNode] = useState<NodeData | null>(null)
@@ -71,6 +63,22 @@ export default function Graph() {
   const [graphReady, setGraphReady] = useState(false)
   const initialFitKeyRef = useRef<string>('')
   const animationTimeRef = useRef(0)
+
+  const THEME_COLORS = useMemo((): Record<VisualTheme, Record<string, string>> => ({
+    starchart: { ...factionColors },
+    ...SKIN_THEME_COLORS,
+  }), [factionColors])
+
+  const NODE_COLORS = useMemo(() => {
+    const skin = graphSettings.visualTheme
+    const palette = skin === 'starchart' ? factionColors : SKIN_THEME_COLORS[skin]
+    const { background: _, ...nodes } = palette
+    return nodes as Record<string, string>
+  }, [factionColors, graphSettings.visualTheme])
+
+  const LINK_HIGHLIGHT = factionColors.term
+  const LINK_IMPLICIT = toRgba(factionColors.relationship, 0.55)
+  const LINK_DEFAULT = toRgba(factionColors.character, 0.25)
   
   const { data: games } = useQuery({
     queryKey: ['games'],
@@ -354,12 +362,12 @@ export default function Graph() {
       if (isSelected) {
         ctx.beginPath()
         ctx.arc(node.x, node.y, node.val * 2, 0, 2 * Math.PI, false)
-        ctx.fillStyle = `${color}40`
+        ctx.fillStyle = withAlpha(color, 0.25)
         ctx.fill()
       }
       ctx.beginPath()
       ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
-      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fillStyle = withAlpha(color, opacity)
       ctx.fill()
       ctx.lineWidth = isSelected ? 0.8 : 0.2
       ctx.strokeStyle = isSelected ? '#fff' : '#111'
@@ -369,8 +377,8 @@ export default function Graph() {
       // Brain neurons - gradient circles with pulse
       const pulse = Math.sin(animationTimeRef.current * 3 + node.id.charCodeAt(0)) * 0.3 + 0.7
       const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, node.val * 2)
-      gradient.addColorStop(0, isHighlight ? `${color}${Math.floor(pulse * 255).toString(16).padStart(2, '0')}` : `${color}33`)
-      gradient.addColorStop(0.7, `${color}22`)
+      gradient.addColorStop(0, isHighlight ? withAlpha(color, pulse) : withAlpha(color, 0.2))
+      gradient.addColorStop(0.7, withAlpha(color, 0.13))
       gradient.addColorStop(1, 'transparent')
       ctx.beginPath()
       ctx.arc(node.x, node.y, node.val * (isSelected ? 2.5 : 2), 0, 2 * Math.PI, false)
@@ -378,7 +386,7 @@ export default function Graph() {
       ctx.fill()
       ctx.beginPath()
       ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
-      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fillStyle = withAlpha(color, opacity)
       ctx.fill()
       if (isSelected || isHovered) {
         ctx.lineWidth = 1.5
@@ -389,7 +397,7 @@ export default function Graph() {
     else if (theme === 'circuit') {
       // Digital circuits - squares with connection dots
       const size = node.val * 1.2
-      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fillStyle = withAlpha(color, opacity)
       ctx.fillRect(node.x - size, node.y - size, size * 2, size * 2)
       ctx.strokeStyle = isSelected ? '#fff' : (isHighlight ? color : '#222')
       ctx.lineWidth = isSelected ? 2 : 1
@@ -406,7 +414,7 @@ export default function Graph() {
       const flicker = Math.sin(animationTimeRef.current * 20) * 0.1 + 0.9
       // Outer glow
       const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, node.val * 2)
-      gradient.addColorStop(0, `${color}60`)
+      gradient.addColorStop(0, withAlpha(color, 0.38))
       gradient.addColorStop(1, 'transparent')
       ctx.beginPath()
       ctx.arc(node.x, node.y, node.val * 2, 0, 2 * Math.PI, false)
@@ -415,14 +423,14 @@ export default function Graph() {
       // Main circle
       ctx.beginPath()
       ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false)
-      ctx.fillStyle = `${color}${Math.floor(opacity * flicker * 255).toString(16).padStart(2, '0')}`
+      ctx.fillStyle = withAlpha(color, opacity * flicker)
       ctx.fill()
       // Scan line
       const scanY = node.y - node.val + ((animationTimeRef.current * 50) % (node.val * 2))
       ctx.beginPath()
       ctx.moveTo(node.x - node.val, scanY)
       ctx.lineTo(node.x + node.val, scanY)
-      ctx.strokeStyle = `${color}80`
+      ctx.strokeStyle = withAlpha(color, 0.5)
       ctx.lineWidth = 1
       ctx.stroke()
       if (isSelected) {
@@ -433,7 +441,7 @@ export default function Graph() {
     }
     else if (theme === 'code') {
       // Code matrix - terminal rectangles
-      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fillStyle = withAlpha(color, opacity)
       ctx.fillRect(node.x - node.val * 1.5, node.y - node.val, node.val * 3, node.val * 2)
       ctx.strokeStyle = isSelected ? '#fff' : (isHighlight ? color : '#003300')
       ctx.lineWidth = isSelected ? 2 : 1
@@ -451,7 +459,7 @@ export default function Graph() {
       // Pin head
       ctx.beginPath()
       ctx.arc(node.x, node.y, pinSize * 0.6, 0, 2 * Math.PI, false)
-      ctx.fillStyle = `${color}${Math.floor(opacity * 255).toString(16).padStart(2, '0')}`
+      ctx.fillStyle = withAlpha(color, opacity)
       ctx.fill()
       if (isSelected || isHovered) {
         ctx.strokeStyle = '#fff'
@@ -477,13 +485,13 @@ export default function Graph() {
     const showLabel = (isSelected || (isHighlight && hoverNode))
     if (showLabel) {
       const fontSize = Math.max(8, 12 / globalScale)
-      ctx.font = `${isSelected ? 'bold ' : ''}${fontSize}px Inter, sans-serif`
+      ctx.font = `${isSelected ? 'bold ' : ''}${fontSize}px "JetBrains Mono", monospace`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillStyle = `rgba(255, 255, 255, ${isSelected ? 1 : 0.9})`
       ctx.fillText(node.label ?? '', node.x, node.y + node.val + fontSize + 2)
     }
-  }, [highlightNodes, selectedNode, hoverNode, graphSettings.visualTheme])
+  }, [highlightNodes, selectedNode, hoverNode, graphSettings.visualTheme, THEME_COLORS])
   
   const paintLink = useCallback((link: any, ctx: CanvasRenderingContext2D) => {
     if (link.source?.x == null || link.source?.y == null || link.target?.x == null || link.target?.y == null) return
@@ -507,11 +515,11 @@ export default function Graph() {
       if (isContext) {
         ctx.setLineDash([])
         ctx.lineWidth = isHighlight ? 2.5 : 1.5
-        ctx.strokeStyle = isHighlight ? LINK_HIGHLIGHT : 'rgba(201, 162, 39, 0.75)'
+        ctx.strokeStyle = isHighlight ? LINK_HIGHLIGHT : toRgba(factionColors.character, 0.75)
       } else if (isImplicit) {
         ctx.setLineDash([4, 4])
         ctx.lineWidth = isHighlight ? 1 : 0.5
-        ctx.strokeStyle = isHighlight ? LINK_IMPLICIT : 'rgba(183, 28, 58, 0.2)'
+        ctx.strokeStyle = isHighlight ? LINK_IMPLICIT : toRgba(factionColors.relationship, 0.2)
       } else if (isHighlight && highlightLinks.size > 0) {
         ctx.setLineDash([])
         ctx.lineWidth = 1.5
@@ -519,7 +527,7 @@ export default function Graph() {
       } else {
         ctx.setLineDash([])
         ctx.lineWidth = 0.5
-        ctx.strokeStyle = isHighlight ? 'rgba(201, 162, 39, 0.65)' : LINK_DEFAULT
+        ctx.strokeStyle = isHighlight ? toRgba(factionColors.character, 0.65) : LINK_DEFAULT
       }
     }
     else if (theme === 'brain') {
@@ -527,13 +535,13 @@ export default function Graph() {
       const pulse = Math.sin(animationTimeRef.current * 2 + link.source.id.charCodeAt(0)) * 0.3 + 0.7
       ctx.setLineDash([])
       ctx.lineWidth = isHighlight ? 2 : (isImplicit ? 0.5 : 1)
-      ctx.strokeStyle = isHighlight ? `${colors.character}${Math.floor(pulse * 200).toString(16).padStart(2, '0')}` : `${baseColor}40`
+      ctx.strokeStyle = isHighlight ? withAlpha(colors.character, pulse * 0.78) : withAlpha(baseColor, 0.25)
     }
     else if (theme === 'circuit') {
       // Digital circuit traces with dots
       ctx.setLineDash(isImplicit ? [3, 3] : [])
       ctx.lineWidth = isHighlight ? 1.5 : (isImplicit ? 0.5 : 0.8)
-      ctx.strokeStyle = isHighlight ? '#00ff41' : `${baseColor}66`
+      ctx.strokeStyle = isHighlight ? '#00ff41' : withAlpha(baseColor, 0.4)
       // Circuit connection dots
       if (isHighlight) {
         const midX = (link.source.x + link.target.x) / 2
@@ -547,13 +555,13 @@ export default function Graph() {
       const flicker = Math.sin(animationTimeRef.current * 10) * 0.2 + 0.8
       ctx.setLineDash([8, 4])
       ctx.lineWidth = isHighlight ? 2 : 1
-      ctx.strokeStyle = isHighlight ? `rgba(0, 255, 255, ${flicker})` : `${colors.character}44`
+      ctx.strokeStyle = isHighlight ? `rgba(0, 255, 255, ${flicker})` : withAlpha(colors.character, 0.27)
     }
     else if (theme === 'code') {
       // Matrix-style vertical lines
       ctx.setLineDash([])
       ctx.lineWidth = isHighlight ? 2.5 : 1
-      ctx.strokeStyle = isHighlight ? '#00ff00' : `${baseColor}33`
+      ctx.strokeStyle = isHighlight ? '#00ff00' : withAlpha(baseColor, 0.2)
       // Add flowing effect
       const flowPos = (animationTimeRef.current * 30) % 40
       if (isHighlight) {
@@ -569,12 +577,12 @@ export default function Graph() {
       ctx.quadraticCurveTo(midX, midY, link.target.x, link.target.y)
       ctx.setLineDash(isImplicit ? [5, 5] : [])
       ctx.lineWidth = isHighlight ? 2 : 1
-      ctx.strokeStyle = isHighlight ? colors.character : `${baseColor}44`
+      ctx.strokeStyle = isHighlight ? colors.character : withAlpha(baseColor, 0.27)
     }
 
     ctx.stroke()
     ctx.setLineDash([])
-  }, [highlightLinks, showImplicitEdges, graphSettings.visualTheme])
+  }, [highlightLinks, showImplicitEdges, graphSettings.visualTheme, THEME_COLORS, LINK_HIGHLIGHT, LINK_IMPLICIT, LINK_DEFAULT, factionColors])
 
   // Resolve the effective game key for mutations (use node's game_key so
   // deletions/updates route to the game that actually owns the item)
@@ -613,37 +621,33 @@ export default function Graph() {
 
   return (
     <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
-      <motion.div variants={slideLeft} className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">KNOWLEDGE</span> GRAPH
-          </h1>
-          <p className="text-gray-400 mt-1">
-            Nodes are entities from the Context page; solid edges are defined relationships, dashed edges are transcript co-occurrence.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <select
-            value={selectedGame}
-            onChange={(e) => setSelectedGame(e.target.value)}
-            className="cyber-input w-56"
-          >
-            <option value="">Select Franchise</option>
-            <option value="__all__">🌐 All Games</option>
-            {((games?.games || []) as any[])
-              .filter((game: any) => game.is_series)
-              .map((game: any) => (
-                <option key={game.name} value={game.name}>
-                  {game.display_name}
-                </option>
-              ))}
-          </select>
-          <button onClick={() => refetch()} className="cyber-button">
-            <RefreshCw className="w-4 h-4" />
-          </button>
-        </div>
-      </motion.div>
+      <PageHeader
+        accentWord="KNOWLEDGE"
+        title="KNOWLEDGE GRAPH"
+        subtitle="Entities from Context; solid edges = relationships, dashed = co-occurrence"
+        actions={
+          <div className="flex items-center gap-3">
+            <select
+              value={selectedGame}
+              onChange={(e) => setSelectedGame(e.target.value)}
+              className="cyber-input w-56"
+            >
+              <option value="">Select Franchise</option>
+              <option value="__all__">All Games</option>
+              {((games?.games || []) as any[])
+                .filter((game: any) => game.is_series)
+                .map((game: any) => (
+                  <option key={game.name} value={game.name}>
+                    {game.display_name}
+                  </option>
+                ))}
+            </select>
+            <button type="button" onClick={() => refetch()} className="cyber-button" aria-label="Refresh graph">
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+        }
+      />
 
       <div className="flex gap-4 flex-wrap">
         {Object.entries(NODE_COLORS).map(([type, color]) => (
@@ -725,7 +729,7 @@ export default function Graph() {
                             : 'bg-40k-dark border border-40k-border text-gray-300 hover:bg-40k-border'
                         }`}
                       >
-                        {option.icon} {option.label}
+                        {option.label}
                       </button>
                     ))}
                   </div>
@@ -847,13 +851,14 @@ export default function Graph() {
             </div>
           )}
 
-          <div ref={containerRef} className="w-full h-[600px] bg-[#09090b] rounded-lg">
+          <div ref={containerRef} className="w-full h-[600px] bg-40k-black rounded-lg border border-40k-border">
             {graphData.nodes.length > 0 && dimensions.width > 0 && (
               <ForceGraph2D
                 key={graphInstanceKey}
                 ref={fgRef}
                 width={dimensions.width}
                 height={dimensions.height}
+                backgroundColor={THEME_COLORS[graphSettings.visualTheme].background || factionColors.background}
                 graphData={graphData}
                 nodeCanvasObject={paintNode}
                 nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
@@ -935,8 +940,8 @@ export default function Graph() {
                   <div
                     className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0"
                     style={{
-                      backgroundColor: `${NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS]}20`,
-                      color: NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS]
+                      backgroundColor: withAlpha(NODE_COLORS[selectedNode.type] || factionColors.character, 0.125),
+                      color: NODE_COLORS[selectedNode.type] || factionColors.character
                     }}
                   >
                     {selectedNode.label?.[0]?.toUpperCase()}
@@ -944,7 +949,7 @@ export default function Graph() {
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-white text-lg truncate">{selectedNode.label}</p>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="px-2 py-0.5 bg-40k-dark/80 rounded text-xs capitalize" style={{ color: NODE_COLORS[selectedNode.type as keyof typeof NODE_COLORS] }}>
+                      <span className="px-2 py-0.5 bg-40k-dark/80 rounded text-xs capitalize" style={{ color: NODE_COLORS[selectedNode.type] || factionColors.character }}>
                         {selectedNode.type}
                       </span>
                       {selectedNode.category && (
@@ -1016,8 +1021,8 @@ export default function Graph() {
                             <div
                               className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
                               style={{
-                                backgroundColor: `${NODE_COLORS[neighborNode.type as keyof typeof NODE_COLORS]}40`,
-                                color: NODE_COLORS[neighborNode.type as keyof typeof NODE_COLORS]
+                                backgroundColor: withAlpha(NODE_COLORS[neighborNode.type] || factionColors.character, 0.25),
+                                color: NODE_COLORS[neighborNode.type] || factionColors.character
                               }}
                             >
                               {neighborNode.label?.[0]?.toUpperCase()}

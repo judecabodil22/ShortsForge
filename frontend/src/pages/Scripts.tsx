@@ -3,9 +3,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Search, FileText, BarChart2, Sparkles, Tag, Hash, Copy, Check, ImageOff, CheckCircle, Ban } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { getScripts, getScriptMetadata, analyzeScript, reviewScript, API_BASE } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/contexts/ToastContext'
+import { stagger, pressScale } from '@/lib/animations'
 
 export default function Scripts() {
   const { toast } = useToast()
@@ -81,17 +83,14 @@ export default function Scripts() {
       }}
       className="space-y-6"
     >
-      <motion.div variants={{ hidden: { opacity: 0, y: -20 }, show: { opacity: 1, y: 0 } }} className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">SCRIPT</span> MANAGER
-          </h1>
-          <p className="text-gray-400 mt-1">View and analyze generated scripts</p>
-        </div>
-      </motion.div>
+      <PageHeader
+        accentWord="SCRIPT"
+        title="SCRIPT MANAGER"
+        subtitle="View and analyze generated scripts"
+      />
 
       {/* Search */}
-      <motion.div variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }} className="relative">
+      <motion.div variants={stagger.item} className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
         <input
           type="text"
@@ -125,9 +124,12 @@ export default function Scripts() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   className={cn(
-                    'p-4 bg-40k-dark rounded-lg cursor-pointer transition-all hover:border-40k-gold/30 flex gap-3',
-                    selectedScript === script.id ? 'border-40k-gold' : 'border-transparent'
+                    'p-4 bg-40k-dark corner-notch cursor-pointer transition-all border hover:border-40k-gold/30 flex gap-3',
+                    selectedScript === script.id
+                      ? 'border-40k-gold/50 accent-rail-crimson shadow-[var(--40k-shadow-crimson)]'
+                      : 'border-transparent'
                   )}
+                  whileTap={pressScale}
                   onClick={() => setSelectedScript(script.id)}
                 >
                   {brokenThumbnails.has(script.id) ? (

@@ -3,12 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Square, RefreshCw, FileText, Video, Zap, Activity, FolderOpen, Settings, X, Download, ExternalLink, Wifi, WifiOff } from 'lucide-react'
 import { Card, StatCard } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { getCrossPlatformStats, getStatus, getLearningWeights, runPipeline, stopPipeline, syncMetrics, getLogs, downloadFromUrl, getStoredApiKey } from '@/lib/api'
 import { formatNumber } from '@/lib/utils'
 import { AnimatedCounter } from '@/components/ui/AnimatedCounter'
 import { useToast } from '@/contexts/ToastContext'
 import PipelineProgress from '@/components/pipeline-progress'
-import { stagger, slideLeft, springGentle } from '@/lib/animations'
+import { stagger, springGentle, hoverGlow, pressScale } from '@/lib/animations'
 import { useWebSocket } from '@/lib/websocket'
 
 function formatContentType(name: string): string {
@@ -127,54 +128,53 @@ export default function Dashboard() {
 
   return (
     <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
-      {/* Header */}
-      <motion.div variants={slideLeft} className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">DASH</span>BOARD
-          </h1>
-          <p className="text-gray-400 mt-1">System overview and quick stats</p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <motion.div
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${
-              isConnected
-                ? 'bg-40k-gold/10 border-40k-gold/30 text-40k-gold'
-                : 'bg-red-500/10 border-red-500/30 text-red-400'
-            }`}
-            animate={isConnected ? { scale: [1, 1.02, 1] } : {}}
-            transition={{ duration: 2, repeat: Infinity }}
-          >
-            {isConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-            <span className="text-xs">{isConnected ? 'Live' : 'Offline'}</span>
-          </motion.div>
-          <motion.button
-            className="cyber-button flex items-center gap-2"
-            onClick={() => setShowLogs(true)}
-            whileHover={{ scale: 1.03, boxShadow: '0 0 15px rgb(var(--40k-gold-rgb) / 0.2)' }}
-            whileTap={{ scale: 0.97 }}
-          >
-            <Settings className="w-4 h-4" />
-            Logs
-          </motion.button>
-          <motion.button
-            className="cyber-button flex items-center gap-2"
-            onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending}
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-          >
+      <PageHeader
+        accentWord="DASH"
+        title="DASHBOARD"
+        subtitle="System overview and quick stats"
+        actions={
+          <div className="flex items-center gap-3">
             <motion.div
-              animate={syncMutation.isPending ? { rotate: 360 } : {}}
-              transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+              className={`flex items-center gap-2 px-3 py-1.5 border corner-notch ${
+                isConnected
+                  ? 'bg-40k-gold/10 border-40k-gold/30 text-40k-gold'
+                  : 'bg-40k-crimson/15 border-40k-crimson-bright/40 text-40k-crimson-bright'
+              }`}
+              animate={isConnected ? { scale: [1, 1.02, 1] } : {}}
+              transition={{ duration: 2, repeat: Infinity }}
             >
-              <RefreshCw className="w-4 h-4" />
+              {isConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+              <span className="text-xs terminal-label normal-case">{isConnected ? 'Live' : 'Offline'}</span>
             </motion.div>
-            {syncMutation.isPending ? 'Syncing...' : 'Sync Metrics'}
-          </motion.button>
-        </div>
-      </motion.div>
+            <motion.button
+              type="button"
+              className="cyber-button flex items-center gap-2"
+              onClick={() => setShowLogs(true)}
+              whileHover={hoverGlow}
+              whileTap={pressScale}
+            >
+              <Settings className="w-4 h-4" />
+              Logs
+            </motion.button>
+            <motion.button
+              type="button"
+              className="cyber-button flex items-center gap-2"
+              onClick={() => syncMutation.mutate()}
+              disabled={syncMutation.isPending}
+              whileHover={hoverGlow}
+              whileTap={pressScale}
+            >
+              <motion.div
+                animate={syncMutation.isPending ? { rotate: 360 } : {}}
+                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+              >
+                <RefreshCw className="w-4 h-4" />
+              </motion.div>
+              {syncMutation.isPending ? 'Syncing...' : 'Sync Metrics'}
+            </motion.button>
+          </div>
+        }
+      />
 
       {/* Pipeline Error Banner */}
       {status?.pipeline?.error && (

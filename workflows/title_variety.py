@@ -95,16 +95,16 @@ def build_title_guidance(
     used_structures: Sequence[str],
     historical: Optional[Sequence[str]] = None,
 ) -> str:
+    """Structure-only guidance. Ban lists belong in the RECENT TITLES block."""
     preferred = next_preferred_structure(used_structures)
     lines = [
         f"TITLE STRUCTURE THIS ROUND: prefer a {preferred} title.",
+        f"Available structures: {', '.join(TITLE_STRUCTURES)}.",
         "Rotate structures across scripts — do not reuse the same pattern back-to-back.",
         "Must reference a SPECIFIC detail from THIS transcript segment.",
     ]
-    banned = list(dict.fromkeys([*recent_titles, *(historical or [])]))[:30]
-    if banned:
-        lines.append("DO NOT REPEAT or closely paraphrase these titles:")
-        lines.extend(f"- {t}" for t in banned)
+    # historical/recent_titles kept in signature for callers; bans are passed separately
+    _ = recent_titles, historical
     return "\n".join(lines)
 
 

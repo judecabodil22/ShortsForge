@@ -3,8 +3,9 @@ import { motion } from 'framer-motion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Save, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { getScriptPrompt, saveScriptPrompt } from '@/lib/api'
-import { stagger, slideLeft } from '@/lib/animations'
+import { stagger } from '@/lib/animations'
 
 export default function PromptEditor() {
   const queryClient = useQueryClient()
@@ -69,17 +70,13 @@ export default function PromptEditor() {
 
   return (
     <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
-      <motion.div variants={slideLeft} className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">PROMPT</span> EDITOR
-          </h1>
-          <p className="text-gray-400 mt-1">
-            Edit the script generation template (<code className="text-40k-gold-dim">prompts/base.j2</code>)
-          </p>
-        </div>
+      <PageHeader
+        accentWord="PROMPT"
+        title="PROMPT EDITOR"
+        subtitle="Edit the script generation template (prompts/base.j2)"
+        actions={
+          <div className="flex items-center gap-3">
 
-        <div className="flex items-center gap-3">
           <span className="text-xs text-gray-500">
             {lineCount} lines &middot; {charCount} chars
           </span>
@@ -88,7 +85,7 @@ export default function PromptEditor() {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             className={`cyber-button flex items-center gap-2 ${
-              isDirty ? 'border-40k-gold text-40k-gold' : 'text-gray-500 border-gray-700'
+              isDirty ? 'border-40k-gold text-40k-gold pulse-glow' : 'text-stone-500 border-40k-border'
             }`}
             disabled={!isDirty || saveMutation.isPending}
             onClick={handleSave}
@@ -100,8 +97,9 @@ export default function PromptEditor() {
             )}
             Save
           </motion.button>
-        </div>
-      </motion.div>
+          </div>
+        }
+      />
 
       {statusMsg && (
         <motion.div
@@ -109,8 +107,8 @@ export default function PromptEditor() {
           animate={{ opacity: 1, y: 0 }}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm ${
             statusMsg.type === 'success'
-              ? 'bg-green-900/30 text-green-400 border border-green-800'
-              : 'bg-red-900/30 text-red-400 border border-red-800'
+              ? 'bg-40k-gold/10 text-40k-gold-bright border border-40k-gold/40'
+              : 'bg-40k-crimson/20 text-40k-crimson-bright border border-40k-crimson-bright/50'
           }`}
         >
           {statusMsg.type === 'success' ? (
@@ -122,7 +120,7 @@ export default function PromptEditor() {
         </motion.div>
       )}
 
-      <Card>
+      <Card notch accent>
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-40k-gold" />
@@ -140,7 +138,7 @@ export default function PromptEditor() {
               setIsDirty(true)
               setStatusMsg(null)
             }}
-            className="w-full h-[65vh] bg-black/40 border border-40k-border rounded-lg p-4 text-sm font-mono text-gray-200 resize-none focus:outline-none focus:border-40k-gold/50 transition-colors"
+            className="w-full h-[65vh] bg-40k-black/80 border border-40k-border corner-notch p-4 text-sm font-mono text-stone-200 resize-none focus:outline-none focus:border-40k-gold/50 focus:shadow-[var(--40k-shadow-gold)] transition-colors block-cursor"
             spellCheck={false}
           />
         )}

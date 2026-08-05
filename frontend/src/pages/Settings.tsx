@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Save, Trash2, Palette, Settings as SettingsIcon, Cpu, Wrench, Subtitles, Shuffle, Mic, Gauge } from 'lucide-react'
+import { Save, Trash2, Palette, Settings as SettingsIcon, Cpu, Wrench, Subtitles, Shuffle, Mic, Gauge, Sparkles } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { useTheme, themes } from '@/contexts/ThemeContext'
 import { useToast } from '@/contexts/ToastContext'
 import { getConfig, updateConfig, cleanupFiles, getGames, getTtsVoices } from '@/lib/api'
-import { stagger, slideLeft, springGentle } from '@/lib/animations'
+import { stagger, springGentle } from '@/lib/animations'
 import { APP_VERSION } from '@/lib/utils'
 
 type TabId = 'general' | 'subtitles' | 'variety' | 'system' | 'voice'
@@ -22,7 +23,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
 
 export default function Settings() {
   const queryClient = useQueryClient()
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, atmosphere, setAtmosphere } = useTheme()
   const { toast } = useToast()
   const [formData, setFormData] = useState({
     GAME_TITLE: '',
@@ -128,14 +129,11 @@ export default function Settings() {
 
   return (
     <motion.div variants={stagger.container} initial="hidden" animate="show" className="space-y-6">
-      <motion.div variants={slideLeft} className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            <span className="text-40k-gold">SYSTEM</span> SETTINGS
-          </h1>
-          <p className="text-gray-400 mt-1">Configure Cogitator core parameters</p>
-        </div>
-      </motion.div>
+      <PageHeader
+        accentWord="SYSTEM"
+        title="SYSTEM SETTINGS"
+        subtitle="Configure Cogitator core parameters"
+      />
 
       {/* Tab Navigation */}
       <div className="flex gap-1 bg-40k-card border border-40k-border p-1 rounded-lg">
@@ -449,40 +447,81 @@ export default function Settings() {
             {/* ──────── SYSTEM TAB ──────── */}
             {activeTab === 'system' && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <Card accent="crimson" notch>
-                  <SectionHeader title="UI Theme" icon={<Palette className="w-4 h-4" />} terminal />
-                  <div className="grid grid-cols-1 gap-2 mt-4">
-                    {themes.map((t, idx) => (
-                      <motion.button
-                        key={t.id}
-                        onClick={() => setTheme(t.id)}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.06, ...springGentle }}
-                        whileHover={theme !== t.id ? { scale: 1.02, x: 4 } : {}}
-                        whileTap={{ scale: 0.98 }}
-                        className={`flex items-center gap-3 px-4 py-3 rounded border transition-all duration-300 text-left ${
-                          theme === t.id
-                            ? 'border-40k-gold bg-40k-gold/10 text-white shadow-[0_0_15px_rgb(var(--40k-gold-rgb)/0.2)]'
-                            : 'border-40k-border bg-40k-card text-gray-400 hover:border-40k-gold/50 hover:text-gray-200'
+                <div className="space-y-4">
+                  <Card accent="crimson" notch className="p-[var(--card-padding,1rem)]">
+                    <SectionHeader title="UI Theme" icon={<Palette className="w-4 h-4" />} terminal />
+                    <div className="grid grid-cols-1 gap-2 mt-4">
+                      {themes.map((t, idx) => (
+                        <motion.button
+                          key={t.id}
+                          onClick={() => setTheme(t.id)}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.06, ...springGentle }}
+                          whileHover={theme !== t.id ? { scale: 1.02, x: 4 } : {}}
+                          whileTap={{ scale: 0.98 }}
+                          className={`flex items-center gap-3 px-4 py-3 rounded border transition-all duration-300 text-left ${
+                            theme === t.id
+                              ? 'border-40k-gold bg-40k-gold/10 text-white shadow-[0_0_15px_rgb(var(--40k-gold-rgb)/0.2)]'
+                              : 'border-40k-border bg-40k-card text-gray-400 hover:border-40k-gold/50 hover:text-gray-200'
+                          }`}
+                        >
+                          <span className="text-xl">{t.icon}</span>
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="flex gap-1 shrink-0" aria-hidden>
+                              {t.swatches.map((color, i) => (
+                                <span
+                                  key={i}
+                                  className="w-2.5 h-2.5 rounded-full border border-white/10"
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="font-medium text-sm">{t.name}</div>
+                              <div className="text-xs opacity-70 truncate">{t.description}</div>
+                            </div>
+                          </div>
+                          {theme === t.id && (
+                            <motion.span className="ml-auto text-40k-gold text-xs font-bold shrink-0"
+                              initial={{ scale: 0 }} animate={{ scale: 1 }}
+                              transition={{ type: 'spring', stiffness: 200, damping: 10 }}>
+                              ACTIVE
+                            </motion.span>
+                          )}
+                        </motion.button>
+                      ))}
+                    </div>
+                  </Card>
+
+                  <Card accent="gold" notch className="p-[var(--card-padding,1rem)]">
+                    <SectionHeader title="Atmosphere" icon={<Sparkles className="w-4 h-4" />} terminal />
+                    <div className="mt-4 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm text-stone-300">Ambient effects</p>
+                        <p className="text-xs text-stone-500 mt-1">
+                          Grid, scanlines, and data-stream overlays
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={atmosphere}
+                        onClick={() => setAtmosphere(!atmosphere)}
+                        className={`relative w-12 h-6 rounded-full transition-colors duration-300 ${
+                          atmosphere ? 'bg-40k-gold/30 border border-40k-gold/50' : 'bg-40k-dark border border-40k-border'
                         }`}
                       >
-                        <span className="text-xl">{t.icon}</span>
-                        <div>
-                          <div className="font-medium text-sm">{t.name}</div>
-                          <div className="text-xs opacity-70">{t.description}</div>
-                        </div>
-                        {theme === t.id && (
-                          <motion.span className="ml-auto text-40k-gold text-xs font-bold"
-                            initial={{ scale: 0 }} animate={{ scale: 1 }}
-                            transition={{ type: 'spring', stiffness: 200, damping: 10 }}>
-                            ACTIVE
-                          </motion.span>
-                        )}
-                      </motion.button>
-                    ))}
-                  </div>
-                </Card>
+                        <motion.span
+                          layout
+                          className={`absolute top-0.5 w-5 h-5 rounded-full transition-colors ${
+                            atmosphere ? 'left-[calc(100%-1.375rem)] bg-40k-gold' : 'left-0.5 bg-stone-500'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </Card>
+                </div>
 
                 <div className="space-y-4">
                   <Card accent="crimson" notch>

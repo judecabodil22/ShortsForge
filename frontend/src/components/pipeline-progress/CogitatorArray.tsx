@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { PHASES, PHASE_LABELS, type PipelineStatus, getPhaseIndex } from './types'
+import { themeRgb, themeRgbAlpha } from '@/lib/themeColors'
 
 interface Props {
   status: PipelineStatus
@@ -19,6 +20,9 @@ function GearSvg({
   const r = 32
   const teeth = 8
   const toothLen = 8
+  const gold = themeRgb('gold')
+  const goldBright = themeRgb('gold-bright')
+  const border = themeRgb('border')
 
   const pathData = (() => {
     const pts: string[] = []
@@ -55,8 +59,8 @@ function GearSvg({
           >
             <motion.path
               d={pathData}
-              fill={isComplete ? 'rgba(201,162,39,0.2)' : isActive ? 'rgba(201,162,39,0.1)' : 'rgba(255,255,255,0.03)'}
-              stroke={isComplete ? 'rgb(201,162,39)' : isActive ? 'rgb(232,197,71)' : 'rgb(74,40,40)'}
+              fill={isComplete ? themeRgbAlpha('gold', 0.2) : isActive ? themeRgbAlpha('gold', 0.1) : 'rgba(255,255,255,0.03)'}
+              stroke={isComplete ? gold : isActive ? goldBright : border}
               strokeWidth={2}
               initial={false}
               animate={{
@@ -66,14 +70,14 @@ function GearSvg({
             />
             <circle
               cx={cx} cy={cy} r={6}
-              fill={isComplete ? 'rgb(201,162,39)' : isActive ? 'rgb(232,197,71)' : 'rgb(74,40,40)'}
+              fill={isComplete ? gold : isActive ? goldBright : border}
             />
           </motion.g>
           {isComplete && (
             <motion.text
               x={cx} y={cy + 1}
               textAnchor="middle" dominantBaseline="central"
-              fill="rgb(201,162,39)" fontSize={28} fontWeight="bold"
+              fill={gold} fontSize={28} fontWeight="bold"
               initial={{ scale: 0, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ type: 'spring', stiffness: 200, damping: 15 }}
@@ -89,7 +93,7 @@ function GearSvg({
             animate={{ opacity: [0, 0.3, 0] }}
             transition={{ duration: 2, repeat: Infinity }}
             style={{
-              boxShadow: '0 0 20px rgba(201,162,39,0.4), 0 0 40px rgba(201,162,39,0.2)',
+              boxShadow: `0 0 20px ${themeRgbAlpha('gold', 0.4)}, 0 0 40px ${themeRgbAlpha('gold', 0.2)}`,
             }}
           />
         )}
