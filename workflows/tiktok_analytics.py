@@ -38,13 +38,21 @@ def _build_game_keywords() -> Dict[str, List[str]]:
     """Build game keywords from context system + hardcoded base."""
     keywords = dict(BASE_GAME_KEYWORDS)
     try:
-        from workflows.context_manager_v2 import list_games
+        from workflows.context_manager_v2 import list_games, get_items
         for game_key in list_games():
             if game_key not in keywords:
                 # Convert game_key to human-readable form for matching
-                # e.g. "star_wars_jedi_survivor" -> "star wars jedi survivor"
+                # e.g. "star_wars_jedi_survivor" -> "star wars: jedi survivor"
                 readable = game_key.replace('_', ' ')
-                keywords[game_key] = [readable]
+                kws = [readable]
+                # Also add character names, locations, terms as keywords
+                for item_type in ('character', 'location', 'term'):
+                    for item in get_items(game_key, item_type):
+                        name = item.name.lower().strip()
+                        # Require 4+ chars to avoid false substring matches
+                        if name and len(name) >= 4:
+                            kws.append(name)
+                keywords[game_key] = kws
     except Exception:
         pass
     return keywords
