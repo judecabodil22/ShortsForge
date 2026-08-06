@@ -183,7 +183,7 @@ Optional lore may exist inside `verified_context.json` and is injected into scri
 |-----------|---------|
 | `cogitator.py` | Main pipeline orchestration, CLI |
 | `context_manager.py` | Context storage and retrieval for scripts |
-| `context_manager_v2.py` | Enhanced context with graph visualization |
+| `context_manager_v2.py` | Enhanced context with graph visualization, deterministic entity IDs, and string relationship parsing |
 | `metrics_fetcher.py` | YouTube API integration for video metrics |
 | `learning_engine.py` | ML-based performance prediction and optimization (includes YouTube analytics sync) |
 | `performance_database.py` | SQLite storage for scripts, videos, metrics, learnings |
@@ -401,9 +401,12 @@ The Context page features an interactive force-directed graph:
 
 - **Node Types**: Characters (gold), Locations (amber), Key Terms (yellow), Relationships (red), Games (burgundy) - themed by visual style
 - **Edge Types**:
-  - **Explicit** (solid): Direct connections from relationships
-  - **Direct** (solid): Entity-to-entity connections from shared relationships
-  - **Implicit** (dashed): Co-occurrence connections from transcripts (stored persistently)
+  - **Context** (solid): Explicit relationships from `verified_context.json` — parsed from structured `{from, to, relationship}` dicts or legacy `"X and Y are Z"` strings
+  - **Implicit** (dashed): Co-occurrence connections derived from MemPalace narrative chunks and transcript files — entities mentioned together in the same text segment
+- **Data Sources**:
+  - `Context/verified_context.json` — nodes (characters, locations, terms) and direct relationship edges
+  - MemPalace ChromaDB (`~/.mempalace/palace/chroma.sqlite3`) — narrative chunks for co-occurrence edge generation
+  - `transcripts/*.json` — transcript files for co-occurrence (optional, MemPalace is the primary source)
 - **Visual Themes**: Switch between 6 themes via the Settings panel:
   - **Star Chart** (default): Classic gold/red 40k color scheme
   - **Brain Neurons**: Purple gradient circles with neural pulse animations
@@ -421,9 +424,9 @@ The Context page features an interactive force-directed graph:
   - **Center Force**: How compact the graph is (0-1)
 - **Zoom Labels**: Labels only appear when zoomed in past 0.7x for clarity
 - **Interactive**: Click nodes for details, drag to rearrange, zoom to explore
-- **Persistent Data**: Implicit co-occurrence relationships are stored in verified_context.json - deleting transcripts doesn't affect the graph
+- **Persistent Data**: Implicit co-occurrence relationships are stored in `verified_context.json` — deleting transcripts doesn't lose previously computed edges
 - **Auto-Placeholder Nodes**: Entities referenced in relationships but missing as graph nodes are auto-created as placeholders
-- **Franchise Merging**: Selecting a franchise (e.g. "Tomb Raider Series") merges characters and relationships from all child games
+- **Franchise Merging**: Selecting a franchise (e.g. "Star Wars") merges characters and relationships from all child games (e.g. "Jedi Survivor")
 
 ### API Endpoints
 

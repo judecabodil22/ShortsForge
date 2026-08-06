@@ -915,7 +915,7 @@ export default function Graph() {
             </motion.div>
             {graphData.nodes.length > 15 && graphData.contextCount < 3 && (
               <p className="text-xs text-amber-200/90 bg-40k-dark/90 backdrop-blur px-3 py-2 rounded-lg border border-amber-500/30">
-                Many entities but few relationship edges. Add relationships in Context or re-run Phase 3 on your transcript.
+                Many entities but few relationship edges. Add relationships in Context, re-run Phase 3, or enable Co-occurrence edges above.
               </p>
             )}
           </motion.div>

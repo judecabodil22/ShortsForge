@@ -5,7 +5,9 @@ Advanced context management with editor, search, and analytics.
 """
 import os
 import json
+import re
 import uuid
+import hashlib
 import tempfile
 import logging
 from datetime import datetime, timezone
@@ -77,6 +79,12 @@ def _is_entity_deleted(game_key: str, item_id: str = None, item_name: str = None
             if item_name and ename.lower() == item_name.lower():
                 return True
     return False
+
+
+def _deterministic_id(game_key: str, item_type: str, name: str) -> str:
+    """Generate a stable, deterministic ID from game_key + type + name."""
+    raw = f"{game_key}:{item_type}:{name.lower().strip()}"
+    return hashlib.md5(raw.encode()).hexdigest()
 
 
 class ContextItem:
@@ -270,6 +278,7 @@ class ContextManagerV2:
                         item.type = "character"
                     else:
                         item = ContextItem(game_key, "character", str(char))
+                        item.id = _deterministic_id(game_key, "character", str(char))
                     self.contexts[game_key]["character"].append(item)
                 
                 for loc in ctx.get("locations", []):
@@ -279,6 +288,7 @@ class ContextManagerV2:
                         item.type = "location"
                     else:
                         item = ContextItem(game_key, "location", str(loc))
+                        item.id = _deterministic_id(game_key, "location", str(loc))
                     self.contexts[game_key]["location"].append(item)
                 
                 for term in ctx.get("key_terms", []):
@@ -288,6 +298,7 @@ class ContextManagerV2:
                         item.type = "term"
                     else:
                         item = ContextItem(game_key, "term", str(term))
+                        item.id = _deterministic_id(game_key, "term", str(term))
                     self.contexts[game_key]["term"].append(item)
                 
                 for rel in ctx.get("relationships", []):
@@ -311,8 +322,23 @@ class ContextManagerV2:
                                 "relationship": rel_type,
                             },
                         )
+                    elif isinstance(rel, str):
+                        # Parse legacy string format "X and Y are Z"
+                        m = re.match(r"^(.+?)\s+and\s+(.+?)\s+are\s+(.+)$", rel)
+                        if m:
+                            from_n, to_n, rel_type = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+                            label = f"{from_n} ↔ {to_n}"
+                            item = ContextItem(
+                                game_key, "relationship", label,
+                                category=rel_type,
+                                metadata={"from": from_n, "to": to_n, "relationship": rel_type},
+                            )
+                        else:
+                            item = ContextItem(game_key, "relationship", rel)
+                            item.id = _deterministic_id(game_key, "relationship", rel)
                     else:
                         item = ContextItem(game_key, "relationship", str(rel))
+                        item.id = _deterministic_id(game_key, "relationship", str(rel))
                     self.contexts[game_key]["relationship"].append(item)
 
             # Track file mtime to skip future reloads if unchanged

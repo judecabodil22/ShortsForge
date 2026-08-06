@@ -5,7 +5,7 @@ Zero-cost TTS using the Kokoro library (MIT license, runs on CPU).
 54 voices, fully offline after first model download.
 """
 
-import json, os, subprocess, tempfile, time, uuid
+import json, os, subprocess, tempfile, time, traceback, uuid
 from typing import Optional
 from workflows.hardware_detect import get_whisper_device
 
@@ -81,14 +81,16 @@ def generate_tts(text: str, voice_name: str = KOKORO_DEFAULT_VOICE, style: str =
         audio_chunks = []
         for i, (gs, ps, audio) in enumerate(generator):
             if audio is not None and len(audio) > 0:
-                audio_chunks.append(audio.tobytes())
+                audio_chunks.append(audio.numpy().tobytes())
 
         if not audio_chunks:
             return None
 
         raw = b"".join(audio_chunks)
         return raw
-    except Exception:
+    except Exception as e:
+        print(f"   [Kokoro] generate_tts error: {e}")
+        traceback.print_exc()
         return None
 
 
@@ -114,7 +116,9 @@ def generate_tts_file(text: str, output_wav: str, voice_name: str = KOKORO_DEFAU
         finally:
             if os.path.exists(tmp_raw):
                 os.remove(tmp_raw)
-    except Exception:
+    except Exception as e:
+        print(f"   [Kokoro] generate_tts_file error: {e}")
+        traceback.print_exc()
         return False
 
 

@@ -77,20 +77,6 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
         for item in items:
             name_to_id[item['name'].lower()] = item['id']
 
-    # Find and parse transcript files
-    transcripts_dir = os.path.join(WORKSPACE, "transcripts")
-    if not os.path.exists(transcripts_dir):
-        return {"edges": [], "entity_segments": {}}
-
-    # Find transcripts related to this game/franchise
-    transcript_files = []
-    for fname in os.listdir(transcripts_dir):
-        if fname.endswith('.json'):
-            transcript_files.append(os.path.join(transcripts_dir, fname))
-
-    if not transcript_files:
-        return {"edges": [], "entity_segments": {}}
-
     # Entity patterns for matching (case-insensitive)
     entity_patterns = {}
     for etype, items in entities.items():
@@ -102,6 +88,9 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
             }
             # Also add lowercase
             entity_patterns[item['name'].lower()] = entity_patterns[item['name']]
+
+    if not entity_patterns:
+        return {"edges": [], "entity_segments": {}}
 
     # Co-occurrence tracking
     cooccurrence = defaultdict(int)  # (name1, name2) -> count
@@ -130,27 +119,36 @@ def analyze_transcript_cooccurrence(game_key: str) -> Dict[str, Any]:
                             'text_preview': text[:100],
                         })
 
-    # Process each transcript JSON on disk
+    # Process transcript files from disk (if available)
     seg_offset = 0
-    for tfile in transcript_files:
-        try:
-            with open(tfile, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for seg_idx, segment in enumerate(data.get('segments', [])):
-                _process_text_segment(segment.get('text', ''), seg_offset + seg_idx)
-            seg_offset += len(data.get('segments', []))
-        except Exception as e:
-            print(f"Error processing transcript {tfile}: {e}")
-            continue
+    transcripts_dir = os.path.join(WORKSPACE, "transcripts")
+    if os.path.exists(transcripts_dir):
+        transcript_files = [
+            os.path.join(transcripts_dir, f)
+            for f in os.listdir(transcripts_dir)
+            if f.endswith('.json')
+        ]
+        for tfile in transcript_files:
+            try:
+                with open(tfile, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for seg_idx, segment in enumerate(data.get('segments', [])):
+                    _process_text_segment(segment.get('text', ''), seg_offset + seg_idx)
+                seg_offset += len(data.get('segments', []))
+            except Exception as e:
+                print(f"Error processing transcript {tfile}: {e}")
+                continue
 
-    # MemPalace: split narrative chunks into sentence-like segments for co-occurrence
+    # MemPalace: match entities against full chunks first (avoids splitting multi-word
+    # entity names like "cal kestis" on the period), then split for segment tracking.
     for gk in game_keys_for_entities:
         mempalace_chunks = get_mempalace_text_chunks(gk)
         for chunk_idx, chunk in enumerate(mempalace_chunks):
+            _process_text_segment(chunk, seg_offset + chunk_idx * 1000)
             for part_idx, part in enumerate(re.split(r'[.!?\n]+', chunk)):
                 part = part.strip()
                 if len(part) > 20:
-                    _process_text_segment(part, seg_offset + chunk_idx * 1000 + part_idx)
+                    _process_text_segment(part, seg_offset + chunk_idx * 1000 + part_idx + 1)
 
     # Generate implicit edges from co-occurrences
     implicit_edges = []
@@ -315,6 +313,12 @@ def _parse_relationship_endpoints(item) -> Tuple[Optional[str], Optional[str], s
     to_name = (meta.get("to") or "").strip()
     if from_name and to_name:
         return from_name, to_name, rel_label
+
+    # Fallback: parse legacy string format "X and Y are Z"
+    if name:
+        m = re.match(r"^(.+?)\s+and\s+(.+?)\s+are\s+(.+)$", name)
+        if m:
+            return m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
 
     return None, None, rel_label
 

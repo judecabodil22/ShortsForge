@@ -157,6 +157,10 @@ GROQ_MODELS_BY_TYPE = {
     "true_story": "llama-3.3-70b-versatile",
 }
 
+# Gemini model selection (configurable via .env)
+GEMINI_EXTRACT_MODEL = env("GEMINI_EXTRACT_MODEL", "gemini-2.5-flash-lite")
+GEMINI_SCRIPT_MODEL = env("GEMINI_SCRIPT_MODEL", "gemini-2.5-flash")
+
 # Adaptive temperature per content type
 TEMPERATURE_BY_TYPE = {
     "mystery_recap": 0.8,
@@ -1252,7 +1256,7 @@ Transcripts:
     }).encode()
     
     key = keys[0]
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent"
     
     _rate_limit()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
@@ -1327,7 +1331,7 @@ def _summarize_transcript(transcript_text, game_title):
         }).encode()
         for i in range(len(keys)):
             key = keys[i]
-            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent"
             for attempt in range(3):
                 try:
                     _rate_limit()
@@ -1587,7 +1591,7 @@ Write the complete script now."""
             
             for i in range(len(keys)):
                 key = keys[i % len(keys)]
-                url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_SCRIPT_MODEL}:generateContent"
                 
                 for attempt in range(3):
                     try:
@@ -2234,7 +2238,7 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
         }
     }).encode()
     key = keys[0]
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent"
     _rate_limit()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
     try:
@@ -2253,6 +2257,51 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
     except (json.JSONDecodeError, KeyError, urllib.error.HTTPError) as e:
         log(f"Gemini JSON prompt failed: {e}")
         return None
+
+
+def _groq_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2048) -> dict | None:
+    """Send a prompt to Groq and return parsed JSON response. Fallback for Gemini."""
+    groq_keys = get_groq_keys()
+    if not groq_keys:
+        return None
+    start_key = GROQ_KEY_INDEX
+    for i in range(len(groq_keys)):
+        key_index = (start_key + i) % len(groq_keys)
+        api_key = groq_keys[key_index]
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "response_format": {"type": "json_object"}
+        }
+        try:
+            response = requests.post(url, json=data, headers=headers, timeout=60)
+            if response.status_code == 200:
+                result = response.json()
+                text = result["choices"][0]["message"]["content"].strip()
+                if text.startswith("```json"):
+                    text = text[7:]
+                elif text.startswith("```"):
+                    text = text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                return json.loads(text.strip())
+            elif response.status_code == 429:
+                log(f"   Groq key ...{api_key[-6:]} rate limited, trying next...")
+                continue
+            else:
+                log(f"   Groq key ...{api_key[-6:]} error {response.status_code}")
+                continue
+        except Exception as e:
+            log(f"   Groq JSON prompt failed: {e}")
+            continue
+    return None
 
 
 def _extract_characters(transcript_text, game_title, constraints_text):
@@ -2399,7 +2448,65 @@ or relationships that were previously flagged as incorrect.
         if not result["title"]:
             result["title"] = rel_data.get("title", "")
 
+    # Pass 4: Verify entity spellings against game knowledge
+    result = _verify_entity_spellings(result, game_title)
+
     return result
+
+
+def _verify_entity_spellings(extracted, game_title):
+    """Pass 4: Verify character and location names against the LLM's knowledge of the game.
+    Uses Gemini primary, Groq fallback. Returns extracted dict with corrected names."""
+    characters = extracted.get("characters", [])
+    locations = extracted.get("locations", [])
+    if not characters and not locations:
+        return extracted
+
+    prompt = f"""Verify the spelling of character and location names from the game "{game_title}".
+
+For each name, return the CORRECT official spelling as used in the game/franchise.
+If a name is already correct, keep it as-is.
+If it is misspelled or you know the official name, correct it.
+Only correct names you are confident about — do not guess.
+
+Characters: {json.dumps(characters)}
+Locations: {json.dumps(locations)}
+
+Respond ONLY with a valid JSON object:
+{{
+    "characters": {{"original_name": "corrected_name", ...}},
+    "locations": {{"original_name": "corrected_name", ...}}
+}}"""
+
+    result = _gemini_json_prompt(prompt, temperature=0.1, max_tokens=1024)
+    if not result:
+        log("[VERIFY] Gemini verification failed, trying Groq...")
+        result = _groq_json_prompt(prompt, temperature=0.1, max_tokens=1024)
+    if not result:
+        log("[VERIFY] Both LLMs failed, keeping original names")
+        return extracted
+
+    char_map = result.get("characters", {})
+    loc_map = result.get("locations", {})
+
+    corrected_chars = []
+    for c in characters:
+        new_name = char_map.get(c, c)
+        if new_name and new_name != c:
+            log(f"[VERIFY] Character: '{c}' → '{new_name}'")
+        corrected_chars.append(new_name or c)
+
+    corrected_locs = []
+    for loc in locations:
+        new_name = loc_map.get(loc, loc)
+        if new_name and new_name != loc:
+            log(f"[VERIFY] Location: '{loc}' → '{new_name}'")
+        corrected_locs.append(new_name or loc)
+
+    extracted = extracted.copy()
+    extracted["characters"] = corrected_chars
+    extracted["locations"] = corrected_locs
+    return extracted
 
 
 def _save_segment_references(game_key, transcript_name, extracted_context, transcript_file=None):
@@ -2511,7 +2618,22 @@ def _cs_update_context(extracted, transcript_name, script_summary=None):
                     ctx["character_aliases"] = {}
                 ctx["character_aliases"][char] = canonical
         else:
-            ctx["characters"].append(char)
+            # Check if this is a correction of an existing misspelled name
+            replaced = False
+            for i, existing in enumerate(ctx["characters"]):
+                if existing.lower() != char.lower():
+                    ratio = _fuzz.token_sort_ratio(existing.lower(), char.lower()) if _fuzz else 0
+                    if 60 <= ratio < 100:
+                        # Pass 4 corrected a misspelling — replace and alias
+                        log(f"[VERIFY] Replacing '{existing}' → '{char}'")
+                        if "character_aliases" not in ctx:
+                            ctx["character_aliases"] = {}
+                        ctx["character_aliases"][existing] = char
+                        ctx["characters"][i] = char
+                        replaced = True
+                        break
+            if not replaced:
+                ctx["characters"].append(char)
 
     # Merge locations with fuzzy dedup
     for loc in extracted.get("locations", []):
@@ -2522,7 +2644,21 @@ def _cs_update_context(extracted, transcript_name, script_summary=None):
                     ctx["location_aliases"] = {}
                 ctx["location_aliases"][loc] = canonical
         else:
-            ctx["locations"].append(loc)
+            # Check if this is a correction of an existing misspelled name
+            replaced = False
+            for i, existing in enumerate(ctx["locations"]):
+                if existing.lower() != loc.lower():
+                    ratio = _fuzz.token_sort_ratio(existing.lower(), loc.lower()) if _fuzz else 0
+                    if 60 <= ratio < 100:
+                        log(f"[VERIFY] Replacing '{existing}' → '{loc}'")
+                        if "location_aliases" not in ctx:
+                            ctx["location_aliases"] = {}
+                        ctx["location_aliases"][existing] = loc
+                        ctx["locations"][i] = loc
+                        replaced = True
+                        break
+            if not replaced:
+                ctx["locations"].append(loc)
 
     # Merge key terms
     for term in extracted.get("key_terms", []):
@@ -3747,7 +3883,7 @@ def _gemini_script(text, script_num, context=None, recent_titles=None,
     for i in range(len(keys)):
         key = keys[(start + i) % len(keys)]
         log(f"   Trying key ...{key[-6:]}")
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_SCRIPT_MODEL}:generateContent"
         for attempt in range(3):
             try:
                 _rate_limit()
@@ -4919,7 +5055,7 @@ def onboard():
         body = json.dumps({"contents":[{"parts":[{"text":"hi"}]}],
                            "generationConfig":{"maxOutputTokens":5}}).encode()
         req = urllib.request.Request(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent",
             data=body, headers={"Content-Type":"application/json", "X-Goog-Api-Key": env('GEMINI_API_KEY')})
         r = urllib.request.urlopen(req, timeout=15)
         json.loads(r.read())

@@ -8,6 +8,13 @@ All notable changes to this project are documented here.
 
 ### Bug Fixes
 
+- **graph_builder.py** — Fixed 325 string-style relationships (`"X and Y are Z"`) failing to parse; added regex fallback in `_parse_relationship_endpoints`
+- **context_manager_v2.py** — Fixed string relationships in `verified_context.json` not generating edges; now converted to `{from, to, relationship}` dicts at load time with `metadata.from`/`metadata.to`
+- **graph_builder.py** — Fixed `analyze_transcript_cooccurrence` returning early when `transcripts/` missing, skipping MemPalace chunk processing; control flow restructured so MemPalace always runs
+- **mempalace_integration.py** — Fixed MemPalace keyword mismatch: `MEMPALACE_GAME_KEYWORDS` only had `star_wars_series` key but franchise key is `star_wars`; added `star_wars` and `star_wars:_jedi_survivor` keys (370 chunks now found)
+- **context_manager_v2.py** — Fixed unstable node IDs: Context entities stored as bare strings had random UUIDs minted each load; added `_deterministic_id()` using MD5 hash for stable identity across loads
+- **graph_builder.py** — Fixed MemPalace co-occurrence edge generation: sentence splitter was splitting multi-word entity names like "cal kestis"; now matches full chunk text before falling back to sentence-level segment tracking
+
 - **phase_assemble.py:417** — Fixed shifted_srt=None: SRT path was overwritten to None causing ffmpeg concat to fail
 - **phase_assemble.py:432** — Fixed apostrophes in file paths causing ffmpeg concat to fail (escaped with single quotes)
 - **phase_assemble.py:390** — Fixed fontsdir check using `os.path.exists` instead of `os.path.isdir` (returned True for files)
@@ -28,6 +35,12 @@ All notable changes to this project are documented here.
 ### Documentation
 
 - Removed IMPROVEMENT_PLAN.md
+- Updated README.md knowledge graph section: corrected edge type descriptions, added MemPalace data source, updated franchise merging example
+- Updated MEMPALACE_INTEGRATION_PLAN.md: corrected coexistence comparison table (JSON Context replaces Markdown system)
+
+### Scripts
+
+- **migrate_relationships.py** — One-time migration script: converts 325 string-style relationships to `{from, to, relationship}` dicts, clears stale `implicit_relationships` from `verified_context.json`, creates timestamped backups
 - Updated SECURITY.md: removed Telegram references, updated supported versions
 - Updated docs/CONFIGURATION.md: replaced Telegram commands with CLI commands
 

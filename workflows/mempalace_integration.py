@@ -70,6 +70,14 @@ MEMPALACE_GAME_KEYWORDS = {
         "star wars", "jedi", "cal kestis", "bd-1", "empire", "rebel", "force",
         "lightsaber", "coruscant", "tanalorr", "jedha",
     ],
+    "star_wars": [
+        "star wars", "jedi", "cal kestis", "bd-1", "empire", "rebel", "force",
+        "lightsaber", "coruscant", "tanalorr", "jedha",
+    ],
+    "star_wars:_jedi_survivor": [
+        "star wars", "jedi", "cal kestis", "bd-1", "empire", "rebel", "force",
+        "lightsaber", "coruscant", "tanalorr", "jedha",
+    ],
     "cyberpunk_2077": ["cyberpunk", "night city", "johnny silverhand", "arasaka"],
     "tell_me_why": ["tell me why", "goblin", "allison", "tyler"],
 }

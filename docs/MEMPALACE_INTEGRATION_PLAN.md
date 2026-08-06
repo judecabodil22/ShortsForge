@@ -378,13 +378,14 @@ MEMPALACE_CONFIG = {
 
 ### How It Works Together
 
-| Aspect | Markdown System | MemPalace |
-|--------|-----------------|-----------|
-| **Storage** | `Context/` directory | `memory/` (ChromaDB + SQLite) |
+| Aspect | JSON Context | MemPalace |
+|--------|--------------|-----------|
+| **Storage** | `Context/verified_context.json` | `memory/` (ChromaDB + SQLite) |
 | **Manual Edit** | Yes — edit directly | Not directly — via API |
-| **Auto-Update** | From transcript extraction | From transcript mining |
+| **Auto-Update** | From context extraction phase | From transcript mining |
 | **Query Method** | File-based loading | Semantic search |
-| **Persistence** | Files persist, but not semantic | Semantic, searchable |
+| **Persistence** | Files persist, edges computed at build time | Semantic, searchable |
+| **Graph Source** | Nodes + relationship edges | Co-occurrence implicit edges |
 
 ### Key Points
 1. **Both systems active** — MemPalace does NOT disable markdown files
