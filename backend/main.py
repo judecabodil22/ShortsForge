@@ -776,6 +776,8 @@ async def get_script_metadata(script_id: str, _: bool = Depends(verify_api_key))
         "content_type": "",
         "review_status": "pending",
         "quarantined": False,
+        "skip_tts": False,
+        "factuality_score": None,
     }
     if script:
         result.update({
@@ -784,20 +786,25 @@ async def get_script_metadata(script_id: str, _: bool = Depends(verify_api_key))
             "hashtags": script.get("hashtags", ""),
             "tags": script.get("tags", ""),
             "content_type": script.get("content_type", ""),
+            "review_status": script.get("review_status", "pending"),
+            "quarantined": bool(script.get("quarantined", 0)),
+            "skip_tts": bool(script.get("skip_tts", 0)),
+            "factuality_score": script.get("factuality_score"),
         })
 
     # Overlay .meta.json review / quarantine flags when present
+    # Check script_id-specific file FIRST, then video_name matches
     try:
         scripts_dir = os.path.join(WORKSPACE, "scripts")
         meta_candidates = []
+        safe_id = os.path.basename(script_id)
+        meta_candidates.append(os.path.join(scripts_dir, f"{safe_id}.meta.json"))
         video = (script or {}).get("video_name") or ""
         if video:
             meta_candidates.extend(
                 [os.path.join(scripts_dir, f) for f in os.listdir(scripts_dir)
                  if f.startswith(video) and f.endswith(".meta.json")]
             )
-        safe_id = os.path.basename(script_id)
-        meta_candidates.append(os.path.join(scripts_dir, f"{safe_id}.meta.json"))
         for path in meta_candidates:
             if os.path.exists(path):
                 with open(path) as f:

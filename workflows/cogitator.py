@@ -4330,13 +4330,6 @@ The second variant MUST use a different title structure than the first and a dif
             else:
                 script_metadata.setdefault("review_status", "pending")
                 script_metadata["factuality_score"] = _fact_score
-            # Save .meta.json alongside script
-            meta_path = out.replace(".txt", ".meta.json")
-            try:
-                with open(meta_path, "w") as f:
-                    json.dump(script_metadata, f, indent=2)
-            except Exception as e:
-                log(f"   Failed to save metadata: {e}")
 
             # Store script in performance database for learning
             if PERFORMANCE_DB_AVAILABLE and LEARNING_ENGINE_AVAILABLE:
@@ -4364,6 +4357,14 @@ The second variant MUST use a different title structure than the first and a dif
                         ab_test_id=ab_test_id,
                         ab_variant=ab_variant,
                     )
+                    
+                    # Save .meta.json alongside script using script_id
+                    meta_path = os.path.join(SCRIPTS_DIR, f"{script_id}.meta.json")
+                    try:
+                        with open(meta_path, "w") as f:
+                            json.dump(script_metadata, f, indent=2)
+                    except Exception as e:
+                        log(f"   Failed to save metadata: {e}")
                     
                     if ab_variant:
                         log(f"Performance: Script stored (ID: {script_id[:8]}...) [A/B: variant {ab_variant.upper()}]")

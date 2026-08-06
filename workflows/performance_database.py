@@ -179,6 +179,16 @@ def init_db():
     if 'tags' not in columns:
         cursor.execute("ALTER TABLE scripts ADD COLUMN tags TEXT")
 
+    # Migrate scripts table: add review/quarantine columns
+    if 'review_status' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN review_status TEXT DEFAULT 'pending'")
+    if 'quarantined' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN quarantined INTEGER DEFAULT 0")
+    if 'skip_tts' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN skip_tts INTEGER DEFAULT 0")
+    if 'factuality_score' not in columns:
+        cursor.execute("ALTER TABLE scripts ADD COLUMN factuality_score REAL")
+
     cursor.execute("PRAGMA table_info(learnings)")
     columns = [row[1] for row in cursor.fetchall()]
     if 'variance' not in columns:

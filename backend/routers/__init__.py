@@ -205,6 +205,8 @@ def create_routers(verify_api_key, limiter):
             meta_path = str(txt).replace(".txt", ".meta.json")
 
         import json
+        import sqlite3
+        from workflows.constants import WORKSPACE
 
         data = {}
         if os.path.exists(meta_path):
@@ -220,6 +222,22 @@ def create_routers(verify_api_key, limiter):
             data["quarantined"] = False
             data["skip_tts"] = False
         Path(meta_path).write_text(json.dumps(data, indent=2))
+
+        # Sync to database
+        try:
+            db_path = os.path.join(WORKSPACE, ".cogitator", "performance.db")
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scripts 
+                SET review_status = ?, quarantined = ?, skip_tts = ?
+                WHERE id = ?
+            """, (status, 1 if data.get("quarantined") else 0, 1 if data.get("skip_tts") else 0, script_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
         return {"status": "ok", "review_status": status, "meta": meta_path}
 
     @metrics_extra.post("/tiktok/auto-import")
