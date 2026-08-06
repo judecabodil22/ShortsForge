@@ -157,10 +157,6 @@ GROQ_MODELS_BY_TYPE = {
     "true_story": "llama-3.3-70b-versatile",
 }
 
-# Gemini model selection (configurable via .env)
-GEMINI_EXTRACT_MODEL = env("GEMINI_EXTRACT_MODEL", "gemini-2.5-flash-lite")
-GEMINI_SCRIPT_MODEL = env("GEMINI_SCRIPT_MODEL", "gemini-2.5-flash")
-
 # Adaptive temperature per content type
 TEMPERATURE_BY_TYPE = {
     "mystery_recap": 0.8,
@@ -528,6 +524,14 @@ def env(key, default=""):
             return keychain_value
     val = ENV.get(key, default)
     return val if val != "" else default
+
+# Gemini model selection (configurable via .env)
+GEMINI_MODEL_BEST = env("GEMINI_MODEL_BEST", "gemini-2.5-flash")
+GEMINI_MODEL_DEFAULT = env("GEMINI_MODEL_DEFAULT", "gemini-2.5-flash-lite")
+
+# Groq model selection (configurable via .env)
+GROQ_MODEL_BEST = env("GROQ_MODEL_BEST", "openai/gpt-oss-120b")
+GROQ_MODEL_DEFAULT = env("GROQ_MODEL_DEFAULT", "llama-3.3-70b-versatile")
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 def log(msg):
@@ -1256,7 +1260,7 @@ Transcripts:
     }).encode()
     
     key = keys[0]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_DEFAULT}:generateContent"
     
     _rate_limit()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
@@ -1331,7 +1335,7 @@ def _summarize_transcript(transcript_text, game_title):
         }).encode()
         for i in range(len(keys)):
             key = keys[i]
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_DEFAULT}:generateContent"
             for attempt in range(3):
                 try:
                     _rate_limit()
@@ -1591,7 +1595,7 @@ Write the complete script now."""
             
             for i in range(len(keys)):
                 key = keys[i % len(keys)]
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_SCRIPT_MODEL}:generateContent"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_BEST}:generateContent"
                 
                 for attempt in range(3):
                     try:
@@ -2224,11 +2228,12 @@ def _get_learned_constraints():
     return constraints
 
 
-def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2048) -> dict | None:
+def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2048, model: str = None) -> dict | None:
     """Send a prompt to Gemini and return parsed JSON response."""
     keys = get_gemini_keys()
     if not keys:
         return None
+    model = model or GEMINI_MODEL_BEST
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -2237,33 +2242,41 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
             "response_mime_type": "application/json"
         }
     }).encode()
-    key = keys[0]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent"
-    _rate_limit()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            r = json.loads(resp.read())
-            text = r["candidates"][0]["content"]["parts"][0]["text"]
-            text = text.strip()
-            if text.startswith("```json"):
-                text = text[7:]
-            elif text.startswith("```"):
-                text = text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-            return json.loads(text)
-    except (json.JSONDecodeError, KeyError, urllib.error.HTTPError) as e:
-        log(f"Gemini JSON prompt failed: {e}")
-        return None
+    for key in keys:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        _rate_limit()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                r = json.loads(resp.read())
+                text = r["candidates"][0]["content"]["parts"][0]["text"]
+                text = text.strip()
+                if text.startswith("```json"):
+                    text = text[7:]
+                elif text.startswith("```"):
+                    text = text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+                return json.loads(text)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                log(f"   Gemini key ...{key[-6:]} rate limited ({model})")
+                continue
+            log(f"Gemini JSON prompt failed: {e}")
+            return None
+        except (json.JSONDecodeError, KeyError) as e:
+            log(f"Gemini JSON parse failed: {e}")
+            return None
+    return None
 
 
-def _groq_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2048) -> dict | None:
-    """Send a prompt to Groq and return parsed JSON response. Fallback for Gemini."""
+def _groq_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2048, model: str = None) -> dict | None:
+    """Send a prompt to Groq and return parsed JSON response."""
     groq_keys = get_groq_keys()
     if not groq_keys:
         return None
+    model = model or GROQ_MODEL_BEST
     start_key = GROQ_KEY_INDEX
     for i in range(len(groq_keys)):
         key_index = (start_key + i) % len(groq_keys)
@@ -2274,7 +2287,7 @@ def _groq_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2
             "Content-Type": "application/json"
         }
         data = {
-            "model": GROQ_MODEL,
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -2301,6 +2314,21 @@ def _groq_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2
         except Exception as e:
             log(f"   Groq JSON prompt failed: {e}")
             continue
+    return None
+
+
+def _llm_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2048) -> dict | None:
+    """Unified LLM fallback: Gemini best → Gemini default → Groq best → Groq default."""
+    # Tier 1-2: Gemini (best then default)
+    for model in [GEMINI_MODEL_BEST, GEMINI_MODEL_DEFAULT]:
+        result = _gemini_json_prompt(prompt, temperature, max_tokens, model=model)
+        if result is not None:
+            return result
+    # Tier 3-4: Groq (best then default)
+    for model in [GROQ_MODEL_BEST, GROQ_MODEL_DEFAULT]:
+        result = _groq_json_prompt(prompt, temperature, max_tokens, model=model)
+        if result is not None:
+            return result
     return None
 
 
@@ -2456,7 +2484,7 @@ or relationships that were previously flagged as incorrect.
 
 def _verify_entity_spellings(extracted, game_title):
     """Pass 4: Verify character and location names against the LLM's knowledge of the game.
-    Uses Gemini primary, Groq fallback. Returns extracted dict with corrected names."""
+    Uses unified fallback: Gemini best → Gemini default → Groq best → Groq default."""
     characters = extracted.get("characters", [])
     locations = extracted.get("locations", [])
     if not characters and not locations:
@@ -2478,12 +2506,9 @@ Respond ONLY with a valid JSON object:
     "locations": {{"original_name": "corrected_name", ...}}
 }}"""
 
-    result = _gemini_json_prompt(prompt, temperature=0.1, max_tokens=1024)
+    result = _llm_json_prompt(prompt, temperature=0.1, max_tokens=1024)
     if not result:
-        log("[VERIFY] Gemini verification failed, trying Groq...")
-        result = _groq_json_prompt(prompt, temperature=0.1, max_tokens=1024)
-    if not result:
-        log("[VERIFY] Both LLMs failed, keeping original names")
+        log("[VERIFY] All LLMs failed, keeping original names")
         return extracted
 
     char_map = result.get("characters", {})
@@ -3853,7 +3878,7 @@ def _groq_generate(prompt, max_tokens=500, model=None, temperature=0.7, top_p=No
 
 def _gemini_script(text, script_num, context=None, recent_titles=None,
                    title_guidance=None, recent_description_openers=None):
-    """Generate script using Gemini API with key rotation, context, and validation (Phase 1-2)."""
+    """Generate script with tiered fallback: Gemini best → Gemini default → Groq best → Groq default."""
     keys = get_gemini_keys()
     if not keys:
         raise RuntimeError("No API keys in keychain")
@@ -3879,32 +3904,45 @@ def _gemini_script(text, script_num, context=None, recent_titles=None,
         "generationConfig": {"temperature": temperature, "topP": llm_params['top_p'], "maxOutputTokens": 3072}
     }).encode()
 
-    start = (script_num - 1) % len(keys)
-    for i in range(len(keys)):
-        key = keys[(start + i) % len(keys)]
-        log(f"   Trying key ...{key[-6:]}")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_SCRIPT_MODEL}:generateContent"
-        for attempt in range(3):
-            try:
-                _rate_limit()
-                req = urllib.request.Request(url, data=body,
-                                             headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    r = json.loads(resp.read())
-                    return r["candidates"][0]["content"]["parts"][0]["text"]
-            except urllib.error.HTTPError as e:
-                if e.code in (429, 500, 503):
-                    wait = (2 ** attempt) * 15 + random.uniform(0, 10)
-                    log(f"   HTTP {e.code} with key ...{key[-6:]}, retry {attempt+1}/3 in {wait:.0f}s")
-                    time.sleep(wait)
-                else:
-                    log(f"   HTTP {e.code} with key ...{key[-6:]}")
+    # Tier 1-2: Gemini (best then default)
+    for model in [GEMINI_MODEL_BEST, GEMINI_MODEL_DEFAULT]:
+        start = (script_num - 1) % len(keys)
+        for i in range(len(keys)):
+            key = keys[(start + i) % len(keys)]
+            log(f"   Trying Gemini key ...{key[-6:]} ({model})")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            for attempt in range(3):
+                try:
+                    _rate_limit()
+                    req = urllib.request.Request(url, data=body,
+                                                 headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        r = json.loads(resp.read())
+                        return r["candidates"][0]["content"]["parts"][0]["text"]
+                except urllib.error.HTTPError as e:
+                    if e.code in (429, 500, 503):
+                        wait = (2 ** attempt) * 15 + random.uniform(0, 10)
+                        log(f"   HTTP {e.code}, retry {attempt+1}/3 in {wait:.0f}s")
+                        time.sleep(wait)
+                    else:
+                        log(f"   HTTP {e.code} with key ...{key[-6:]}")
+                        break
+                except Exception as e:
+                    log(f"   Error: {e}")
+                    time.sleep(5)
                     break
-            except Exception as e:
-                log(f"   Error: {e}")
-                time.sleep(5)
-                break
-        log(f"   Key ...{key[-6:]} failed, next...")
+            log(f"   Key ...{key[-6:]} failed, next...")
+
+    # Tier 3-4: Groq (best then default)
+    groq_keys = get_groq_keys()
+    if groq_keys:
+        for model in [GROQ_MODEL_BEST, GROQ_MODEL_DEFAULT]:
+            log(f"   Trying Groq fallback ({model})...")
+            groq_script = _groq_generate(prompt, max_tokens=3072, model=model, temperature=temperature)
+            if groq_script:
+                log(f"   Groq script generated ({len(groq_script.split())} words)")
+                return groq_script
+
     return None
 
 def _extract_hour(json_file, start, end):
@@ -5055,7 +5093,7 @@ def onboard():
         body = json.dumps({"contents":[{"parts":[{"text":"hi"}]}],
                            "generationConfig":{"maxOutputTokens":5}}).encode()
         req = urllib.request.Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EXTRACT_MODEL}:generateContent",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_DEFAULT}:generateContent",
             data=body, headers={"Content-Type":"application/json", "X-Goog-Api-Key": env('GEMINI_API_KEY')})
         r = urllib.request.urlopen(req, timeout=15)
         json.loads(r.read())
