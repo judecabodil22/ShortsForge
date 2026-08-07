@@ -1,5 +1,4 @@
 import base64, json, os, time, urllib.error, urllib.request
-from workflows.hardware_detect import get_whisper_device
 
 # Voice customization constants
 EMOTION_STYLES = {
@@ -125,28 +124,36 @@ def _tts_api_edge(text, out_wav, voice, style):
     }
 
     edge_voice = edge_voice_map.get(voice, "en-US-JennyNeural")
-    tts_text = f"{style} {text}" if style else text
+    # Edge TTS does not support style prefixes - use plain text only
+    tts_text = text
 
-    try:
-        import asyncio
-        async def _do_tts():
-            communicate = edge_tts.Communicate(tts_text, edge_voice)
-            # Edge TTS outputs MP3 by default, save to temp mp3 then convert
-            tmp_mp3 = out_wav + ".tmp.mp3"
-            await communicate.save(tmp_mp3)
-            return tmp_mp3
-        tmp_mp3 = asyncio.run(_do_tts())
-        if not os.path.exists(tmp_mp3) or os.path.getsize(tmp_mp3) == 0:
-            return False
-        # Convert MP3 to WAV using ffmpeg
-        from workflows.cogitator import run as _run
-        r = _run(["ffmpeg", "-y", "-i", tmp_mp3, "-ar", "44100", "-ac", "2", out_wav], check=False)
-        if os.path.exists(tmp_mp3):
-            os.remove(tmp_mp3)
-        return r.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
-    except Exception as e:
-        c['log_error'](f"   Edge TTS failed: {e}")
-        return False
+    for attempt in range(3):
+        try:
+            import asyncio
+            async def _do_tts():
+                communicate = edge_tts.Communicate(tts_text, edge_voice)
+                # Edge TTS outputs MP3 by default, save to temp mp3 then convert
+                tmp_mp3 = out_wav + ".tmp.mp3"
+                await communicate.save(tmp_mp3)
+                return tmp_mp3
+            tmp_mp3 = asyncio.run(_do_tts())
+            if not os.path.exists(tmp_mp3) or os.path.getsize(tmp_mp3) == 0:
+                return False
+            # Convert MP3 to WAV using ffmpeg
+            from workflows.cogitator import run as _run
+            r = _run(["ffmpeg", "-y", "-i", tmp_mp3, "-ar", "44100", "-ac", "2", out_wav], check=False)
+            if os.path.exists(tmp_mp3):
+                os.remove(tmp_mp3)
+            if r.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0:
+                return True
+            c['log'](f"   Edge TTS ffmpeg conversion failed (attempt {attempt + 1}/3)")
+        except Exception as e:
+            c['log'](f"   Edge TTS attempt {attempt + 1}/3 failed: {e}")
+            if attempt < 2:
+                import time as _time
+                _time.sleep(2 ** attempt)
+    c['log_error']("   Edge TTS failed after 3 attempts")
+    return False
 
 
 def _tts_api_kokoro(text, out_wav, voice, style):
@@ -221,6 +228,17 @@ def phase_tts(duration, num_hours, video=None):
     c['log'](f"Phase 6: Generating TTS with provider '{provider}'...")
     c['notify'](f"Phase 6 Started: Generating TTS ({provider})...")
     delay = int(c['env']("TTS_DELAY", "120"))
+
+    # Pre-load Whisper model once for SRT generation (avoids loading per-script)
+    _whisper_model = None
+    try:
+        from faster_whisper import WhisperModel
+        from workflows.hardware_detect import get_whisper_device
+        whisper_device = get_whisper_device()
+        whisper_compute = "float16" if whisper_device == "cuda" else "int8"
+        _whisper_model = WhisperModel(c['env']("WHISPER_MODEL", "medium"), device=whisper_device, compute_type=whisper_compute)
+    except Exception:
+        pass
 
     tts_generated = 0
     for i in range(1, num_hours + 1):
@@ -330,13 +348,11 @@ def phase_tts(duration, num_hours, video=None):
                 srt_out = os.path.splitext(wav)[0] + ".srt"
                 words_json_out = os.path.splitext(wav)[0] + "_words.json"
                 try:
-                    from faster_whisper import WhisperModel
                     from workflows.pipeline.srt_utils import extract_words_from_segments, words_to_srt, save_words_json
-                    whisper_device = get_whisper_device()
-                    # int8 works on CPU; CUDA requires float16 or auto
-                    whisper_compute = "float16" if whisper_device == "cuda" else "int8"
-                    model = WhisperModel(c['env']("WHISPER_MODEL", "medium"), device=whisper_device, compute_type=whisper_compute)
-                    segments, _ = model.transcribe(wav, language="en", vad_filter=True, word_timestamps=True)
+                    if _whisper_model is None:
+                        c['log'](f"   Whisper model not available, skipping SRT for {padded}")
+                        continue
+                    segments, _ = _whisper_model.transcribe(wav, language="en", vad_filter=True, word_timestamps=True)
 
                     all_words = extract_words_from_segments(segments)
                     save_words_json(all_words, words_json_out, transcription_text=tts_text)

@@ -224,7 +224,9 @@ export default function Settings() {
                 <div>
                   <label className="terminal-label mb-1 block">Number of Shorts to Assemble</label>
                   <input
-                    type="text"
+                    type="number"
+                    min="0"
+                    max="20"
                     value={formData.NUM_SHORTS}
                     onChange={e => setFormData({ ...formData, NUM_SHORTS: e.target.value })}
                     className="cyber-input"
@@ -238,7 +240,9 @@ export default function Settings() {
                 <div>
                   <label className="terminal-label mb-1 block">Clips per Interval</label>
                   <input
-                    type="text"
+                    type="number"
+                    min="1"
+                    max="10"
                     value={formData.CLIPS_PER_INTERVAL}
                     onChange={e => setFormData({ ...formData, CLIPS_PER_INTERVAL: e.target.value })}
                     className="cyber-input"

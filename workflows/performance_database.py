@@ -986,10 +986,7 @@ def sync_youtube_metrics(days: int = 7, max_results: int = 50) -> Dict[str, Any]
     Returns:
         Dict with matched_count, new_metrics, errors, total_videos_processed
     """
-    try:
-        from workflows.metrics_fetcher import get_recent_uploads
-    except ImportError:
-        from workflows.metrics_fetcher import get_recent_uploads
+    from workflows.metrics_fetcher import get_recent_uploads
     
     backfill_script_titles()
     videos = get_recent_uploads(days=days, max_results=max_results)
@@ -1306,14 +1303,18 @@ def get_thompson_sampling_weights(explore_ratio: float = 0.3) -> Dict[str, float
         
         std_dev = math.sqrt(variance) + 0.01
         
-        alpha = max(mean * samples, 1)
-        beta = max((1 - mean) * samples, 1)
+        # Normalize impact_score to [0, 1] for Beta distribution
+        # impact_score is on a 0-100 scale, normalize it
+        normalized_mean = max(0.01, min(0.99, mean / 100.0))
+        
+        alpha = max(normalized_mean * samples, 1)
+        beta_val = max((1 - normalized_mean) * samples, 1)
         
         try:
             from random import betavariate
-            sampled_value = betavariate(alpha, beta)
+            sampled_value = betavariate(alpha, beta_val)
         except Exception:
-            sampled_value = max(0, min(1, random.gauss(mean, std_dev)))
+            sampled_value = max(0, min(1, random.gauss(normalized_mean, std_dev)))
         
         sampled_scores[content_type] = sampled_value
     

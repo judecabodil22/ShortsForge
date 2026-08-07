@@ -254,11 +254,8 @@ PHASE_LABELS = {
 }
 
 async def broadcast_status():
-    """Broadcast current pipeline status to all connected clients"""
-    await ws_manager.broadcast({
-        "type": "pipeline:status",
-        "data": get_pipeline_status()
-    })
+    """Broadcast current pipeline status to all connected clients (currently unused)"""
+    pass
 
 def read_status_file():
     """Read pipeline status from status file"""
@@ -353,6 +350,7 @@ def run_pipeline_async(source: str = "youtube", video_url: str = "", phases=None
     # Set up environment with PYTHONPATH
     env = os.environ.copy()
     env["PYTHONPATH"] = WORKSPACE
+    env["PYTHONUNBUFFERED"] = "1"
 
     try:
         with _pipeline_lock:
@@ -468,7 +466,7 @@ def run_pipeline_async(source: str = "youtube", video_url: str = "", phases=None
 async def run_pipeline(request: Request, _: bool = Depends(verify_api_key)):
     """Trigger pipeline run - accepts JSON body with optional video_url and phases"""
     if get_pipeline_status()["running"]:
-        return {"status": "already_running", "message": "Pipeline is already running"}
+        return JSONResponse(status_code=409, content={"status": "already_running", "message": "Pipeline is already running"})
     
     try:
         body = await request.json()
@@ -746,7 +744,7 @@ async def get_script(script_id: str, _: bool = Depends(verify_api_key)):
     
     script = get_script_by_id(script_id)
     if not script:
-        return {"error": "Script not found"}
+        return JSONResponse(status_code=404, content={"error": "Script not found"})
     
     # Extract features
     features = script.get("features", "{}")
@@ -822,7 +820,7 @@ async def get_script_metadata(script_id: str, _: bool = Depends(verify_api_key))
         pass
 
     if not script and not result.get("title"):
-        return {"error": "Script not found"}
+        return JSONResponse(status_code=404, content={"error": "Script not found"})
     return result
 
 
@@ -833,7 +831,7 @@ async def analyze_script(script_id: str, _: bool = Depends(verify_api_key)):
     
     script = get_script_by_id(script_id)
     if not script:
-        return {"error": "Script not found"}
+        return JSONResponse(status_code=404, content={"error": "Script not found"})
     
     script_text = script.get("script_text", "")
     content_type = script.get("content_type")
@@ -1631,12 +1629,12 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
     """Download from URL - requires API key"""
     global pipeline_status, pipeline_process
     if get_pipeline_status()["running"]:
-        return {"status": "error", "message": "Pipeline already running"}
+        return JSONResponse(status_code=409, content={"status": "error", "message": "Pipeline already running"})
     
     # Validate and sanitize URL
     url = sanitize_input(req.url, max_length=2000)
     if not url.startswith(("http://", "https://")):
-        return {"status": "error", "message": "Invalid URL scheme"}
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid URL scheme"})
     
     import socket
     import ipaddress
@@ -1665,7 +1663,7 @@ async def download_from_url(request: Request, req: DownloadRequest, _: bool = De
                 pass
             pipeline_process.wait()
         except Exception as e:
-            pass
+            logging.getLogger(__name__).error(f"Download failed: {e}")
         finally:
             update_pipeline_status(running=False)
             with _pipeline_lock:
@@ -1685,7 +1683,7 @@ async def get_logs(_: bool = Depends(verify_api_key), lines: int = 100):
     if lines > 1000:
         lines = 1000
     
-    log_file = os.path.join(WORKSPACE, "pipeline.log")
+    log_file = PIPELINE_LOG
     if not os.path.exists(log_file):
         return {"logs": []}
     
@@ -1714,10 +1712,10 @@ async def import_context(request: Request, _: bool = Depends(verify_api_key)):
     try:
         body = await request.json()
     except Exception:
-        return {"error": "JSON body required"}
+        return JSONResponse(status_code=400, content={"error": "JSON body required"})
     game_title = sanitize_input(str(body.get("game") or body.get("game_title") or ""), max_length=100)
     if not game_title:
-        return {"error": "game required"}
+        return JSONResponse(status_code=400, content={"error": "game required"})
     game_key = game_title.lower().replace(" ", "_").strip()
     context = body.get("context") or body
     payload = {
@@ -1806,11 +1804,11 @@ async def merge_context(request: Request, req: MergeContextRequest, _: bool = De
     
     cm = get_context_manager()
     if source_key not in cm.contexts:
-        return {"error": "Source game context not found"}
+        return JSONResponse(status_code=404, content={"error": "Source game context not found"})
         
     source_items = cm.export_items(source_key)
     if not source_items:
-        return {"error": "Source context is empty"}
+        return JSONResponse(status_code=404, content={"error": "Source context is empty"})
         
     # Import into target
     result = cm.import_items(target_key, source_items)
@@ -1936,7 +1934,12 @@ async def serve_frontend(full_path: str):
     """)
 
 
-if __name__ == "__main__":
+def run_server(host: str = "0.0.0.0", port: int = 8000):
+    """Entry point for pyproject.toml console_scripts."""
     import uvicorn
-    print("Starting Cogitator Backend on http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"Starting Cogitator Backend on http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    run_server()

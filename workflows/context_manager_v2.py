@@ -572,14 +572,17 @@ class ContextManagerV2:
         return [item.to_dict() for item in items]
 
 
-# Global instance
+# Global instance with thread-safe singleton
 _context_manager = None
+_context_manager_lock = threading.Lock()
 
 def get_context_manager() -> ContextManagerV2:
-    """Get or create the global context manager instance."""
+    """Get or create the global context manager instance (thread-safe)."""
     global _context_manager
     if _context_manager is None:
-        _context_manager = ContextManagerV2()
+        with _context_manager_lock:
+            if _context_manager is None:
+                _context_manager = ContextManagerV2()
     return _context_manager
 
 
@@ -838,8 +841,16 @@ def save_implicit_relationships(game_title: str, implicit_edges: list) -> None:
         all_context[game_key]["implicit_relationships"] = implicit_edges
 
         try:
-            with open(VERIFIED_CONTEXT_FILE, "w") as f:
-                json.dump(all_context, f, indent=2)
+            # Atomic write: write to temp file then replace
+            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(VERIFIED_CONTEXT_FILE), suffix=".tmp")
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(all_context, f, indent=2)
+                os.replace(tmp_path, VERIFIED_CONTEXT_FILE)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
         except Exception as e:
             print(f"Failed to save implicit relationships: {e}")
 
@@ -910,7 +921,7 @@ def compute_and_save_implicit_relationships(game_title: str, transcript_text: st
 
     new_edges = []
     for (e1, e2), count in cooccurrence.items():
-        if count >= 1:
+        if count >= 2:
             new_edges.append({
                 'source': entities[e1],
                 'target': entities[e2],

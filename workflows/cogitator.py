@@ -4,7 +4,7 @@ Cogitator — YouTube Shorts Pipeline
 Combines: cogitator.sh, generate_script.sh, onboard.sh
 """
 import argparse, base64, datetime, gc, glob, json, os, random, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 _workflow_dir = os.path.dirname(os.path.abspath(__file__))
 _workspace = os.path.dirname(_workflow_dir)
@@ -17,6 +17,12 @@ from workflows.title_variety import (
     format_recent_for_prompt,
     load_historical_titles,
     normalize_title,
+)
+from workflows.description_variety import (
+    build_description_guidance,
+    enforce_description_variety,
+    detect_opener,
+    is_banned_opener,
 )
 
 from update_manager import (
@@ -143,19 +149,12 @@ GROQ_KEY_INDEX = 0  # Track which Groq key to use next
 GEMINI_KEY_INDEX = 0  # Track which Gemini key to use next
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
-# Dynamic model selection per content type
-GROQ_MODELS_BY_TYPE = {
-    "mystery_recap": "llama-3.3-70b-versatile",
-    "breakdown": "llama-3.3-70b-versatile",
-    "timeline": "llama-3.3-70b-versatile",
-    "lesson": "llama-3.3-70b-versatile",
-    "narrative": "llama-3.3-70b-versatile",
-    "news_report": "llama-3.3-70b-versatile",
-    "documentary": "llama-3.3-70b-versatile",
-    "true_crime": "llama-3.3-70b-versatile",
-    "character_pov": "llama-3.3-70b-versatile",
-    "true_story": "llama-3.3-70b-versatile",
-}
+# Dynamic model selection per content type (all currently use same model, kept for future differentiation)
+GROQ_MODEL_DEFAULT = "llama-3.3-70b-versatile"
+GROQ_MODELS_BY_TYPE = {ct: GROQ_MODEL_DEFAULT for ct in [
+    "mystery_recap", "breakdown", "timeline", "lesson", "narrative",
+    "news_report", "documentary", "true_crime", "character_pov", "true_story",
+]}
 
 # Adaptive temperature per content type
 TEMPERATURE_BY_TYPE = {
@@ -229,12 +228,10 @@ if not os.path.exists(PROMPTS_DIR):
 
 # ── ASR Error Corrector ───────────────────────────────────────────────────────
 _ASR_CORRECTIONS = {
-    # Cyberpunk 2077 specific ASR errors
+    # Cyberpunk 2077 specific ASR errors (multi-word only to avoid false positives)
     "cyber cycle": "cyberpsycho",
     "cyper cycle": "cyberpsycho", 
     "cypre cycle": "cyberpsycho",
-    "cycle": "cyberpsycho",
-    "cycles": "cyberpsycho",
     # Other common gaming terms
     "n c p d": "NCPD",
     "n cpd": "NCPD",
@@ -1224,43 +1221,40 @@ VERIFIED CONTEXT FROM PREVIOUS TRANSCRIPTS:
 - Known Locations: {stored_locs}
 - Known Relationships: {stored_rels}{prev_script_info}
 
-IMPORTANT PRIORITIES (in order):
+PRIORITIES (in order):
 1. Character deaths, major plot twists, emotional moments
 2. Key character relationships and conflicts
 3. Theme/lesson of the story
-4. Then minor details
+4. Minor details
 
-From these, determine:
-1. CONTENT_TYPE: What content would be most engaging?
-   - Theory (for predictions/speculation)
-   - Analysis (for character deep-dive)
-   - Review (for opinions/rankings)
-   - Mystery (for hidden details/plot twists)
-   - Lore (for world-building)
+Determine:
+1. CONTENT_TYPE: Theory, Analysis, Review, Mystery, or Lore
 2. SUBJECT: Who or what is the main focus? (be specific: "Safi" not "characters")
 3. ANGLE: What specific aspect would captivate viewers? (prioritize major moments)
 4. VOICE_STYLE: Match to content type
-5. REAL_CHARACTERS: List ONLY the character names that actually appear in the transcript (use verified list above as reference)
-6. KEY_PLOT_POINTS: List 3-5 specific plot points, events, or story beats that are actually mentioned in the transcript. Be specific
+5. REAL_CHARACTERS: ONLY names that actually appear in the transcript
+6. KEY_PLOT_POINTS: 3-5 specific events mentioned in the transcript
 
-Respond in this exact format:
-CONTENT_TYPE: [type]
-SUBJECT: [subject - be specific]
-ANGLE: [specific moment or detail - focus on major story beats]
-VOICE_STYLE: [style]
-REAL_CHARACTERS: [comma-separated list of actual character names from transcript]
-KEY_PLOT_POINTS: [semicolon-separated list of specific events mentioned in transcript]
+Respond with a valid JSON object matching this schema:
+{{
+    "content_type": "Analysis",
+    "subject": "specific subject name",
+    "angle": "specific moment or detail",
+    "voice_style": "Documentary",
+    "real_characters": ["Character1", "Character2"],
+    "key_plot_points": ["event 1", "event 2", "event 3"]
+}}
 
 Transcripts:
-{transcript_text}"""
+{transcript_text[:8000]}"""
 
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048, "response_mime_type": "application/json"}
     }).encode()
     
     key = keys[0]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_DEFAULT}:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_BEST}:generateContent"
     
     _rate_limit()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
@@ -1270,31 +1264,40 @@ Transcripts:
             r = json.loads(resp.read())
             text = r["candidates"][0]["content"]["parts"][0]["text"]
             
-            # Parse response
-            content_type = "Analysis"
-            subject = "Unknown"
-            angle = "General overview"
-            voice_style = "Documentary"
-            real_characters = []
-            key_plot_points = []
-            
-            for line in text.split("\n"):
-                if line.startswith("CONTENT_TYPE:"):
-                    content_type = line.split(":", 1)[1].strip()
-                elif line.startswith("SUBJECT:"):
-                    subject = line.split(":", 1)[1].strip()
-                elif line.startswith("ANGLE:"):
-                    angle = line.split(":", 1)[1].strip()
-                elif line.startswith("VOICE_STYLE:"):
-                    voice_style = line.split(":", 1)[1].strip()
-                elif line.startswith("REAL_CHARACTERS:"):
-                    chars = line.split(":", 1)[1].strip()
-                    real_characters = [c.strip() for c in chars.split(",") if c.strip()]
-                elif line.startswith("KEY_PLOT_POINTS:"):
-                    points = line.split(":", 1)[1].strip()
-                    key_plot_points = [p.strip() for p in points.split(";") if p.strip()]
-            
-            return content_type, subject, angle, voice_style, real_characters, key_plot_points
+            # Parse JSON response
+            try:
+                data = json.loads(text)
+                content_type = data.get("content_type", "Analysis")
+                subject = data.get("subject", "Unknown")
+                angle = data.get("angle", "General overview")
+                voice_style = data.get("voice_style", "Documentary")
+                real_characters = data.get("real_characters", [])
+                key_plot_points = data.get("key_plot_points", [])
+                return content_type, subject, angle, voice_style, real_characters, key_plot_points
+            except json.JSONDecodeError:
+                # Fallback: try text parsing
+                content_type = "Analysis"
+                subject = "Unknown"
+                angle = "General overview"
+                voice_style = "Documentary"
+                real_characters = []
+                key_plot_points = []
+                for line in text.split("\n"):
+                    if line.startswith("CONTENT_TYPE:"):
+                        content_type = line.split(":", 1)[1].strip()
+                    elif line.startswith("SUBJECT:"):
+                        subject = line.split(":", 1)[1].strip()
+                    elif line.startswith("ANGLE:"):
+                        angle = line.split(":", 1)[1].strip()
+                    elif line.startswith("VOICE_STYLE:"):
+                        voice_style = line.split(":", 1)[1].strip()
+                    elif line.startswith("REAL_CHARACTERS:"):
+                        chars = line.split(":", 1)[1].strip()
+                        real_characters = [c.strip() for c in chars.split(",") if c.strip()]
+                    elif line.startswith("KEY_PLOT_POINTS:"):
+                        points = line.split(":", 1)[1].strip()
+                        key_plot_points = [p.strip() for p in points.split(";") if p.strip()]
+                return content_type, subject, angle, voice_style, real_characters, key_plot_points
     except Exception as e:
         log(f"Analysis error: {e}")
         return "Analysis", "Unknown", "General overview", "Documentary", [], []
@@ -1520,8 +1523,8 @@ CRITICAL RESTRICTIONS:
 
     # Try Jinja2 template first
     try:
-        env = _get_prompt_env()
-        template = env.get_template("content_studio.j2")
+        _prompt_env = _get_prompt_env()
+        template = _prompt_env.get_template("content_studio.j2")
         prompt = template.render(
             game_title=game_title,
             content_type=content_type,
@@ -1538,37 +1541,35 @@ CRITICAL RESTRICTIONS:
         )
     except Exception as e:
         log(f"   Content Studio Jinja2 template error: {e}, using legacy prompt")
-        # Fallback to legacy f-string prompt
-        prompt = f"""You are an expert YouTube scriptwriter specializing in gaming content analysis.
+        # Simplified fallback prompt
+        prompt = f"""You are a YouTube scriptwriter for gaming content analysis. Create a 1500-2000-word video script about {subject} from {game_title}.
 
-Create a 1500-2000-word video script (5-10 minutes) about {subject} from {game_title}.
+FACTUAL ACCURACY: Every named entity MUST appear in the transcript. Never invent names, events, or relationships. Use ONLY verified characters from context.
 
 {type_instruction}
-
 {context_info}
 
-The script should:
-- Have a hook at the start to grab attention
-- Be conversational and engaging for a 5-10 minute video
-- Include natural paragraph flow (NOT bullet points or fragments)
-- Have a clear structure with intro, body, and conclusion
-- End with a call to action asking viewers to like and subscribe
-- Be written in a style suitable for a YouTube video narration
-- Stay FACTUALLY accurate to the transcript - do not make up events or details
+STYLE:
+- Complete sentences. Active voice. 12-18 words per sentence average.
+- Hook at the start. Clear intro → body → conclusion.
+- Conversational tone — explain to a knowledgeable friend.
+- End with call to action (like/subscribe).
+- No quotation marks, parentheses, markdown, creator intros, filler transitions.
+- No "you" in the script body.
 
-Before writing, think through:
-1. What is the core hook that will grab viewers in 3 seconds?
-2. What is the most compelling angle from this transcript?
-3. How does the story build from hook to climax to resolution?
-4. What emotional response should the viewer have at the end?
+TITLE: 6-10 words. Reference a specific transcript detail. Rotate: question, statement, contrast, number, reveal.
+DESCRIPTION: 2-3 sentences. End with 3-5 hashtags.
+TAGS: 10-15 comma-separated lowercase keywords.
 
-Before outputting, verify:
-- Does the script use ONLY verified characters and locations?
-- Is the script 1500-2000 words?
-- Does it flow naturally when read aloud?
-- Are there any forbidden elements (invented characters, made-up events)?
+OUTPUT:
+TITLE: [title]
+DESCRIPTION: [description with hashtags]
+TAGS: [tags]
 
-Write the complete script now."""
+[Script body — 1500-2000 words]
+
+Transcript:
+{transcript_text[:10000]}"""
 
     # Phase 5: Use Groq primary with adaptive temperature
     groq_model = _get_groq_model("narrative")  # Content Studio uses narrative style
@@ -2258,7 +2259,11 @@ def _gemini_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int =
                 if text.endswith("```"):
                     text = text[:-3]
                 text = text.strip()
-                return json.loads(text)
+                try:
+                    return json.loads(text)
+                except json.JSONDecodeError:
+                    fixed = text.replace("'", '"')
+                    return json.loads(fixed)
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 log(f"   Gemini key ...{key[-6:]} rate limited ({model})")
@@ -2304,7 +2309,11 @@ def _groq_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 2
                     text = text[3:]
                 if text.endswith("```"):
                     text = text[:-3]
-                return json.loads(text.strip())
+                try:
+                    return json.loads(text.strip())
+                except json.JSONDecodeError:
+                    fixed = text.strip().replace("'", '"')
+                    return json.loads(fixed)
             elif response.status_code == 429:
                 log(f"   Groq key ...{api_key[-6:]} rate limited, trying next...")
                 continue
@@ -2332,11 +2341,22 @@ def _llm_json_prompt(prompt: str, temperature: float = 0.3, max_tokens: int = 20
     return None
 
 
-def _extract_characters(transcript_text, game_title, constraints_text):
-    """Pass 1: Extract character names and aliases from transcript."""
-    prompt = f"""Analyze this transcript from "{game_title}" and extract CHARACTER NAMES only.
+def _extract_all_entities(transcript_text, game_title, constraints_text):
+    """Single-pass extraction: characters, locations, key terms, and relationships in one LLM call."""
+    # Use the most relevant portion of the transcript
+    excerpt = transcript_text[:8000] if len(transcript_text) > 8000 else transcript_text
+    prompt = f"""Analyze this transcript from "{game_title}" and extract ALL entities in a single pass.
 
-List every named character mentioned in the transcript. For each character, list their full name and any aliases or nicknames used.
+Extract:
+1. CHARACTERS: Every named character with full name and aliases/nicknames
+2. LOCATIONS: Every place mentioned (towns, buildings, regions, rooms, landmarks)
+3. KEY_TERMS: Important story elements, themes, concepts, artifacts, organizations
+4. RELATIONSHIPS: Pairs of characters that interact or are connected
+   - Must be two DIFFERENT characters (never same name twice)
+   - Type: allies, enemies, family, mentor, rival, friends, associates
+   - Confidence: 0.0–1.0 based on transcript evidence
+   - Evidence: brief quote or context supporting this relationship
+   - Never output self-referential relationships (from == to)
 
 {constraints_text}
 
@@ -2344,70 +2364,27 @@ Respond ONLY with a valid JSON object matching this schema:
 {{
     "characters": [
         {{"name": "Full Character Name", "aliases": ["alias1", "alias2"]}}
-    ]
-}}
-
-Transcript excerpt:
-{transcript_text[:5000]}"""
-    return _gemini_json_prompt(prompt, temperature=0.2, max_tokens=1024)
-
-
-def _extract_locations_and_terms(transcript_text, game_title, constraints_text):
-    """Pass 2: Extract locations and key terms from transcript."""
-    transcript_mid = transcript_text[2500:7500] or transcript_text[:5000]
-    prompt = f"""Analyze this transcript from "{game_title}" and extract:
-
-1. LOCATIONS: Every place mentioned (towns, buildings, regions, rooms, landmarks)
-2. KEY_TERMS: Important story elements, themes, concepts, artifacts, or organizations
-
-{constraints_text}
-
-Respond ONLY with a valid JSON object matching this schema:
-{{
+    ],
     "locations": ["location1", "location2"],
-    "key_terms": ["term1", "term2"]
-}}
-
-Transcript excerpt:
-{transcript_mid[:5000]}"""
-    return _gemini_json_prompt(prompt, temperature=0.2, max_tokens=1024)
-
-
-def _extract_relationships(transcript_text, game_title, constraints_text):
-    """Pass 3: Extract relationships with confidence scores and evidence."""
-    transcript_end = transcript_text[-5000:] if len(transcript_text) > 5000 else transcript_text[:5000]
-    prompt = f"""Analyze this transcript from "{game_title}" and extract RELATIONSHIPS between characters.
-
-For every pair of characters that interact or are connected, provide:
-- The two characters involved (MUST be two DIFFERENT characters — never the same name twice)
-- The type of relationship (allies, enemies, family, mentor, rival, friends, associates)
-- A confidence score from 0.0 to 1.0 (how certain you are based on the transcript)
-- A brief piece of evidence text from the transcript supporting this relationship
-
-Never output self-referential relationships (from == to). Skip uncertain pairs.
-
-{constraints_text}
-
-Respond ONLY with a valid JSON object matching this schema:
-{{
+    "key_terms": ["term1", "term2"],
     "relationships": [
         {{
             "from": "Character A",
             "to": "Character B",
             "relationship": "friends",
             "confidence": 0.9,
-            "evidence": "brief quote or context from transcript"
+            "evidence": "brief context from transcript"
         }}
     ]
 }}
 
 Transcript excerpt:
-{transcript_end[:5000]}"""
-    return _gemini_json_prompt(prompt, temperature=0.4, max_tokens=2048)
+{excerpt[:8000]}"""
+    return _gemini_json_prompt(prompt, temperature=0.2, max_tokens=3000)
 
 
 def _cs_extract_context_from_transcript(transcript_text, game_title):
-    """Multi-pass context extraction: 3 specialized passes for characters, locations, and relationships."""
+    """Single-pass context extraction: characters, locations, terms, and relationships."""
     keys = get_gemini_keys()
     if not keys:
         return None
@@ -2419,20 +2396,19 @@ def _cs_extract_context_from_transcript(transcript_text, game_title):
 PREVIOUS MISTAKES TO AVOID:
 {chr(10).join(f"- {c}" for c in constraints[:10])}
 
-IMPORTANT: The above items are known mistakes from previous extractions. 
-Do NOT repeat these errors. Be especially careful not to include characters 
+IMPORTANT: Do NOT repeat these errors. Be especially careful not to include characters
 or relationships that were previously flagged as incorrect.
 """
 
     result = {"title": "", "characters": [], "locations": [], "key_terms": [], "relationships": []}
 
-    # Pass 1: Characters
-    char_data = _extract_characters(transcript_text, game_title, constraints_text)
-    if char_data:
-        # Extract flat character names from the structured format
+    # Single-pass extraction: all entities at once
+    data = _extract_all_entities(transcript_text, game_title, constraints_text)
+    if data:
+        # Characters
         raw_chars = []
         alias_map = {}
-        for entry in char_data.get("characters", []):
+        for entry in data.get("characters", []):
             if isinstance(entry, dict):
                 name = entry.get("name", "")
                 if name:
@@ -2444,21 +2420,14 @@ or relationships that were previously flagged as incorrect.
                 raw_chars.append(entry)
         result["characters"] = raw_chars
         result["character_aliases"] = alias_map
-        result["title"] = char_data.get("title", "")
+        result["title"] = data.get("title", "")
 
-    # Pass 2: Locations and key terms
-    loc_data = _extract_locations_and_terms(transcript_text, game_title, constraints_text)
-    if loc_data:
-        result["locations"] = loc_data.get("locations", [])
-        result["key_terms"] = loc_data.get("key_terms", [])
-        if not result["title"]:
-            result["title"] = loc_data.get("title", "")
+        # Locations and key terms
+        result["locations"] = data.get("locations", [])
+        result["key_terms"] = data.get("key_terms", [])
 
-    # Pass 3: Relationships with confidence
-    rel_data = _extract_relationships(transcript_text, game_title, constraints_text)
-    if rel_data:
-        rels = rel_data.get("relationships", [])
-        # Filter by confidence threshold
+        # Relationships with confidence filtering
+        rels = data.get("relationships", [])
         filtered_rels = []
         for rel in rels:
             if isinstance(rel, dict):
@@ -2473,8 +2442,6 @@ or relationships that were previously flagged as incorrect.
             else:
                 filtered_rels.append(rel)
         result["relationships"] = filtered_rels
-        if not result["title"]:
-            result["title"] = rel_data.get("title", "")
 
     # Pass 4: Verify entity spellings against game knowledge
     result = _verify_entity_spellings(result, game_title)
@@ -3664,6 +3631,7 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
                 title_guidance=(title_guidance or "").strip(),
                 recent_titles="\n".join(recent_titles) if recent_titles else "",
                 recent_description_openers="\n".join(recent_description_openers) if recent_description_openers else "",
+                description_guidance=build_description_guidance(recent_description_openers or []),
             )
             return prompt
         except Exception as e:
@@ -3710,52 +3678,42 @@ def _build_script_prompt(variant_key, perspective, game_title, transcript, conte
 
     lore_info = _build_lore_info(context)
 
-    return f"""You are an expert YouTube Shorts scriptwriter specializing in gaming content. {game_line}{context_info}
-{learned_constraints_text}
-{perf_context}
-{mempalace_hints}
-{hook_archetype_text}
+    desc_guidance = build_description_guidance(recent_description_openers or [])
+
+    return f"""You are a YouTube Shorts scriptwriter for gaming content. {game_line}
+
+FACTUAL ACCURACY: Every named entity MUST appear in the transcript. Never invent names, events, or relationships.
+
+{context_info}{learned_constraints_text}{perf_context}{mempalace_hints}
 Style: {variant['style']}
 Perspective: {perspective}
 {variant['instruction']}
-
+Hook: {hook_archetype_text}
 {lore_info}
 
-Target 150-220 words for the spoken script. Maximum 220 words. Every word must earn its place.
+{desc_guidance}
+{f"[TITLE GUIDANCE]\n{title_guidance}" if title_guidance else ""}
+{f"[RECENT TITLES — DO NOT REPEAT]\n{chr(10).join(recent_titles)}" if recent_titles else ""}
 
-STYLE:
-- Write in complete, natural sentences. No fragments.
-- Never wrap dialogue in quotation marks. Prefer narrated speech: He admitted the plan was flawed.
-- NO parentheses, stage directions, or audio annotations.
-- NO markdown formatting — plain text only.
-- NO creator intros: "Hey guys", "Welcome back", "Today we are looking at".
-- NO filler transitions: "In conclusion", "To summarize".
-- Prefer active voice over passive. Short sentences (10-15 words average).
-- Do not use "you" in the spoken body (TITLE/DESCRIPTION only).
+RULES:
+- 150-220 words spoken body. Complete sentences. Active voice. No fragments.
+- No quotation marks, parentheses, markdown, creator intros, filler transitions.
+- No "you" in spoken body. TITLE/DESCRIPTION only.
+- Narrative arc: Hook (1-2 sentences) → Rising Action (5-8 sentences) → Payoff (2-3 sentences).
 
-FACTUAL ACCURACY:
-- NEVER invent character names, stats, dates, or game mechanics.
-- NEVER invent background lore not in the transcript.
-- ONLY use facts explicitly provided in the source material.
+TITLE: 6-10 words. Reference a specific transcript detail. Rotate structures: question, statement, contrast, number, reveal.
+DESCRIPTION: 2-3 sentences. Complements title. End with 3-5 hashtags.
+TAGS: 10-15 comma-separated lowercase keywords.
 
-TITLES (6-10 words):
-- Must reference a specific detail from the transcript.
-- Structures: question, statement, contrast, number, reveal.
-- Avoid "The [Noun] of [Noun]" structure.
-- No all-caps words.
-{f"[TITLE GUIDANCE]\n{title_guidance}\n" if title_guidance else ""}
-{f"[RECENT TITLES — DO NOT REPEAT]\n{chr(10).join(recent_titles)}\n" if recent_titles else ""}
-{f"[RECENT DESCRIPTION OPENERS — use a different opening verb]\n{chr(10).join(recent_description_openers)}\n" if recent_description_openers else ""}
+OUTPUT:
+TITLE: [title]
+DESCRIPTION: [description with hashtags]
+TAGS: [tags]
 
-OUTPUT FORMAT:
-TITLE: [Your title]
-DESCRIPTION: [2-3 sentences summarizing hook, with hashtags at end]
-TAGS: [comma-separated keywords]
-
-[Script body starting with the hook. 150-220 words.]
+[Script body — 150-220 words]
 
 Transcript:
-{transcript}"""
+{transcript[:6000]}"""
 
 
 def _get_temperature(variant_key):
@@ -3945,6 +3903,77 @@ def _gemini_script(text, script_num, context=None, recent_titles=None,
 
     return None
 
+
+def _gemini_multi_variant(prompt_base, script_num, context=None):
+    """Generate multi-variant scripts via Gemini (best → default across all keys).
+
+    Returns list of (script_text, metadata) tuples, or empty list on failure.
+    """
+    keys = get_gemini_keys()
+    if not keys:
+        return []
+
+    variant_key, perspective = _get_next_round_robin()
+    temperature = _get_temperature(variant_key)
+    llm_params = _get_llm_params(variant_key)
+
+    multi_prompt = prompt_base + """
+
+Generate TWO complete variants of this script separated by the exact delimiter:
+=====VARIANT BREAK=====
+
+Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the same format.
+The second variant MUST use a different title structure than the first and a different opening sentence."""
+
+    body = json.dumps({
+        "contents": [{"parts": [{"text": multi_prompt}]}],
+        "generationConfig": {"temperature": temperature, "topP": llm_params['top_p'], "maxOutputTokens": 3072}
+    }).encode()
+
+    candidates = []
+
+    # Tier 1-2: Gemini (best then default)
+    for model in [GEMINI_MODEL_BEST, GEMINI_MODEL_DEFAULT]:
+        start = (script_num - 1) % len(keys)
+        for i in range(len(keys)):
+            key = keys[(start + i) % len(keys)]
+            log(f"   Trying Gemini key ...{key[-6:]} ({model})")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            for attempt in range(3):
+                try:
+                    _rate_limit()
+                    req = urllib.request.Request(url, data=body,
+                                                 headers={"Content-Type": "application/json", "X-Goog-Api-Key": key})
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        r = json.loads(resp.read())
+                        text = r["candidates"][0]["content"]["parts"][0]["text"]
+                        variants = _parse_multi_variant_response(text)
+                        if variants:
+                            for idx, v in enumerate(variants):
+                                candidates.append((v, {"source": "gemini", "model": model, "temperature": temperature, "variant": idx + 1}))
+                                log(f"   Gemini variant {idx+1} generated ({len(v.split())} words)")
+                        else:
+                            # Single variant — still usable
+                            candidates.append((text, {"source": "gemini", "model": model, "temperature": temperature}))
+                            log(f"   Gemini script generated ({len(text.split())} words)")
+                        return candidates
+                except urllib.error.HTTPError as e:
+                    if e.code in (429, 500, 503):
+                        wait = (2 ** attempt) * 15 + random.uniform(0, 10)
+                        log(f"   HTTP {e.code}, retry {attempt+1}/3 in {wait:.0f}s")
+                        time.sleep(wait)
+                    else:
+                        log(f"   HTTP {e.code} with key ...{key[-6:]}")
+                        break
+                except Exception as e:
+                    log(f"   Error: {e}")
+                    time.sleep(5)
+                    break
+            log(f"   Key ...{key[-6:]} failed, next...")
+
+    return candidates
+
+
 def _extract_hour(json_file, start, end):
     with open(json_file) as f:
         data = json.load(f)
@@ -4110,41 +4139,38 @@ def phase_scripts(json_file, duration, selected, video=None):
                 recent_description_openers=_RECENT_DESC_OPENERS[-10:],
             )
 
-            # Primary: Groq multi-variant (1 call, 2 variants)
-            multi_prompt = prompt + """
+            # Primary: Gemini multi-variant (best → default across all keys)
+            try:
+                gemini_variants = _gemini_multi_variant(
+                    prompt, slot, relevant_ctx,
+                )
+                for v_text, v_meta in gemini_variants:
+                    candidates.append((v_text, v_meta))
+            except Exception as e:
+                log(f"   Gemini multi-variant failed: {e}, trying Groq")
+
+            # Fallback: Groq multi-variant if Gemini produced nothing
+            if not candidates:
+                multi_prompt = prompt + """
 
 Generate TWO complete variants of this script separated by the exact delimiter:
 =====VARIANT BREAK=====
 
 Each variant must have its own TITLE, DESCRIPTION, TAGS, and body following the same format.
 The second variant MUST use a different title structure than the first and a different opening sentence."""
-            try:
-                groq_response = _groq_generate(multi_prompt, max_tokens=2500, model=groq_model, temperature=temperature, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
-                if groq_response:
-                    variants = _parse_multi_variant_response(groq_response)
-                    if variants:
-                        for idx, v in enumerate(variants):
-                            candidates.append((v, {"source": "groq", "model": groq_model, "temperature": temperature, "variant": idx + 1}))
-                            log(f"   Groq variant {idx + 1} generated ({len(v.split())} words)")
-                    else:
-                        candidates.append((groq_response, {"source": "groq", "model": groq_model, "temperature": temperature}))
-                        log(f"   Groq script generated ({len(groq_response.split())} words)")
-            except Exception as e:
-                log(f"   Groq generation failed: {e}, trying Gemini")
-
-            # Fallback: Gemini (single script) if Groq produced nothing
-            if not candidates:
-                gemini_script = _gemini_script(
-                    transcript_text,
-                    slot,
-                    relevant_ctx,
-                    recent_titles=_RECENT_TITLES[-20:],
-                    title_guidance=_TITLE_GUIDANCE,
-                    recent_description_openers=_RECENT_DESC_OPENERS[-10:],
-                )
-                if gemini_script:
-                    candidates.append((gemini_script, {"source": "gemini", "model": "gemini-2.5-flash-lite", "temperature": temperature}))
-                    log(f"   Gemini script generated ({len(gemini_script.split())} words)")
+                try:
+                    groq_response = _groq_generate(multi_prompt, max_tokens=2500, model=groq_model, temperature=temperature, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
+                    if groq_response:
+                        variants = _parse_multi_variant_response(groq_response)
+                        if variants:
+                            for idx, v in enumerate(variants):
+                                candidates.append((v, {"source": "groq", "model": groq_model, "temperature": temperature, "variant": idx + 1}))
+                                log(f"   Groq variant {idx + 1} generated ({len(v.split())} words)")
+                        else:
+                            candidates.append((groq_response, {"source": "groq", "model": groq_model, "temperature": temperature}))
+                            log(f"   Groq script generated ({len(groq_response.split())} words)")
+                except Exception as e:
+                    log(f"   Groq generation failed: {e}")
 
             if candidates:
                 best_script, best_metadata, scores = select_best_script(candidates, ctx)
@@ -4172,7 +4198,14 @@ The second variant MUST use a different title structure than the first and a dif
                     flagged_str = ", ".join(str(e) for e in flagged[:10]) if flagged else "unknown entities"
                     retry_prompt = prompt + f"\n\nCRITICAL: The previous script contained factual errors. The following were NOT found in the transcript and must NOT appear: {flagged_str}. ONLY use information from the transcript above."
                     try:
-                        retry_script = _groq_generate(retry_prompt, max_tokens=900, model=groq_model, temperature=temperature * 0.8, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
+                        retry_script = _gemini_script(
+                            transcript_text, slot, validation_ctx,
+                            recent_titles=_RECENT_TITLES[-20:],
+                            title_guidance=_TITLE_GUIDANCE,
+                            recent_description_openers=_RECENT_DESC_OPENERS[-10:],
+                        )
+                        if not retry_script:
+                            retry_script = _groq_generate(retry_prompt, max_tokens=900, model=groq_model, temperature=temperature * 0.8, top_p=llm_params['top_p'], repetition_penalty=llm_params['repetition_penalty'])
                         if retry_script:
                             retry_fact = validate_script_factuality(retry_script, validation_ctx)
                             if retry_fact["score"] > fact_check["score"]:
@@ -4233,6 +4266,9 @@ The second variant MUST use a different title structure than the first and a dif
             header = best_script[:header_end].strip()
             body = best_script[header_end:].strip()
             body_wc = len(body.split()) if body else 0
+            if body_wc < 20:
+                log(f"   WARNING: Script {i} body too short ({body_wc} words), skipping")
+                continue
             if body_wc > 220:
                 log(f"   Script {i} body exceeds 220 words ({body_wc}), trimming...")
                 max_words = 210
@@ -4284,13 +4320,18 @@ The second variant MUST use a different title structure than the first and a dif
                 desc_text = desc_match.group(1).strip()
                 hashtags = re.findall(r'#\w+', desc_text)
                 clean_desc = re.sub(r'#\w+\s*', '', desc_text).strip()
+                # Enforce description variety
+                clean_desc, opener_used = enforce_description_variety(clean_desc, _RECENT_DESC_OPENERS)
                 script_metadata["description"] = clean_desc
                 script_metadata["hashtags"] = hashtags
                 # Track opening verb/phrase for description variety
-                opener = clean_desc.split()[:3]
-                if opener:
-                    _RECENT_DESC_OPENERS.append(" ".join(opener).lower())
-                    _RECENT_DESC_OPENERS[:] = _RECENT_DESC_OPENERS[-20:]
+                if opener_used:
+                    _RECENT_DESC_OPENERS.append(opener_used)
+                else:
+                    detected = detect_opener(clean_desc)
+                    if detected:
+                        _RECENT_DESC_OPENERS.append(detected)
+                _RECENT_DESC_OPENERS[:] = _RECENT_DESC_OPENERS[-20:]
             tags_match = re.search(r'^TAGS:\s*(.+)$', best_script, re.MULTILINE)
             if tags_match:
                 raw_tags = tags_match.group(1).strip()
@@ -4542,6 +4583,7 @@ def _extract_scenes(json_file, h_start, h_end):
         scenes.sort(key=lambda x: x["score"], reverse=True)
     except Exception as e:
         log_error(f"Scene extraction: {e}")
+        return []
     return scenes[:max_clips]
 
 def phase_clips(video, json_file, duration, selected, script_id_map=None):
@@ -4561,8 +4603,22 @@ def phase_clips(video, json_file, duration, selected, script_id_map=None):
     set_status("Phase 5: Generating clips...")
     log("Phase 5: Generating clips (scene-based)...")
     notify("Phase 5 Started: Generating clips...")
-    vaapi = os.path.exists("/dev/dri/renderD128")
-    log(f"   Encoding method: {'VAAPI' if vaapi else 'CPU (libx264)'}")
+    try:
+        from workflows.hardware_detect import get_hardware_info, get_ffmpeg_encoding_settings
+        hw_info = get_hardware_info()
+        hw_settings = get_ffmpeg_encoding_settings()
+        has_gpu = hw_info['gpu']['has_gpu']
+        gpu_type = 'GPU' if has_gpu else 'CPU (libx264)'
+        if hw_info['gpu']['nvidia']:
+            gpu_type = f"NVIDIA ({hw_info['gpu']['nvidia']['name']})"
+        elif hw_info['gpu']['vaapi']:
+            gpu_type = 'VA-API'
+        elif hw_info['gpu']['intel_qsv']:
+            gpu_type = 'Intel QSV'
+        log(f"   Encoding method: {gpu_type}")
+    except Exception:
+        hw_settings = None
+        log(f"   Encoding method: CPU (libx264)")
 
     v_w = v_h = 0
     try:
@@ -4645,10 +4701,10 @@ def phase_clips(video, json_file, duration, selected, script_id_map=None):
                         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
                     ]
 
-                if vaapi:
+                if hw_settings and hw_settings.get('video_codec') == 'h264_vaapi':
                     vf_parts = ["format=nv12"] + vf_parts + ["hwupload"]
                     cmd = ["ffmpeg", "-y",
-                           "-vaapi_device", "/dev/dri/renderD128",
+                           "-vaapi_device", hw_settings['extra_args'][1] if len(hw_settings.get('extra_args', [])) > 1 else "/dev/dri/renderD128",
                            "-ss", f"{s:.3f}", "-i", video, "-t", f"{dur:.3f}",
                            "-vf", ",".join(vf_parts),
                            "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-global_quality", "10",

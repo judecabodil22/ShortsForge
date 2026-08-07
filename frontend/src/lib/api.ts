@@ -103,10 +103,6 @@ export const reviewScript = (id: string, status: 'approved' | 'quarantined' | 'p
 export const getMemPalaceStatus = () => fetchAPI<any>('/api/mempalace/status')
 export const clearMemPalace = (game: string) =>
   fetchAPI<any>('/api/mempalace/clear', { method: 'POST', body: { game } })
-export const getPublishChecklist = (video: string) =>
-  fetchAPI<any>(`/api/publish/checklist?video=${encodeURIComponent(video)}`)
-export const autoImportTikTok = () =>
-  fetchAPI<any>('/api/metrics/tiktok/auto-import', { method: 'POST' })
 export const searchGraph = (game: string, q: string) =>
   fetchAPI<any>(`/api/context/${encodeURIComponent(game)}/graph/search?q=${encodeURIComponent(q)}`)
 export const getGraphStats = (game: string) =>

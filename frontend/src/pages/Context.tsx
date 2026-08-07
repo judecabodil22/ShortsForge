@@ -259,9 +259,8 @@ export default function Context() {
             onChange={(e) => setSelectedFranchise(e.target.value)}
             className="cyber-input w-56"
           >
-            <option value="">Select Franchise</option>
+            <option value="">Select Game</option>
             {((games?.games || []) as GameEntry[])
-              .filter((game) => game.is_series)
               .map((game) => (
                 <option key={game.name} value={game.name}>
                   {game.display_name}

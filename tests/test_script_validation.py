@@ -16,15 +16,16 @@ from workflows.script_validation import (
 
 
 class TestValidateScriptFactuality:
-    def test_empty_script_returns_perfect_score(self):
+    def test_empty_script_returns_neutral_score(self):
         context = {"characters": [], "locations": [], "key_terms": [], "relationships": []}
         result = validate_script_factuality("", context)
-        assert result["score"] == 1.0
+        assert result["score"] == 0.5  # Neutral score for scripts with no entities
 
-    def test_no_context_entities_returns_perfect(self):
+    def test_no_context_entities_returns_neutral(self):
         context = {"characters": [], "locations": [], "key_terms": [], "relationships": []}
-        result = validate_script_factuality("Alice walked through the forest.", context)
-        assert result["score"] == 1.0
+        result = validate_script_factuality("The weather is nice today.", context)
+        # No named entities in this text, so score should be neutral (0.5)
+        assert result["score"] == 0.5
 
     def test_has_issues_structure(self):
         context = {"characters": [], "locations": [], "key_terms": [], "relationships": []}
@@ -118,8 +119,8 @@ class TestSummarizeContext:
 
 
 class TestIsKnownEntity:
-    def test_empty_known_list_returns_true(self):
-        assert _is_known_entity("Alice", []) is True
+    def test_empty_known_list_returns_false(self):
+        assert _is_known_entity("Alice", []) is False
 
     def test_exact_match(self):
         assert _is_known_entity("Alice", ["Alice", "Bob"]) is True

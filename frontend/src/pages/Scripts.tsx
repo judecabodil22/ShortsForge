@@ -28,8 +28,10 @@ export default function Scripts() {
       reviewScript(id, status),
     onSuccess: () => {
       toast('success', 'Review updated')
-      queryClient.invalidateQueries({ queryKey: ['script-metadata'] })
       queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      if (selectedScript) {
+        queryClient.invalidateQueries({ queryKey: ['script-metadata', selectedScript] })
+      }
     },
     onError: (e: Error) => toast('error', e.message),
   })
@@ -51,8 +53,9 @@ export default function Scripts() {
     try {
       const result = await analyzeScript(id)
       setAnalyzedScript(result)
-    } catch (e) {
+    } catch (e: any) {
       console.error('Analysis error:', e)
+      toast('error', `Analysis failed: ${e.message}`)
     }
   }
 

@@ -120,17 +120,17 @@ def enforce_title_variety(
     structure = detect_structure(title) if title else next_preferred_structure(used_structures)
 
     if title and (is_too_similar(title, recent_titles) or looks_generic(title)):
-        # Soft rewrite: append a distinguishing marker from preferred structure
         preferred = next_preferred_structure(used_structures)
-        if preferred == "question" and not title.endswith("?"):
+        words = title.split()
+        # Only rewrite if result stays under 12 words
+        if preferred == "question" and not title.endswith("?") and len(words) <= 8:
             title = f"What Happened When {title.rstrip('.!?')}?"
-        elif preferred == "contrast":
+        elif preferred == "contrast" and len(words) <= 7:
             title = f"{title.rstrip('.!?')}. Then Everything Changed"
-        elif preferred == "number":
-            title = f"The Moment That Changed Everything"
-        elif preferred == "reveal":
+        elif preferred == "reveal" and len(words) <= 8:
             title = f"Why {title.rstrip('.!?')}"
         else:
+            # Too long for any prefix/suffix — just clean punctuation
             title = title.rstrip(".!?")
         structure = detect_structure(title)
         if m:

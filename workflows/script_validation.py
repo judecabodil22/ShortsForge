@@ -84,9 +84,6 @@ def extract_entities(text):
             w_clean = w.strip(string.punctuation)
             if len(w_clean) < 2:
                 continue
-            # Skip first word (sentence start)
-            if i == 0:
-                continue
             # Match capitalized word that is not ALL CAPS (abbreviation) or at sentence start
             if w_clean[0].isupper() and not w_clean.isupper() and w_clean[0].isalpha():
                 # Likely a proper noun
@@ -222,7 +219,7 @@ def validate_script_factuality(script_text, context):
     # Calculate score
     total_entities = len(script_persons) + len(script_locations)
     if total_entities == 0:
-        score = 1.0  # No entities to validate
+        score = 0.5  # Neutral score for scripts with no entities to validate
     else:
         flagged_count = len(flagged_entities)
         score = max(0.0, 1.0 - (flagged_count / total_entities))

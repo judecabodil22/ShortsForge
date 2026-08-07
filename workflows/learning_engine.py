@@ -293,14 +293,15 @@ def calculate_sentiment(text: str) -> float:
         'pain': -0.7, 'suffer': -0.7, 'tragedy': -0.7, 'crisis': -0.6
     }
     
+    words = set(text.lower().split())
     score = 0
     count = 0
     for word, val in positive_words.items():
-        if word in text:
+        if word in words:
             score += val
             count += 1
     for word, val in negative_words.items():
-        if word in text:
+        if word in words:
             score += val
             count += 1
     
@@ -319,7 +320,7 @@ def calculate_emotional_intensity(text: str) -> float:
         'epic', 'legendary', 'insane', 'crazy', 'mind-blowing'
     ]
     
-    emotional_count = sum(1 for word in emotional_words if word in text)
+    emotional_count = sum(1 for word in emotional_words if word in text.lower().split())
     word_count = max(len(text.split()), 1)
     emotional_density = (emotional_count / word_count) * 100
     
@@ -337,11 +338,12 @@ def calculate_power_word_density(text: str) -> float:
         'quest': 0.6, 'journey': 0.5, 'fight': 0.4, 'battle': 0.5
     }
     
-    word_count = max(len(text.split()), 1)
+    words = set(text.lower().split())
+    word_count = max(len(words), 1)
     score = 0
     
     for word, weight in power_words.items():
-        if word in text:
+        if word in words:
             score += weight
     
     return min(1.0, (score / word_count) * 100)
@@ -355,8 +357,12 @@ def calculate_urgency_score(text: str) -> float:
         'must', 'need to', 'before it\'s', 'don\'t wait', 'ends soon'
     ]
     
-    word_count = max(len(text.split()), 1)
-    urgency_count = sum(1 for word in urgency_words if word in text.lower())
+    text_lower = text.lower()
+    word_count = max(len(text_lower.split()), 1)
+    urgency_count = 0
+    for word in urgency_words:
+        if word in text_lower.split() or word in text_lower:
+            urgency_count += 1
     
     return min(1.0, (urgency_count / word_count) * 100 * 2)
 
@@ -919,10 +925,7 @@ def sync_and_train_from_youtube(days: int = 30, max_results: int = 50) -> Dict:
 
     Returns dict with sync_results and training_results.
     """
-    try:
-        from workflows.performance_database import sync_youtube_metrics, get_successful_scripts
-    except ImportError:
-        from workflows.performance_database import sync_youtube_metrics, get_successful_scripts
+    from workflows.performance_database import sync_youtube_metrics, get_successful_scripts
 
     sync_result = sync_youtube_metrics(days=days, max_results=max_results)
 
@@ -970,10 +973,7 @@ def update_optimal_params_from_youtube(days: int = 30) -> Dict:
     - content_type_weight
     - top_performing_voices
     """
-    try:
-        from workflows.performance_database import get_successful_scripts
-    except ImportError:
-        from workflows.performance_database import get_successful_scripts
+    from workflows.performance_database import get_successful_scripts
 
     scripts = get_successful_scripts(limit=50, min_views=10)
     if not scripts:

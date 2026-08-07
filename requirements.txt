@@ -10,6 +10,8 @@ uvicorn[standard]>=0.24.0
 slowapi>=0.1.8
 jinja2>=3.1.0
 requests>=2.31.0
+python-multipart>=0.0.6
+python-dotenv>=1.0.0
 
 # Transcription (faster-whisper is primary, with fallbacks)
 faster-whisper>=1.0.0

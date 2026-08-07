@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { getLearningDashboard, getActiveABTests, getTikTokLearningSignals, getCurrentABTest, createABTest } from '@/lib/api'
 import { stagger, slideLeft } from '@/lib/animations'
-import { formatNumber } from '@/lib/utils'
+import { formatNumber, formatContentType } from '@/lib/utils'
 import { useToast } from '@/contexts/ToastContext'
 import { useThemeColors } from '@/hooks/useThemeColors'
 import {
@@ -18,10 +18,6 @@ import {
   Legend,
   Tooltip,
 } from 'recharts'
-
-function formatContentType(name: string): string {
-  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-}
 
 export default function LearningDashboard() {
   const { toast } = useToast()

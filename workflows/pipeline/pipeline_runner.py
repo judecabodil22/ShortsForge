@@ -164,12 +164,11 @@ def cleanup_all_files():
         c["SHORTS_DIR"],
         c["ASSEMBLY_DIR"],
     ]:
-        for f in glob.glob(os.path.join(d, "*")):
-            if os.path.isfile(f):
-                os.remove(f)
-                count += 1
+        # Use recursive glob to find all files in subdirectories too
+        seen = set()
         for f in glob.glob(os.path.join(d, "**/*"), recursive=True):
-            if os.path.isfile(f):
+            if os.path.isfile(f) and f not in seen:
+                seen.add(f)
                 os.remove(f)
                 count += 1
     c["log"]("Cleanup complete (scripts and cogitator data preserved for learning)")

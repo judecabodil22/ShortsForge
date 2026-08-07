@@ -13,6 +13,7 @@ Enhanced MemPalace features:
 import json
 import os
 import re
+import tempfile
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
@@ -31,10 +32,17 @@ def _load_custom_franchises() -> Dict[str, str]:
     return {}
 
 def _save_custom_franchises(mapping: Dict[str, str]) -> None:
-    """Save custom franchise mappings to JSON file."""
+    """Save custom franchise mappings to JSON file (atomic write)."""
     os.makedirs(CONTEXT_DIR, exist_ok=True)
-    with open(CUSTOM_FRANCHISES_FILE, "w") as f:
-        json.dump(mapping, f, indent=2)
+    fd, tmp_path = tempfile.mkstemp(dir=CONTEXT_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(mapping, f, indent=2)
+        os.replace(tmp_path, CUSTOM_FRANCHISES_FILE)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 def add_to_franchise(game_key: str, franchise_key: str) -> bool:
     """Add a game to a franchise dynamically."""
@@ -286,9 +294,16 @@ def build_game_timeline(game_title: str) -> Dict[str, Any]:
     memories = manager._query(wing, "transcripts", n=100)
     
     events = []
+    seen_texts = set()
     for i, memory in enumerate(memories):
         text = memory.get("text", "")
         metadata = memory.get("metadata", {})
+        
+        # Skip duplicate events by text content
+        text_key = text[:200].lower().strip()
+        if text_key in seen_texts:
+            continue
+        seen_texts.add(text_key)
         
         # Extract temporal markers
         temporal_markers = _extract_temporal_markers(text)
@@ -608,24 +623,27 @@ def infer_relationships_from_memories(game_title: str) -> List[Dict[str, Any]]:
 
 
 def _infer_relationship_type(char1: str, char2: str, memories: List[Dict]) -> str:
-    """Infer relationship type from context."""
-    # Simple heuristic based on common patterns
+    """Infer relationship type from context using voting across all memories."""
     friend_indicators = ["friend", "ally", "companion", "partner", "together"]
-    enemy_indicators = ["enemy", "rival", "opponent", "fight", "battle", "against"]
+    enemy_indicators = ["enemy", "rival", "opponent", "fight", "battle", "against", "hostile"]
     family_indicators = ["father", "mother", "brother", "sister", "son", "daughter", "family"]
     
-    # Check memories for relationship indicators
+    votes = {"family": 0, "enemy": 0, "ally": 0}
+    
     for memory in memories:
         text = memory.get("text", "").lower()
         if char1.lower() in text and char2.lower() in text:
             if any(ind in text for ind in family_indicators):
-                return "family"
+                votes["family"] += 1
             if any(ind in text for ind in enemy_indicators):
-                return "enemy"
+                votes["enemy"] += 1
             if any(ind in text for ind in friend_indicators):
-                return "ally"
+                votes["ally"] += 1
     
-    return "associated"
+    if not any(votes.values()):
+        return "associated"
+    
+    return max(votes, key=votes.get)
 
 
 def get_inferred_relationships_context(game_title: str) -> str:
@@ -759,8 +777,18 @@ def get_mempalace_text_chunks(game_key: str) -> List[str]:
         conn = sqlite3.connect(MEMPALACE_CHROMA_DB)
         try:
             cur = conn.cursor()
-            cur.execute("SELECT c0 FROM embedding_fulltext_search_content WHERE c0 IS NOT NULL")
-            for (text,) in cur.fetchall():
+            # Try the standard ChromaDB internal table name; fall back to alternative names
+            query = None
+            for table_name in ["embedding_fulltext_search_content", "embedding_data"]:
+                try:
+                    cur.execute(f"SELECT c0 FROM {table_name} WHERE c0 IS NOT NULL")
+                    query = cur
+                    break
+                except Exception:
+                    continue
+            if query is None:
+                return []
+            for (text,) in query.fetchall():
                 if not text or len(text.strip()) < 40:
                     continue
                 lower = text.lower()

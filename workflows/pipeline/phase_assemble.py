@@ -366,9 +366,8 @@ def phase_assemble(duration, num_hours, video=None):
     for i in range(1, num_hours + 1):
         pct = int(((i - 1) / max(num_hours, 1)) * 100)
         c['set_progress'](7, pct, f"Assembling shorts ({i}/{num_hours})")
-        # Read directly from cogitator module to get the current value
-        from workflows.cogitator import PIPELINE_STOP_REQUESTED as _stop_requested
-        if _stop_requested:
+        from workflows.cogitator import get_pipeline_stop_requested as _get_stop
+        if _get_stop():
             c['log']("Phase 7 stopped by user")
             break
 
@@ -494,7 +493,7 @@ def phase_assemble(duration, num_hours, video=None):
                 inputs = ["-f", "concat", "-safe", "0", "-i", concat_txt, "-i", tts_wav]
 
             f_parts.append(
-                f"[game_a][tts_a]{'[bgm_a]' if has_bgm else ''}amix=inputs={amix_inputs}:duration=first:weights={amix_weights}[out_a]"
+                f"[game_a][tts_a]{'[bgm_a]' if has_bgm else ''}amix=inputs={amix_inputs}:duration=longest:weights={amix_weights}[out_a]"
             )
 
             # Get hardware-optimized encoding settings
@@ -507,6 +506,10 @@ def phase_assemble(duration, num_hours, video=None):
             hw_upload = hw_settings.get('hw_upload_filter')
             if hw_upload:
                 f_parts.insert(2, f"[vid_sub]{hw_upload}[vid]")
+
+            # Ensure [vid] label exists for non-VA-API paths (NVENC, QSV, CPU)
+            if not hw_upload:
+                f_parts.append(f"[vid_sub]null[vid]")
 
             filter_complex = ";".join(f_parts)
 
@@ -530,6 +533,7 @@ def phase_assemble(duration, num_hours, video=None):
                 *vq_args,
                 *extra_args,
                 "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
                 "-t", str(target),
                 output,
             ]
@@ -541,7 +545,7 @@ def phase_assemble(duration, num_hours, video=None):
                 f_parts.append(
                     f"[0:a]volume=1[game_a];"
                     f"[1:a]volume=0.05[bgm_a];"
-                    f"[game_a][bgm_a]amix=inputs=2:duration=first:weights='1 0.05'[out_a]"
+                    f"[game_a][bgm_a]amix=inputs=2:duration=longest:weights='1 0.05'[out_a]"
                 )
                 inputs = ["-f", "concat", "-safe", "0", "-i", concat_txt, "-i", bgm_path]
             else:
@@ -560,6 +564,10 @@ def phase_assemble(duration, num_hours, video=None):
             hw_upload = hw_settings.get('hw_upload_filter')
             if hw_upload:
                 f_parts.insert(1, f"[vid_raw]{hw_upload}[vid]")
+
+            # Ensure [vid] label exists for non-VA-API paths
+            if not hw_upload:
+                f_parts.append(f"[vid_raw]null[vid]")
 
             filter_complex = ";".join(f_parts)
 
@@ -582,6 +590,7 @@ def phase_assemble(duration, num_hours, video=None):
                 *vq_args,
                 *extra_args,
                 "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
                 "-t", str(target),
                 output,
             ]

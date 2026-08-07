@@ -7,6 +7,7 @@ export function useWebSocket(url: string | null) {
   const [lastMessage, setLastMessage] = useState<any>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const handlersRef = useRef<Map<string, MessageHandler[]>>(new Map())
+  const retryCountRef = useRef(0)
 
   const connect = useCallback(() => {
     if (!url) return;
@@ -16,6 +17,7 @@ export function useWebSocket(url: string | null) {
 
       ws.onopen = () => {
         setIsConnected(true)
+        retryCountRef.current = 0
         console.log('[WS] Connected')
       }
 
@@ -33,8 +35,10 @@ export function useWebSocket(url: string | null) {
 
       ws.onclose = () => {
         setIsConnected(false)
-        console.log('[WS] Disconnected, reconnecting in 3s...')
-        setTimeout(connect, 3000)
+        const delay = Math.min(1000 * (2 ** retryCountRef.current), 30000)
+        retryCountRef.current++
+        console.log(`[WS] Disconnected, reconnecting in ${delay / 1000}s...`)
+        setTimeout(connect, delay)
       }
 
       ws.onerror = (error) => {
@@ -42,7 +46,9 @@ export function useWebSocket(url: string | null) {
       }
     } catch (e) {
       console.error('[WS] Connection failed:', e)
-      setTimeout(connect, 3000)
+      const delay = Math.min(1000 * (2 ** retryCountRef.current), 30000)
+      retryCountRef.current++
+      setTimeout(connect, delay)
     }
   }, [url])
 

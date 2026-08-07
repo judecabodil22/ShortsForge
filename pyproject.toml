@@ -44,7 +44,7 @@ version = { file = "VERSION" }
 
 [project.scripts]
 cogitator = "workflows.cogitator:main"
-cogitator-backend = "backend.main:app"
+cogitator-backend = "backend.main:run_server"
 
 [tool.setuptools.packages.find]
 include = ["workflows*", "backend*"]
